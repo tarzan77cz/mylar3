@@ -53,6 +53,11 @@
             </div>
             </br></br>
             <h2><center><bold>HISTORY</bold></center></h2>
+            <div style="margin-bottom: 10px; text-align: left; padding-left: 10px;">
+                <label>
+                    <input type="checkbox" id="hide_completed_checkbox" style="margin-right: 5px;">Hide COMPLETED
+                </label>
+            </div>
             %if type(resultlist) == str:
                 <center>${resultlist}</center></br>
             %else:
@@ -86,6 +91,8 @@
         <script src="js/libs/full_numbers_no_ellipses.js"></script>
         <script>
         var ImportTimer = setInterval(activecheck, 5000);
+        var previousStatus = null;
+        var previousAid = null;
         function activecheck() {
                 $.get('check_ActiveDDL',
                     function(data){
@@ -97,6 +104,17 @@
                         var percent = obj['percent'];
                         var status = obj['status'];
                         var aid = obj['a_id'];
+                        
+                        // Check if download status changed (new download started or previous completed)
+                        var statusChanged = (previousStatus !== status) || (previousAid !== aid);
+                        if (statusChanged && previousStatus !== null) {
+                            // Status changed - reload the history table
+                            if ($.fn.dataTable.isDataTable('#queue_table')) {
+                                $('#queue_table').DataTable().ajax.reload(null, false);
+                            }
+                        }
+                        previousStatus = status;
+                        previousAid = aid;
                         if (status == 'Downloading') {
                             acm = document.getElementById("active_message");
                             acm.style.display = "none";
@@ -192,6 +210,12 @@
             $("#btn_container #btn_menu #arestartddl, #qrestartddl").button({ icons: { primary: "ui-icon-refresh" }  });
             $("#btn_container #btn_menu #aresumeddl, #qresumeddl").button({ icons: { primary: "ui-icon-pencil" }  });
             $("#btn_container #btn_menu #aabortddl, #qabortddl").button({ icons: { primary: "ui-icon-pencil" }  });
+            
+            // Load checkbox state from localStorage
+            var hideCompleted = localStorage.getItem('queue_management_hide_completed');
+            if (hideCompleted === 'true') {
+                $('#hide_completed_checkbox').prop('checked', true);
+            }
             if ( $.fn.dataTable.isDataTable( '#queue_table' ) ) {
                 $('#queue_table').DataTable().ajax.reload(null, false);
             } else {
@@ -292,6 +316,14 @@
                          "infoFiltered":"(filtered from _MAX_ total items)"
                      },
                     "rowCallback": function (nRow, aData, iDisplayIndex, iDisplayIndexFull) {
+                         // Hide rows with "Completed" status if checkbox is checked
+                         var hideCompleted = $('#hide_completed_checkbox').is(':checked');
+                         if (hideCompleted && aData[3] === "Completed") {
+                             $(nRow).hide();
+                         } else {
+                             $(nRow).show();
+                         }
+                         
                          if (aData[3] === "Completed") {
                             $('td', nRow).closest('tr').addClass("gradeA");
                          } else if (aData[3] === "Queued") {
@@ -327,6 +359,15 @@
         };
         $(document).ready(function() {       
             initThisPage();
+            
+            // Handle checkbox change
+            $('#hide_completed_checkbox').change(function() {
+                var isChecked = $(this).is(':checked');
+                localStorage.setItem('queue_management_hide_completed', isChecked);
+                if ($.fn.dataTable.isDataTable('#queue_table')) {
+                    $('#queue_table').DataTable().draw();
+                }
+            });
         });
         </script>
 </%def>
