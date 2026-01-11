@@ -1367,109 +1367,117 @@ def get_imprint_volume_and_booktype(series, comicyear, publisher, firstissueid, 
     if series is True:
         # this is a really crappy way to do it - it works, but meh.
         try:
-            for k,v in mylar.PUBLISHER_IMPRINTS.items():
-                if k == 'publishers':
-                    for b in v:
-                        for d,e in b.items():
-                            for g in e:
-                                chkyear = False
-                                for f,h in g.items():
-                                    if f == 'name':
-                                        pubname = h
-                                    if f == 'publication_run' and chkyear is True:
-                                        pubrun = h
-                                        y = pubrun.find('-')
-                                        pub_start = pubrun[:y][:4].strip()
-                                        pub_start_month = pubrun[:y][pubrun.find('.')+1:].strip()
-                                        pub_end = pubrun[y+2:][:4].strip()
-                                        if len(pub_end) == 0 and len(pub_start) == 0:
-                                            chkyear = False
-                                            found = False
-                                            continue
-                                        elif len(pub_end) == 0:
-                                            pub_end = None
-                                            if int(comic['ComicYear']) <= int(pub_start[:4]):
-                                                logger.info('comic year of %s is prior to imprint publication date of %s' % (comic['ComicYear'], pub_start[:4]))
-                                                comic['ComicPublisher'] = None
-                                                comic['PublisherImprint'] = None
+            if mylar.PUBLISHER_IMPRINTS is None:
+                logger.warn('[get_imprint_volume_and_booktype] PUBLISHER_IMPRINTS is None, skipping imprint lookup')
+            else:
+                for k,v in mylar.PUBLISHER_IMPRINTS.items():
+                    if k == 'publishers':
+                        for b in v:
+                            for d,e in b.items():
+                                for g in e:
+                                    chkyear = False
+                                    for f,h in g.items():
+                                        if f == 'name':
+                                            pubname = h
+                                        if f == 'publication_run' and chkyear is True:
+                                            pubrun = h
+                                            y = pubrun.find('-')
+                                            pub_start = pubrun[:y][:4].strip()
+                                            pub_start_month = pubrun[:y][pubrun.find('.')+1:].strip()
+                                            pub_end = pubrun[y+2:][:4].strip()
+                                            if len(pub_end) == 0 and len(pub_start) == 0:
+                                                chkyear = False
                                                 found = False
-                                            else:
-                                                found = True
-                                        else:
-                                            if int(pub_end[:4]) > int(comic['ComicYear'])  > int(pub_start[:4]):
-                                                found = True
-                                            else:
-                                                pub_end_month = pubrun[y+2:][pubrun.find('.',y+2)+1:].strip()
-                                                if any([ int(pub_end[:4]) == int(comic['ComicYear']), int(pub_start[:4]) == int(comic['ComicYear']) ]):
-                                                    quick_chk = getComic(comicid=None, rtype='imprints_first', issueid=firstissueid)
-                                                    if quick_chk:
-                                                        cdate = None
-                                                        sdate = None
-                                                        #quick_chk['store_date'], quick_chk['cover_date']
-                                                        if quick_chk['cover_date'] and quick_chk['cover_date'] != '0000':
-                                                            cdate = quick_chk['cover_date'][5:7]
-                                                        if quick_chk['store_date'] and quick_chk['store_date'] != '0000':
-                                                            sdate = quick_chk['store_date'][5:7]
-
-                                                        if int(pub_end[:4]) == int(comic['ComicYear']):
-                                                            if cdate != None:
-                                                                end_month = cdate
-                                                            else:
-                                                                end_month = sdate
-                                                            if int(pub_end_month) <= int(end_month):
-                                                                logger.fdebug('[Year;%s] publication month of %s is before the end imprint date of %s' % (comic['ComicYear'], end_month, pub_end_month))
-                                                                found = True
-                                                            else:
-                                                                found = False
-
-                                                        elif int(pub_start[:4]) == int(comic['ComicYear']):
-                                                            if cdate != None:
-                                                                start_month = cdate
-                                                            else:
-                                                                start_month = sdate
-                                                            if int(pub_start_month) <= int(start_month):
-                                                                logger.fdebug('[Year:%s] issue publication month of %s is after the start imprint date of %s' % (comic['ComicYear'], start_month, pub_start_month))
-                                                                found = True
-                                                            else:
-                                                                found = False
-
-                                                else:
-                                                    logger.info('comic year of %s is not within the imprint publication date range of %s - %s' % (comic['ComicYear'], pub_start[:4], pub_end[:4]))
-                                                    comicPublisher = None
-                                                    publisherImprint = None
+                                                continue
+                                            elif len(pub_end) == 0:
+                                                pub_end = None
+                                                if int(comic['ComicYear']) <= int(pub_start[:4]):
+                                                    logger.info('comic year of %s is prior to imprint publication date of %s' % (comic['ComicYear'], pub_start[:4]))
+                                                    comic['ComicPublisher'] = None
+                                                    comic['PublisherImprint'] = None
                                                     found = False
-                                        chkyear = False
-
-                                    elif f == 'imprints' and h is not None:
-                                        # if we get here, it's an imprint of an imprint
-                                        for i in h:
-                                            if i['name'].lower() == comic['ComicPublisher'].lower():
-                                                logger.info('imprint matched: %s ---> %s' % (i['name'],h))
-                                                comicPublisher = pubname
-                                                publisherImprint = i['name']
-                                                found = True
-                                                break
-                                    elif all([f != 'imprints', f != 'publication_run']) and h is not None and found is not True:
-                                        imprint_match = False
-                                        for x, y in mylar.IMPRINT_MAPPING.items():
-                                            if all([
-                                                y.lower() == h.lower(),
-                                                x.lower() == comic['ComicPublisher'].lower()
-                                            ]):
-                                                imprint_match = True
-                                                break
-
-                                        if h.lower() == comic['ComicPublisher'].lower() or imprint_match is True:
-                                            if mylar.CONFIG.IMPRINT_MAPPING_TYPE == 'CV':
-                                                comicPublisher = d
-                                                publisherImprint = comic['ComicPublisher']
+                                                else:
+                                                    found = True
                                             else:
-                                                comicPublisher = d
-                                                publisherImprint = h
-                                            logger.fdebug('imprint matching: [PRIORITY:%s] %s ---> %s' % (mylar.CONFIG.IMPRINT_MAPPING_TYPE, comicPublisher, publisherImprint))
-                                            chkyear = True
-                                            found = True
+                                                if int(pub_end[:4]) > int(comic['ComicYear'])  > int(pub_start[:4]):
+                                                    found = True
+                                                else:
+                                                    pub_end_month = pubrun[y+2:][pubrun.find('.',y+2)+1:].strip()
+                                                    if any([ int(pub_end[:4]) == int(comic['ComicYear']), int(pub_start[:4]) == int(comic['ComicYear']) ]):
+                                                        quick_chk = getComic(comicid=None, rtype='imprints_first', issueid=firstissueid)
+                                                        if quick_chk:
+                                                            cdate = None
+                                                            sdate = None
+                                                            #quick_chk['store_date'], quick_chk['cover_date']
+                                                            if quick_chk['cover_date'] and quick_chk['cover_date'] != '0000':
+                                                                cdate = quick_chk['cover_date'][5:7]
+                                                            if quick_chk['store_date'] and quick_chk['store_date'] != '0000':
+                                                                sdate = quick_chk['store_date'][5:7]
 
+                                                            if int(pub_end[:4]) == int(comic['ComicYear']):
+                                                                if cdate != None:
+                                                                    end_month = cdate
+                                                                else:
+                                                                    end_month = sdate
+                                                                if int(pub_end_month) <= int(end_month):
+                                                                    logger.fdebug('[Year;%s] publication month of %s is before the end imprint date of %s' % (comic['ComicYear'], end_month, pub_end_month))
+                                                                    found = True
+                                                                else:
+                                                                    found = False
+
+                                                            elif int(pub_start[:4]) == int(comic['ComicYear']):
+                                                                if cdate != None:
+                                                                    start_month = cdate
+                                                                else:
+                                                                    start_month = sdate
+                                                                if int(pub_start_month) <= int(start_month):
+                                                                    logger.fdebug('[Year:%s] issue publication month of %s is after the start imprint date of %s' % (comic['ComicYear'], start_month, pub_start_month))
+                                                                    found = True
+                                                                else:
+                                                                    found = False
+
+                                                    else:
+                                                        logger.info('comic year of %s is not within the imprint publication date range of %s - %s' % (comic['ComicYear'], pub_start[:4], pub_end[:4]))
+                                                        comicPublisher = None
+                                                        publisherImprint = None
+                                                        found = False
+                                            chkyear = False
+
+                                        elif f == 'imprints' and h is not None:
+                                            # if we get here, it's an imprint of an imprint
+                                            for i in h:
+                                                if i['name'].lower() == comic['ComicPublisher'].lower():
+                                                    logger.info('imprint matched: %s ---> %s' % (i['name'],h))
+                                                    comicPublisher = pubname
+                                                    publisherImprint = i['name']
+                                                    found = True
+                                                    break
+                                        elif all([f != 'imprints', f != 'publication_run']) and h is not None and found is not True:
+                                            imprint_match = False
+                                            if mylar.IMPRINT_MAPPING is not None:
+                                                for x, y in mylar.IMPRINT_MAPPING.items():
+                                                    if all([
+                                                        y.lower() == h.lower(),
+                                                        x.lower() == comic['ComicPublisher'].lower()
+                                                    ]):
+                                                        imprint_match = True
+                                                        break
+                                            else:
+                                                logger.fdebug('[get_imprint_volume_and_booktype] IMPRINT_MAPPING is None, skipping imprint mapping check')
+
+                                            if h.lower() == comic['ComicPublisher'].lower() or imprint_match is True:
+                                                if mylar.CONFIG.IMPRINT_MAPPING_TYPE == 'CV':
+                                                    comicPublisher = d
+                                                    publisherImprint = comic['ComicPublisher']
+                                                else:
+                                                    comicPublisher = d
+                                                    publisherImprint = h
+                                                logger.fdebug('imprint matching: [PRIORITY:%s] %s ---> %s' % (mylar.CONFIG.IMPRINT_MAPPING_TYPE, comicPublisher, publisherImprint))
+                                                chkyear = True
+                                                found = True
+
+                                    if found is True:
+                                        break
                                 if found is True:
                                     break
                             if found is True:
@@ -1477,7 +1485,8 @@ def get_imprint_volume_and_booktype(series, comicyear, publisher, firstissueid, 
                         if found is True:
                             break
         except Exception as e:
-            logger.error('error: %s' % e)
+            logger.error('[get_imprint_volume_and_booktype] error: %s' % e)
+            logger.fdebug('[get_imprint_volume_and_booktype] Traceback: %s' % traceback.format_exc())
 
     if comicPublisher is not None:
         comic['ComicPublisher'] = comicPublisher
