@@ -1360,9 +1360,9 @@ class Config(object):
             # Set the actual API key, so mylar does not appear broken from the start
             self.COMICVINE_API = self.COMICVINE_API[4:]
 
-        if self.SEARCH_INTERVAL < 360:
-            logger.fdebug('Search interval too low. Resetting to 6 hour minimum')
-            self.SEARCH_INTERVAL = 360
+        if self.SEARCH_INTERVAL < 30:
+            logger.fdebug('Search interval too low. Resetting to 30 minute minimum')
+            self.SEARCH_INTERVAL = 30
 
         if self.SEARCH_DELAY < 1:
             logger.fdebug("Minimum search delay set for 1 minute to avoid hammering.")

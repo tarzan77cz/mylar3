@@ -190,7 +190,8 @@ def addComictoDB(comicid, mismatch=None, pullupd=None, imported=None, ogcname=No
     # we need to lookup the info for the requested ComicID in full now
     comic = cv.getComic(comicid, 'comic', series=True)
 
-    if not comic:
+    # Check if comic is None or if it's missing required fields (like ComicName)
+    if not comic or not isinstance(comic, dict) or 'ComicName' not in comic:
         logger.warn('Error fetching comic. ID for : ' + comicid)
         if dbcomic is None:
             newValueDict = {"ComicName":   "Fetch failed, try refreshing. (%s)" % (comicid),
@@ -1347,7 +1348,7 @@ def updateissuedata(comicid, comicname=None, issued=None, comicIssues=None, call
     #chkType comes from the weeklypulllist - either 'annual' or not to distinguish annuals vs. issues
     if comicIssues is None:
         comic = cv.getComic(comicid, 'comic', series=True)
-        if comic is None:
+        if not comic or not isinstance(comic, dict) or 'ComicName' not in comic:
             logger.warn('Error retrieving from ComicVine - either the site is down or you are not using your own CV API key')
             return {'status': 'failure'}
 

@@ -609,7 +609,7 @@ class Api(object):
                 notfound.append({'comicid': comicid})
             else:
                 if comicid not in mylar.REFRESH_QUEUE.queue: #if not any(ext['comicid'] == comicid for ext in mylar.REFRESH_LIST):
-                    watch.append({"comicid": comicid, "comicname": chkdb['ComicName']})
+                    watch.append({"comicid": comicid, "comicname": chkdb['ComicName'], "seriesyear": chkdb['ComicYear']})
                 else:
                     already_added.append({'comicid': comicid, 'comicname': chkdb['ComicName']})
 

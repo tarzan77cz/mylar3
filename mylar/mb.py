@@ -66,7 +66,9 @@ def pullsearch(comicapi, comicquery, offset, search_type):
     PULLURL = mylar.CVURL + str(search_type) + 's?api_key=' + str(comicapi) + '&filter=name:' + filterline + '&field_list=id,name,start_year,site_detail_url,count_of_issues,image,publisher,deck,description,first_issue,last_issue&format=xml&sort=date_last_updated:desc&offset=' + str(offset) # 2012/22/02 - CVAPI flipped back to offset instead of page
 
     #all these imports are standard on most modern python implementations
-    #logger.info('MB.PULLURL:' + PULLURL)
+    # Log the URL for debugging (mask API key for security)
+    masked_url = PULLURL.replace('api_key=' + str(comicapi), 'api_key=***MASKED***') if comicapi else PULLURL
+    logger.fdebug('[CV-DEBUG] Calling ComicVine API: %s' % masked_url)
 
     #new CV API restriction - one api request / second.
     if mylar.CONFIG.CVAPI_RATE is None or mylar.CONFIG.CVAPI_RATE < 2:
@@ -83,19 +85,61 @@ def pullsearch(comicapi, comicquery, offset, search_type):
         logger.warn('Error fetching data from ComicVine: %s' % e)
         return
 
+    # Check status code first
+    if r.status_code != 200:
+        logger.warn('[WARNING] ComicVine returned status code %s. This usually indicates a rate limit or server issue.' % r.status_code)
+        mylar.BACKENDSTATUS_CV = 'down'
+        return None
+    
+    # Debug: Log response headers to understand what ComicVine is returning
+    content_type = r.headers.get('Content-Type', 'unknown')
+    content_encoding = r.headers.get('Content-Encoding', 'none')
+    logger.fdebug('[CV-DEBUG] Response headers - Content-Type: %s, Content-Encoding: %s, Content-Length: %s' % 
+                 (content_type, content_encoding, r.headers.get('Content-Length', 'unknown')))
+    
+    # Check if response looks like XML (should start with <?xml or <response>)
+    content_preview = r.content[:100] if len(r.content) > 100 else r.content
+    is_xml = content_preview.startswith(b'<?xml') or content_preview.startswith(b'<response')
+    
+    if not is_xml:
+        # Response doesn't look like XML - log more details
+        logger.warn('[CV-DEBUG] Response does not appear to be XML. First 200 bytes (hex): %s' % content_preview[:200].hex())
+        # Try to decode to see if it's a text error message
+        try:
+            error_text = r.content.decode('utf-8', errors='ignore')[:500]
+            logger.warn('[CV-DEBUG] Decoded response preview: %s' % error_text)
+        except:
+            pass
+    
     try:
         dom = parseString(r.content) #(data)
     except ExpatError:
-        if 'Abnormal Traffic Detected' in r.content.decode('utf-8'):
+        # Try to safely decode the content to check for error messages
+        try:
+            # Try UTF-8 first
+            content_str = r.content.decode('utf-8', errors='ignore')
+        except (UnicodeDecodeError, AttributeError):
+            # If UTF-8 fails, try latin-1 as fallback (it can decode any byte)
+            try:
+                content_str = r.content.decode('latin-1', errors='ignore')
+            except:
+                content_str = str(r.content)[:500]  # Last resort: convert to string
+        
+        if 'Abnormal Traffic Detected' in content_str:
             logger.error('ComicVine has banned this server\'s IP address because it exceeded the API rate limit.')
         else:
+            # Log the response for debugging
             logger.warn('[WARNING] ComicVine is not responding correctly at the moment. This is usually due to some problems on their end. If you re-try things again in a few moments, it might work properly.')
+            logger.fdebug('[CV-DEBUG] ComicVine search response (status: %s, length: %s bytes):\n%s' % (r.status_code, len(r.content), content_str[:2000]))
             mylar.BACKENDSTATUS_CV = 'down'
-        return
+        return None
     except Exception as e:
         logger.warn('[ERROR] Error returned from CV: %s' % e)
-        return
+        mylar.BACKENDSTATUS_CV = 'down'
+        return None
     else:
+        # Only set to 'up' after successful parsing
+        mylar.BACKENDSTATUS_CV = 'up'
         return dom
 
 def findComic(name, mode, issue, limityear=None, search_type=None, annual_check=False):
@@ -151,7 +195,12 @@ def findComic(name, mode, issue, limityear=None, search_type=None, annual_check=
     searched = pullsearch(comicapi, comicquery, 0, search_type)
     if searched is None:
         return False
-    totalResults = searched.getElementsByTagName('number_of_total_results')[0].firstChild.wholeText
+    
+    try:
+        totalResults = searched.getElementsByTagName('number_of_total_results')[0].firstChild.wholeText
+    except (IndexError, AttributeError) as e:
+        logger.warn('[ERROR] Unable to parse ComicVine search results: %s' % e)
+        return False
     logger.fdebug("there are " + str(totalResults) + " search results...")
     if not totalResults:
         return False
@@ -165,7 +214,18 @@ def findComic(name, mode, issue, limityear=None, search_type=None, annual_check=
             offsetcount = countResults
 
             searched = pullsearch(comicapi, comicquery, offsetcount, search_type)
-        comicResults = searched.getElementsByTagName(search_type)
+            if searched is None:
+                logger.warn('[WARNING] Failed to retrieve search results from ComicVine at offset %s. Stopping search.' % offsetcount)
+                break
+        
+        if searched is None:
+            break
+            
+        try:
+            comicResults = searched.getElementsByTagName(search_type)
+        except (AttributeError, IndexError) as e:
+            logger.warn('[ERROR] Unable to parse ComicVine search results: %s' % e)
+            break
         body = ''
         n = 0
         if not comicResults:

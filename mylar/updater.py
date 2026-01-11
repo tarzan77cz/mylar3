@@ -40,16 +40,19 @@ def addvialist(queue):
                 r_mode = None
 
             if r_mode == 'updateissuedata':
-                logger.info('[MASS-REFRESH][WEEKLY-UPDATER] Now updating series data for %s (%s) [%s] ' % (item['comicname'], item['seriesyear'], item['comicid']))
-                mylar.GLOBAL_MESSAGES = {'status': 'success', 'comicname': item['comicname'], 'seriesyear': item['seriesyear'], 'comicid': item['comicid'], 'tables': 'both', 'message': 'Now refreshing %s (%s)' % (item['comicname'], item['seriesyear'])}
+                seriesyear = item.get('seriesyear', 'Unknown')
+                logger.info('[MASS-REFRESH][WEEKLY-UPDATER] Now updating series data for %s (%s) [%s] ' % (item['comicname'], seriesyear, item['comicid']))
+                mylar.GLOBAL_MESSAGES = {'status': 'success', 'comicname': item['comicname'], 'seriesyear': seriesyear, 'comicid': item['comicid'], 'tables': 'both', 'message': 'Now refreshing %s (%s)' % (item['comicname'], seriesyear)}
                 mylar.importer.updateissuedata(item['comicid'], item['comicname'], calledfrom=item['calledfrom'], serieslast_updated=item['serieslast_updated'])
             elif r_mode == 'manualannual':
-                logger.info('[MASS-REFRESH][WEEKLY-UPDATER][AnnualID:%s] Now updating series data for %s (%s) [%s] ' % (item['manual_comicid'], item['comicname'], item['seriesyear'], item['comicid']))
-                mylar.GLOBAL_MESSAGES = {'status': 'success', 'comicname': item['comicname'], 'seriesyear': item['seriesyear'], 'comicid': item['comicid'], 'tables': 'both', 'message': 'Now refreshing %s (%s)' % (item['comicname'], item['seriesyear'])}
-                mylar.importer.manualAnnual(item['manual_comicid'], item['comicname'], comicyear=item['seriesyear'], comicid=item['comicid'], forceadd=True, serieslast_updated=item['serieslast_updated'])
+                seriesyear = item.get('seriesyear', 'Unknown')
+                logger.info('[MASS-REFRESH][WEEKLY-UPDATER][AnnualID:%s] Now updating series data for %s (%s) [%s] ' % (item['manual_comicid'], item['comicname'], seriesyear, item['comicid']))
+                mylar.GLOBAL_MESSAGES = {'status': 'success', 'comicname': item['comicname'], 'seriesyear': seriesyear, 'comicid': item['comicid'], 'tables': 'both', 'message': 'Now refreshing %s (%s)' % (item['comicname'], seriesyear)}
+                mylar.importer.manualAnnual(item['manual_comicid'], item['comicname'], comicyear=seriesyear, comicid=item['comicid'], forceadd=True, serieslast_updated=item['serieslast_updated'])
             else:
-                logger.info('[MASS-REFRESH][1/%s] Now refreshing %s (%s) [%s] ' % (queue.qsize()+1, item['comicname'], item['seriesyear'], item['comicid']))
-                mylar.GLOBAL_MESSAGES = {'status': 'success', 'comicname': item['comicname'], 'seriesyear': item['seriesyear'], 'comicid': item['comicid'], 'tables': 'both', 'message': 'Now refreshing %s (%s)' % (item['comicname'], item['seriesyear'])}
+                seriesyear = item.get('seriesyear', 'Unknown')
+                logger.info('[MASS-REFRESH][1/%s] Now refreshing %s (%s) [%s] ' % (queue.qsize()+1, item['comicname'], seriesyear, item['comicid']))
+                mylar.GLOBAL_MESSAGES = {'status': 'success', 'comicname': item['comicname'], 'seriesyear': seriesyear, 'comicid': item['comicid'], 'tables': 'both', 'message': 'Now refreshing %s (%s)' % (item['comicname'], seriesyear)}
                 dbUpdate([item['comicid']], calledfrom='refresh')
         else:
             mylar.REFRESH_QUEUE.put('exit')

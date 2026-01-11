@@ -3749,7 +3749,39 @@ class WebInterface(object):
             myDB.action("DELETE FROM ddl_info WHERE status = 'Queued'")
             return json.dumps({'status': True, 'message': 'Successfully cleared %s items from the Queue' % countchk})
 
-        if id is None:
+        if mode == 'clear_completed':
+            chk = myDB.selectone("SELECT count(*) AS count FROM ddl_info WHERE status = 'Completed'").fetchone()
+            countchk = 0
+            if chk:
+                countchk = chk['count']
+
+            if countchk == 0:
+                return json.dumps({'status': True, 'message': 'No completed items to clear'})
+
+            myDB.action("DELETE FROM ddl_info WHERE status = 'Completed'")
+            return json.dumps({'status': True, 'message': 'Successfully cleared %s completed items from the history' % countchk})
+
+        if mode == 'restart_queue':
+            # Reset DDL_LOCK first
+            mylar.DDL_LOCK = False
+            logger.info('[DDL-RESTART-QUEUE] Reset DDL_LOCK')
+            
+            # Reset all "Downloading" items to "Queued" status
+            downloading_items = myDB.select("SELECT * FROM ddl_info WHERE status = 'Downloading'")
+            if downloading_items:
+                for item in downloading_items:
+                    ctrlval = {'id': item['id']}
+                    val = {'status': 'Queued',
+                           'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}
+                    myDB.upsert('ddl_info', val, ctrlval)
+                    # Remove from DDL_QUEUED if present
+                    if item['id'] in mylar.DDL_QUEUED:
+                        mylar.DDL_QUEUED.remove(item['id'])
+                logger.info('[DDL-RESTART-QUEUE] Reset %s stuck "Downloading" items to "Queued" status' % len(downloading_items))
+            
+            # Now get all Queued items (including the ones we just reset)
+            items = myDB.select("SELECT * FROM ddl_info WHERE status = 'Queued' ORDER BY updated_date DESC")
+        elif id is None:
             items = myDB.select("SELECT * FROM ddl_info WHERE status = 'Queued' ORDER BY updated_date DESC")
         else:
             oneitem = myDB.selectone("SELECT * FROM DDL_INFO WHERE ID=?", [id]).fetchone()

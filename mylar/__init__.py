@@ -344,7 +344,18 @@ def initialize(config_file):
 
         SESSION_ID = random.randint(10000,999999)
 
-        CV_HEADERS = {'User-Agent': mylar.CONFIG.CV_USER_AGENT}
+        # Enhanced headers for CloudFlare compatibility when downloading images
+        CV_HEADERS = {
+            'User-Agent': mylar.CONFIG.CV_USER_AGENT,
+            'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate',  # Removed 'br' - requests doesn't auto-decompress Brotli
+            'Referer': 'https://comicvine.gamespot.com/',
+            'Sec-Fetch-Dest': 'image',
+            'Sec-Fetch-Mode': 'no-cors',
+            'Sec-Fetch-Site': 'cross-site',
+            'DNT': '1',
+        }
 
         # set the current week for the pull-list
         todaydate = datetime.datetime.today()
@@ -565,6 +576,9 @@ def start():
                     updater_diff = datetime.datetime.utcfromtimestamp(helpers.utctimestamp() + ((int(DBUPDATE_INTERVAL) * 60)  - (updater_diff*60)))
                     logger.fdebug('[DB UPDATER] Scheduling next run @ %s (every %s minutes)' % (helpers.utc_date_to_local(updater_diff), DBUPDATE_INTERVAL))
                     UPDATER_SCHEDULER.modify(next_run_time=updater_diff)
+                
+                # Resume the scheduler so it can actually run
+                UPDATER_SCHEDULER.resume()
 
             #let's do a run at the Wanted issues here (on startup) if enabled.
             if SEARCH_STATUS != 'Paused':
@@ -586,6 +600,9 @@ def start():
                         search_diff = datetime.datetime.utcfromtimestamp(helpers.utctimestamp() + ((int(CONFIG.SEARCH_INTERVAL) * 60)  - (duration_diff*60)))
                         logger.fdebug('[AUTO-SEARCH] Scheduling next run @ %s (every %s minutes)' % (helpers.utc_date_to_local(search_diff), CONFIG.SEARCH_INTERVAL))
                         SEARCH_SCHEDULER.modify(next_run_time=search_diff)
+                
+                # Resume the scheduler so it can actually run
+                SEARCH_SCHEDULER.resume()
 
             #thread queue control..
             queue_schedule('search_queue', 'start')
@@ -602,6 +619,13 @@ def start():
 
             if CONFIG.ENABLE_DDL is True:
                 queue_schedule('ddl_queue', 'start')
+                # Start DDL watchdog thread to detect stuck downloads
+                watchdog_thread = threading.Thread(target=helpers.ddl_watchdog, name="ddl-watchdog", daemon=True)
+                watchdog_thread.start()
+                logger.info('[DDL-WATCHDOG] DDL Watchdog thread started - will monitor for stuck downloads')
+                
+                # Load queued items from ddl_info table on startup
+                helpers.ddl_load_queued_items()
 
             helpers.latestdate_fix()
 
@@ -637,6 +661,9 @@ def start():
                     weekly_diff = datetime.datetime.utcfromtimestamp(weektimestamp + (weekly_interval - (duration_diff * 60)))
                     logger.fdebug('[WEEKLY] Scheduling next run for @ %s every %s hours' % (helpers.utc_date_to_local(weekly_diff), weektimer))
                     WEEKLY_SCHEDULER.modify(next_run_time=weekly_diff)
+                
+                # Resume the scheduler so it can actually run
+                WEEKLY_SCHEDULER.resume()
 
             #initiate startup rss feeds for torrents/nzbs here...
             if RSS_STATUS != 'Paused':
@@ -653,6 +680,9 @@ def start():
                     rss_diff = datetime.datetime.utcfromtimestamp(helpers.utctimestamp() + (int(CONFIG.RSS_CHECKINTERVAL) * 60) - (duration_diff * 60))
                     logger.fdebug('[RSS-FEEDS] Scheduling next run for @ %s every %s minutes' % (helpers.utc_date_to_local(rss_diff), CONFIG.RSS_CHECKINTERVAL))
                     RSS_SCHEDULER.modify(next_run_time=rss_diff)
+                
+                # Resume the scheduler so it can actually run
+                RSS_SCHEDULER.resume()
 
             if VERSION_STATUS != 'Paused':
                 VERSION_SCHEDULER.resume()
