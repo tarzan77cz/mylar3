@@ -3433,7 +3433,78 @@ def ddl_downloader(queue):
                     myDB.action('DELETE FROM ddl_info where id=?', [item['id']])
                     mylar.search.FailedMark(item['issueid'], item['comicid'], item['id'], ddzstat['filename'], item['site'])
         else:
-            time.sleep(5)
+            # Queue is empty - check DB for queued items and auto-load them
+            if mylar.DDL_LOCK is False and queue.qsize() == 0:
+                try:
+                    queued_items = myDB.select("SELECT * FROM ddl_info WHERE status = 'Queued' ORDER BY updated_date ASC")
+                    if queued_items:
+                        logger.info('[DDL-DOWNLOADER] Queue empty, found %s queued items in DB. Auto-loading...' % len(queued_items))
+                        items_loaded = 0
+                        for db_item in queued_items:
+                            # Check if already in queue or downloading
+                            if db_item['id'] in mylar.DDL_QUEUED:
+                                logger.fdebug('[DDL-DOWNLOADER] Item %s [ID: %s] already in DDL_QUEUED, skipping' % (db_item['series'], db_item['id']))
+                                continue
+                            
+                            # Determine if it's a oneoff
+                            OneOff = False
+                            comic = myDB.selectone(
+                                "SELECT * from comics WHERE ComicID=? AND ComicName != 'None'",
+                                [db_item['comicid']],
+                            ).fetchone()
+                            if comic is None:
+                                comic = myDB.selectone(
+                                    "SELECT * from storyarcs WHERE IssueID=?",
+                                    [db_item['issueid']],
+                                ).fetchone()
+                                if comic is None:
+                                    OneOff = True
+                            
+                            # Reconstruct the item dictionary
+                            try:
+                                remote_filesize = db_item['remote_filesize']
+                                if remote_filesize is None:
+                                    remote_filesize = 0
+                            except (KeyError, TypeError):
+                                remote_filesize = 0
+                            
+                            queue_item = {
+                                'link': db_item['link'],
+                                'mainlink': db_item['mainlink'],
+                                'series': db_item['series'],
+                                'year': db_item['year'],
+                                'size': db_item['size'],
+                                'comicid': db_item['comicid'],
+                                'issueid': db_item['issueid'],
+                                'oneoff': OneOff,
+                                'id': db_item['id'],
+                                'link_type': db_item['link_type'],
+                                'filename': db_item['filename'],
+                                'comicinfo': None,
+                                'packinfo': None,
+                                'site': db_item['site'],
+                                'remote_filesize': remote_filesize,
+                                'resume': None,
+                            }
+                            
+                            queue.put(queue_item)
+                            mylar.DDL_QUEUED.append(db_item['id'])
+                            items_loaded += 1
+                            logger.fdebug('[DDL-DOWNLOADER] Auto-loaded queued item: %s (%s) [ID: %s]' % (db_item['series'], db_item['year'], db_item['id']))
+                        
+                        if items_loaded > 0:
+                            logger.info('[DDL-DOWNLOADER] Auto-loaded %s items from DB into queue (Queue size now: %s)' % (items_loaded, queue.qsize()))
+                        else:
+                            # No items to load, sleep a bit before checking again
+                            time.sleep(5)
+                    else:
+                        # No queued items in DB, sleep a bit before checking again
+                        time.sleep(5)
+                except Exception as e:
+                    logger.error('[DDL-DOWNLOADER] Error auto-loading queued items from DB: %s' % e)
+                    time.sleep(5)
+            else:
+                time.sleep(5)
 
 def ddl_cleanup(id):
    # remove html file from cache if it's successful

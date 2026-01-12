@@ -4159,6 +4159,11 @@ class WebInterface(object):
             mylar.DDL_LOCK = False
             logger.info('[DDL-RESTART-QUEUE] Reset DDL_LOCK')
             
+            # Clear DDL_QUEUED to allow requeuing all items
+            # This ensures that items that were in queue but not yet processed can be requeued
+            mylar.DDL_QUEUED = []
+            logger.info('[DDL-RESTART-QUEUE] Cleared DDL_QUEUED list to allow requeuing all items')
+            
             # Reset all "Downloading" items to "Queued" status
             downloading_items = myDB.select("SELECT * FROM ddl_info WHERE status = 'Downloading'")
             if downloading_items:
@@ -4167,9 +4172,6 @@ class WebInterface(object):
                     val = {'status': 'Queued',
                            'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}
                     myDB.upsert('ddl_info', val, ctrlval)
-                    # Remove from DDL_QUEUED if present
-                    if item['id'] in mylar.DDL_QUEUED:
-                        mylar.DDL_QUEUED.remove(item['id'])
                 logger.info('[DDL-RESTART-QUEUE] Reset %s stuck "Downloading" items to "Queued" status' % len(downloading_items))
             
             # Now get all Queued items (including the ones we just reset)
