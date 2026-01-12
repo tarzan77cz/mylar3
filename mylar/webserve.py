@@ -8845,7 +8845,7 @@ class WebInterface(object):
 
     def check_ActiveDDL(self):
          myDB = db.DBConnection()
-         active = myDB.selectone("SELECT * FROM DDL_INFO WHERE STATUS = 'Downloading'").fetchone()
+         active = myDB.selectone("SELECT * FROM DDL_INFO WHERE STATUS = 'Downloading' ORDER BY updated_date DESC, id DESC").fetchone()
          if active is None:
              return json.dumps({'status':   'There are no active downloads currently being attended to',
                                 'percent':   0,
