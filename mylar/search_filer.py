@@ -561,6 +561,53 @@ class search_check(object):
                         '%s was not a match to %s (%s)'
                         % (cleantitle, ComicName, SeriesYear)
                     )
+                    # Check if this is a relevant match worth storing (issue number and year match)
+                    # even though series name doesn't match exactly
+                    is_relevant = False
+                    reason = "Series name mismatch"
+                    
+                    # Check if issue number matches
+                    try:
+                        if filecomic.get('justthedigits') is not None:
+                            comintIss = helpers.issue_number_parser(filecomic['justthedigits']).asInt
+                            # Get expected issue number
+                            if IssueNumber is not None:
+                                intIss = helpers.issue_number_parser(IssueNumber).asInt
+                                if intIss == comintIss:
+                                    is_relevant = True
+                                    reason = "Series name mismatch (issue number matches)"
+                            elif cmloopit == 4:
+                                # For One-Shot searches, any issue number match is relevant
+                                is_relevant = True
+                                reason = "Series name mismatch (issue number found: %s)" % filecomic['justthedigits']
+                    except Exception as e:
+                        logger.fdebug('[REJECTED-MATCHES] Error checking issue number match: %s' % e)
+                    
+                    # Also check if year matches
+                    if is_relevant:
+                        try:
+                            parsed_year = parsed_comic.get('issue_year')
+                            if parsed_year and str(parsed_year) == str(ComicYear):
+                                reason = "Series name mismatch (issue #%s and year %s match)" % (
+                                    filecomic.get('justthedigits', '?'), parsed_year
+                                )
+                        except Exception:
+                            pass
+                    
+                    # Store rejected match if relevant
+                    if is_relevant:
+                        try:
+                            nzbid = entry.get('id') if 'id' in entry else None
+                            size_val = comsize_m if 'comsize_m' in locals() and comsize_m != 0 else None
+                            self._store_rejected_match(entry, is_info,
+                                                       reason,
+                                                       comsize_m=size_val,
+                                                       pubdate=pubdate if 'pubdate' in locals() else None,
+                                                       nzbid=nzbid,
+                                                       relevance_score=0.5)  # Medium relevance - issue/year match but series name differs
+                        except Exception as e:
+                            logger.fdebug('[REJECTED-MATCHES] Error storing failed match: %s' % e)
+                    
                     return None
                 elif filecomic['process_status'] == 'alt_match':
                     # if it's an alternate series match, we'll retain each value
@@ -1021,6 +1068,7 @@ class search_check(object):
                     "newznab": newznab_host,
                     "torznab": torznab_host,
                     "downloadit": downloadit,
+                    "alt_match": alt_match,
                     "ComicTitle": ComicTitle,
                     "entry": entry,
                     "provider_stat": provider_stat,
@@ -1224,6 +1272,7 @@ class search_check(object):
                             "newznab": newznab_host,
                             "torznab": torznab_host,
                             "downloadit": downloadit,
+                            "alt_match": alt_match,
                             "ComicTitle": ComicTitle,
                             "entry": entry,
                             "provider_stat": provider_stat,
