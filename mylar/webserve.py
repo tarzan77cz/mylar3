@@ -3565,10 +3565,12 @@ class WebInterface(object):
                     watcharc = None
 
                 try:
-                    filtered.append([row['ComicName'], row['Issue_Number'], row['ReleaseDate'], row['IssueID'], tier, row['ComicID'], row['Status'], storyarc, storyarcid, issuearcid, watcharc, row['Int_IssueNumber']])
+                    rejected_count = len(mylar.REJECTED_MATCHES.get(row['IssueID'], []))
+                    filtered.append([row['ComicName'], row['Issue_Number'], row['ReleaseDate'], row['IssueID'], tier, row['ComicID'], row['Status'], storyarc, storyarcid, issuearcid, watcharc, row['Int_IssueNumber'], rejected_count])
                 except Exception as e:
                     #logger.warn('danger Wil Robinson: %s' % (e,))
-                    filtered.append([row['ComicName'], row['Issue_Number'], row['ReleaseDate'], row['IssueID'], tier, row['ComicID'], row['Status'], None, None, None, watcharc, row['Int_IssueNumber']])
+                    rejected_count = len(mylar.REJECTED_MATCHES.get(row['IssueID'], []))
+                    filtered.append([row['ComicName'], row['Issue_Number'], row['ReleaseDate'], row['IssueID'], tier, row['ComicID'], row['Status'], None, None, None, watcharc, row['Int_IssueNumber'], rejected_count])
 
         if mylar.CONFIG.UPCOMING_STORYARCS is True:
             for key, ark in arcs.items():
@@ -3617,7 +3619,8 @@ class WebInterface(object):
                         matched = True
 
                 if matched is True:
-                    filtered.append([ark['comicname'], ark['issuenumber'], ark['releasedate'], key, tier, ark['comicid'], ark['status'], ark['storyarc'], ark['storyarcid'], ark['issuearcid'], "oneoff", ark['int_issuenumber']])
+                    rejected_count = len(mylar.REJECTED_MATCHES.get(key, []))
+                    filtered.append([ark['comicname'], ark['issuenumber'], ark['releasedate'], key, tier, ark['comicid'], ark['status'], ark['storyarc'], ark['storyarcid'], ark['issuearcid'], "oneoff", ark['int_issuenumber'], rejected_count])
 
         #logger.fdebug('[%s] one-off arcs: %s' % (len(arcs), arcs,))
 
@@ -3656,6 +3659,396 @@ class WebInterface(object):
         })
 
     loadupcoming.exposed = True
+
+    def get_rejected_matches(self, IssueID):
+        """
+        Get rejected matches for a given IssueID.
+        Returns JSON with list of rejected matches or empty list if none found.
+        Sorted by relevance_score (descending), then by pubdate (descending - newest first).
+        """
+        try:
+            if IssueID in mylar.REJECTED_MATCHES:
+                matches = mylar.REJECTED_MATCHES[IssueID]
+                # Convert to JSON-serializable format
+                result = []
+                for match in matches:
+                    result.append({
+                        "title": match.get("title", "Unknown"),
+                        "provider": match.get("provider", "Unknown"),
+                        "size": match.get("size", "Unknown"),
+                        "kind": match.get("kind", "Unknown"),
+                        "link": match.get("link", ""),
+                        "pubdate": match.get("pubdate", ""),
+                        "reason": match.get("reason", "Unknown reason"),
+                        "nzbid": match.get("nzbid", None),
+                        "relevance_score": match.get("relevance_score", 0.0)
+                    })
+                
+                # Sort by relevance_score (descending), then by pubdate (descending - newest first)
+                def sort_key(m):
+                    relevance = m.get("relevance_score", 0.0)
+                    pubdate_str = m.get("pubdate", "")
+                    # Try to parse date for proper sorting
+                    date_sort = 0
+                    if pubdate_str:
+                        try:
+                            import email.utils
+                            # Try to parse common date formats
+                            try:
+                                # Try ISO format first (YYYY-MM-DD)
+                                if len(pubdate_str) == 10 and pubdate_str.count('-') == 2:
+                                    date_val = datetime.datetime.strptime(pubdate_str, '%Y-%m-%d')
+                                    date_sort = date_val.timestamp()
+                                else:
+                                    # Try parsing as email date format (RFC 2822)
+                                    date_tuple = email.utils.parsedate_tz(pubdate_str)
+                                    if date_tuple:
+                                        if date_tuple[-1] is not None:
+                                            date_sort = time.mktime(date_tuple[:len(date_tuple)-1]) - date_tuple[-1]
+                                        else:
+                                            date_sort = time.mktime(date_tuple[:len(date_tuple)-1])
+                                    else:
+                                        # If parsing fails, use string comparison (newer dates come first in string sort)
+                                        date_sort = -len(pubdate_str)  # Longer strings (newer dates) sort first
+                            except Exception:
+                                # If parsing fails, use string comparison
+                                date_sort = -len(pubdate_str) if pubdate_str else 0
+                        except Exception:
+                            date_sort = 0
+                    # Return tuple: (-relevance for descending, -date_sort for descending)
+                    return (-relevance, -date_sort)
+                
+                result.sort(key=sort_key)
+                
+                return json.dumps({"status": "success", "matches": result})
+            else:
+                return json.dumps({"status": "success", "matches": []})
+        except Exception as e:
+            logger.error('[GET-REJECTED-MATCHES] Error: %s' % e)
+            import traceback
+            logger.error(traceback.format_exc())
+            return json.dumps({"status": "error", "message": str(e)})
+    get_rejected_matches.exposed = True
+
+    def select_rejected_match(self, IssueID, match_index):
+        """
+        Select a rejected match and add it to download queue.
+        match_index: index in the rejected matches list for this IssueID
+        """
+        try:
+            match_index = int(match_index)
+            if IssueID not in mylar.REJECTED_MATCHES:
+                return json.dumps({"status": "error", "message": "No rejected matches found for this issue"})
+            
+            matches = mylar.REJECTED_MATCHES[IssueID]
+            if match_index < 0 or match_index >= len(matches):
+                return json.dumps({"status": "error", "message": "Invalid match index"})
+            
+            match = matches[match_index]
+            
+            # Get issue info from database
+            myDB = db.DBConnection()
+            issue = myDB.selectone("SELECT * FROM issues WHERE IssueID=?", [IssueID]).fetchone()
+            if not issue:
+                return json.dumps({"status": "error", "message": "Issue not found in database"})
+            
+            comic = myDB.selectone("SELECT * FROM comics WHERE ComicID=?", [issue['ComicID']]).fetchone()
+            if not comic:
+                return json.dumps({"status": "error", "message": "Comic not found in database"})
+            
+            # Reconstruct verified match data from stored rejected match
+            verified_data = match.get("verified_data")
+            if verified_data:
+                # Use stored verified data if available - reconstruct full comicinfo
+                # Get booktype from verified_data or comic (use Corrected_Type if available, otherwise Type)
+                booktype = verified_data.get('booktype')
+                if not booktype:
+                    # sqlite3.Row doesn't have .get(), use direct access with try/except
+                    try:
+                        booktype = comic['Corrected_Type'] if comic['Corrected_Type'] else comic['Type']
+                    except (KeyError, TypeError):
+                        try:
+                            booktype = comic['Type']
+                        except (KeyError, TypeError):
+                            booktype = None
+                
+                comicinfo = [{
+                    'ComicName': verified_data.get('ComicName', comic['ComicName']),
+                    'IssueNumber': verified_data.get('IssueNumber', issue['Issue_Number']),
+                    'comyear': verified_data.get('comyear', comic['ComicYear']),
+                    'oneoff': verified_data.get('oneoff', False),
+                    'nzbid': verified_data.get('nzbid', match.get('nzbid')),
+                    'ComicID': issue['ComicID'],
+                    'IssueID': IssueID,
+                    'pack': verified_data.get('pack', False),
+                    'pack_numbers': verified_data.get('pack_numbers'),
+                    'pack_issuelist': verified_data.get('pack_issuelist'),
+                    'SARC': verified_data.get('SARC'),
+                    'IssueArcID': verified_data.get('IssueArcID'),
+                    'size': verified_data.get('size', match.get('size', 'Unknown')),
+                    'nzbtitle': verified_data.get('nzbtitle', match.get('title', '')),
+                    'IssueDate': verified_data.get('IssueDate') or (issue['IssueDate'] if 'IssueDate' in issue else ''),
+                    'booktype': booktype
+                }]
+                
+                # Prepare link
+                if isinstance(verified_data.get('entry'), dict):
+                    entry = verified_data['entry']
+                    try:
+                        entry_link = entry.get('link')
+                        entry_id = entry.get('id')
+                        if entry_link or entry_id:
+                            links = {'id': entry_id, 'link': entry_link or ''}
+                        else:
+                            # Fallback to match link, ensure it's a dict if we have an id
+                            match_link = match.get('link', '')
+                            match_id = match.get('nzbid')
+                            if match_id:
+                                links = {'id': match_id, 'link': match_link}
+                            else:
+                                links = match_link if match_link else ''
+                    except:
+                        match_link = entry.get('link') or match.get('link') or ''
+                        match_id = match.get('nzbid')
+                        if match_id and match_link:
+                            links = {'id': match_id, 'link': match_link}
+                        else:
+                            links = match_link
+                else:
+                    match_link = match.get('link', '')
+                    match_id = match.get('nzbid')
+                    if match_id and match_link:
+                        links = {'id': match_id, 'link': match_link}
+                    else:
+                        links = match_link if match_link else ''
+                
+                # Call searcher to add to download queue
+                # Get provider_stat if available, otherwise create minimal one
+                provider_stat = verified_data.get('provider_stat')
+                if not provider_stat:
+                    # Create minimal provider_stat based on provider type
+                    provider = verified_data.get('nzbprov', match.get('provider', 'Unknown'))
+                    if 'newznab' in provider.lower() or provider == 'experimental':
+                        provider_stat = {'type': 'newznab'}
+                    elif 'torznab' in provider.lower():
+                        provider_stat = {'type': 'torznab'}
+                    elif 'DDL' in provider:
+                        provider_stat = {'type': 'ddl'}
+                    else:
+                        provider_stat = {'type': 'torrent'}
+                
+                # Get nzbname - use ComicTitle from verified_data, or nzbtitle from comicinfo, or title from match
+                nzbname_param = verified_data.get('ComicTitle') or comicinfo[0].get('nzbtitle') or match.get('title', '')
+                if not nzbname_param:
+                    # Last resort: construct from ComicName and IssueNumber
+                    nzbname_param = '%s #%s' % (comicinfo[0].get('ComicName', ''), comicinfo[0].get('IssueNumber', ''))
+                
+                searchresult = search.searcher(
+                    verified_data.get('nzbprov', match.get('provider', 'Unknown')),
+                    nzbname_param,
+                    comicinfo,
+                    links,
+                    IssueID,
+                    issue['ComicID'],
+                    verified_data.get('tmpprov', ''),
+                    newznab=verified_data.get('newznab'),
+                    torznab=verified_data.get('torznab'),
+                    rss='no',
+                    provider_stat=provider_stat
+                )
+                
+                # search.searcher returns dict with keys: nzbid, nzbname, sent_to, SARC, alt_nzbname, t_hash
+                # OR error string on failure (ddl-fail, torrent-fail, etc.)
+                # OR None
+                logger.fdebug('[SELECT-REJECTED-MATCH] search.searcher returned: %s (type: %s)' % (searchresult, type(searchresult)))
+                # Check if it's a successful result (dict with nzbname or sent_to) or a non-error string
+                is_success = False
+                if isinstance(searchresult, dict):
+                    # Dict means success for DDL/torrent providers
+                    is_success = bool(searchresult.get('nzbname') or searchresult.get('sent_to'))
+                elif isinstance(searchresult, str) and searchresult.strip():
+                    # String means success for NZB providers, unless it's an error code
+                    is_success = searchresult not in ['ddl-fail', 'torrent-fail', 'blackhole-fail', 'downloadchk-fail', 'sab-fail']
+                
+                if is_success:
+                    # Successfully added to queue
+                    # Update status to Snatched
+                    provider = verified_data.get('nzbprov', match.get('provider', 'Unknown'))
+                    try:
+                        updater.foundsearch(
+                            issue['ComicID'],
+                            IssueID,
+                            mode=None,
+                            provider=provider
+                        )
+                        logger.info('[SELECT-REJECTED-MATCH] Updated status to Snatched for IssueID %s' % IssueID)
+                    except Exception as e:
+                        logger.error('[SELECT-REJECTED-MATCH] Error updating status to Snatched: %s' % e)
+                    
+                    # Remove from rejected matches
+                    matches.pop(match_index)
+                    if len(matches) == 0:
+                        del mylar.REJECTED_MATCHES[IssueID]
+                    
+                    # Extract nzbname from dict if it's a dict, otherwise use the string
+                    nzbname_result = searchresult.get('nzbname', searchresult) if isinstance(searchresult, dict) else searchresult
+                    return json.dumps({
+                        "status": "success",
+                        "message": "Successfully added to download queue",
+                        "nzbname": nzbname_result
+                    })
+                else:
+                    error_msg = "Failed to add to download queue"
+                    if searchresult:
+                        error_msg += ": %s" % str(searchresult)
+                    logger.error('[SELECT-REJECTED-MATCH] %s' % error_msg)
+                    return json.dumps({
+                        "status": "error",
+                        "message": error_msg
+                    })
+            else:
+                # Fallback: try to use entry data
+                entry = match.get("entry", {})
+                if not entry:
+                    return json.dumps({"status": "error", "message": "No entry data available"})
+                
+                # Create minimal comicinfo
+                # Check if entry has pack information
+                pack = entry.get('pack', False) if isinstance(entry, dict) else False
+                
+                # Get booktype from comic (use Corrected_Type if available, otherwise Type)
+                # sqlite3.Row doesn't have .get(), use direct access with try/except
+                try:
+                    booktype = comic['Corrected_Type'] if comic['Corrected_Type'] else comic['Type']
+                except (KeyError, TypeError):
+                    try:
+                        booktype = comic['Type']
+                    except (KeyError, TypeError):
+                        booktype = None
+                
+                comicinfo = [{
+                    'ComicName': comic['ComicName'],
+                    'IssueNumber': issue['Issue_Number'],
+                    'comyear': comic['ComicYear'],
+                    'oneoff': False,
+                    'nzbid': match.get('nzbid'),
+                    'ComicID': issue['ComicID'],
+                    'IssueID': IssueID,
+                    'pack': pack,
+                    'pack_numbers': entry.get('pack_numbers') if isinstance(entry, dict) else None,
+                    'pack_issuelist': entry.get('pack_issuelist') if isinstance(entry, dict) else None,
+                    'booktype': booktype,
+                    'SARC': None,  # May not be available in fallback
+                    'IssueArcID': None,  # May not be available in fallback
+                    'size': match.get('size', 'Unknown'),
+                    'nzbtitle': match.get('title', ''),
+                    'IssueDate': issue['IssueDate'] if 'IssueDate' in issue else ''
+                }]
+                
+                # Prepare links - ensure it's either a dict with 'link' key or a string
+                entry_link = entry.get('link') if isinstance(entry, dict) else None
+                match_link = match.get('link', '')
+                match_id = match.get('nzbid')
+                
+                if entry_link:
+                    entry_id = entry.get('id') if isinstance(entry, dict) else None
+                    if entry_id or match_id:
+                        links = {'id': entry_id or match_id, 'link': entry_link}
+                    else:
+                        links = entry_link
+                elif match_link:
+                    if match_id:
+                        links = {'id': match_id, 'link': match_link}
+                    else:
+                        links = match_link
+                else:
+                    links = ''
+                
+                provider = match.get('provider', 'Unknown')
+                
+                # Create minimal provider_stat based on provider type
+                if 'newznab' in provider.lower() or provider == 'experimental':
+                    provider_stat = {'type': 'newznab'}
+                elif 'torznab' in provider.lower():
+                    provider_stat = {'type': 'torznab'}
+                elif 'DDL' in provider:
+                    provider_stat = {'type': 'ddl'}
+                else:
+                    provider_stat = {'type': 'torrent'}
+                
+                # Get nzbname - use title from match, or nzbtitle from comicinfo, or construct from ComicName and IssueNumber
+                nzbname_param = match.get('title') or comicinfo[0].get('nzbtitle') or ''
+                if not nzbname_param:
+                    # Last resort: construct from ComicName and IssueNumber
+                    nzbname_param = '%s #%s' % (comicinfo[0].get('ComicName', ''), comicinfo[0].get('IssueNumber', ''))
+                
+                searchresult = search.searcher(
+                    provider,
+                    nzbname_param,
+                    comicinfo,
+                    links,
+                    IssueID,
+                    issue['ComicID'],
+                    '',
+                    rss='no',
+                    provider_stat=provider_stat
+                )
+                
+                # search.searcher returns dict with keys: nzbid, nzbname, sent_to, SARC, alt_nzbname, t_hash
+                # OR error string on failure (ddl-fail, torrent-fail, etc.)
+                # OR None
+                logger.fdebug('[SELECT-REJECTED-MATCH] search.searcher returned: %s (type: %s)' % (searchresult, type(searchresult)))
+                # Check if it's a successful result (dict with nzbname or sent_to) or a non-error string
+                is_success = False
+                if isinstance(searchresult, dict):
+                    # Dict means success for DDL/torrent providers
+                    is_success = bool(searchresult.get('nzbname') or searchresult.get('sent_to'))
+                elif isinstance(searchresult, str) and searchresult.strip():
+                    # String means success for NZB providers, unless it's an error code
+                    is_success = searchresult not in ['ddl-fail', 'torrent-fail', 'blackhole-fail', 'downloadchk-fail', 'sab-fail']
+                
+                if is_success:
+                    # Successfully added to queue
+                    # Update status to Snatched
+                    provider = match.get('provider', 'Unknown')
+                    try:
+                        updater.foundsearch(
+                            issue['ComicID'],
+                            IssueID,
+                            mode=None,
+                            provider=provider
+                        )
+                        logger.info('[SELECT-REJECTED-MATCH] Updated status to Snatched for IssueID %s' % IssueID)
+                    except Exception as e:
+                        logger.error('[SELECT-REJECTED-MATCH] Error updating status to Snatched: %s' % e)
+                    
+                    matches.pop(match_index)
+                    if len(matches) == 0:
+                        del mylar.REJECTED_MATCHES[IssueID]
+                    
+                    # Extract nzbname from dict if it's a dict, otherwise use the string
+                    nzbname_result = searchresult.get('nzbname', searchresult) if isinstance(searchresult, dict) else searchresult
+                    return json.dumps({
+                        "status": "success",
+                        "message": "Successfully added to download queue",
+                        "nzbname": nzbname_result
+                    })
+                else:
+                    error_msg = "Failed to add to download queue"
+                    if searchresult:
+                        error_msg += ": %s" % str(searchresult)
+                    logger.error('[SELECT-REJECTED-MATCH] %s' % error_msg)
+                    return json.dumps({
+                        "status": "error",
+                        "message": error_msg
+                    })
+                    
+        except Exception as e:
+            logger.error('[SELECT-REJECTED-MATCH] Error: %s' % e)
+            import traceback
+            logger.error(traceback.format_exc())
+            return json.dumps({"status": "error", "message": str(e)})
+    select_rejected_match.exposed = True
 
     def searchformissing(self, ComicID):
         #search for 'missing' issues for a given series without marking them as Wanted (issues that are in a Skipped or Wanted state).

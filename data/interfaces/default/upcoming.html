@@ -65,6 +65,35 @@
         </div>
         </br>
 
+        <!-- Rejected Matches Dialog -->
+        <div id="rejected_matches_dialog" title="Rejected Search Matches" style="display:none;">
+            <div id="rejected_matches_loading" style="text-align: center; padding: 20px;">
+                <p>Loading rejected matches...</p>
+            </div>
+            <div id="rejected_matches_content" style="display:none;">
+                <p id="rejected_matches_empty" style="display:none; text-align: center; padding: 20px;">
+                    No rejected matches found for this issue.
+                </p>
+                <div style="max-height: 500px; overflow-y: auto; overflow-x: auto;">
+                    <table id="rejected_matches_table" style="width: 100%;">
+                        <thead style="position: sticky; top: 0; background-color: #fff; z-index: 10;">
+                            <tr>
+                                <th>Title</th>
+                                <th>Provider</th>
+                                <th>Size</th>
+                                <th>Kind</th>
+                                <th>Date</th>
+                                <th>Reason</th>
+                                <th>Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="rejected_matches_table_body">
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
         <div class="title">
                 <h1 class="clearfix"><img src="${icons['icon_upcoming']}" alt="Upcoming Issues"/>Upcoming Issues</h1>
         </div>
@@ -431,7 +460,20 @@
                         "targets": [ 5 ],
                         "visible": true,
                         "render":function (data,type,full){
-                            return full[4];
+                            // Add magnifying glass icon for Wanted issues
+                            var tierText = full[4];
+                            var issueId = full[3];
+                            var rejectedCount = full[12] || 0; // Get rejected matches count (default to 0 if undefined)
+                            if (full[6] === "Wanted" && issueId) {
+                                var iconHtml = '<img src="images/search.png" height="16" width="16" style="margin-left: 5px; vertical-align: middle;" />';
+                                if (rejectedCount > 0) {
+                                    // Add count badge
+                                    iconHtml += '<span style="background-color: #ff6b6b; color: white; border-radius: 50%; padding: 1px 5px; font-size: 10px; font-weight: bold; margin-left: 2px; vertical-align: super;">' + rejectedCount + '</span>';
+                                }
+                                var titleText = rejectedCount > 0 ? 'View rejected search matches (' + rejectedCount + ' available)' : 'View rejected search matches';
+                                tierText += ' <a href="#" class="rejected-matches-link" data-issueid="' + $('<div/>').text(issueId).html() + '" title="' + titleText + '">' + iconHtml + '</a>';
+                            }
+                            return tierText;
                         }
                     },
                     ],
@@ -566,6 +608,104 @@
                      }
                   }
                });
+            });
+
+            // Initialize rejected matches dialog
+            $("#rejected_matches_dialog").dialog({
+                autoOpen: false,
+                width: "80%",
+                height: 650,
+                maxHeight: 650,
+                modal: true,
+                resizable: true
+            });
+
+            // Handle click on magnifying glass icon
+            $(document).on('click', '.rejected-matches-link', function(e) {
+                e.preventDefault();
+                var issueId = $(this).data('issueid');
+                if (!issueId) {
+                    alert('Error: Issue ID not found');
+                    return false;
+                }
+                
+                // Show loading
+                $('#rejected_matches_loading').show();
+                $('#rejected_matches_content').hide();
+                $('#rejected_matches_empty').hide();
+                
+                // Open dialog
+                $("#rejected_matches_dialog").dialog("open");
+                
+                // Fetch rejected matches
+                $.getJSON('get_rejected_matches', {IssueID: issueId}, function(data) {
+                    $('#rejected_matches_loading').hide();
+                    
+                    if (data.status === 'success' && data.matches && data.matches.length > 0) {
+                        // Populate table
+                        var tbody = $('#rejected_matches_table_body');
+                        tbody.empty();
+                        
+                        $.each(data.matches, function(index, match) {
+                            var row = '<tr>' +
+                                '<td>' + $('<div/>').text(match.title || 'Unknown').html() + '</td>' +
+                                '<td>' + $('<div/>').text(match.provider || 'Unknown').html() + '</td>' +
+                                '<td>' + $('<div/>').text(match.size || 'Unknown').html() + '</td>' +
+                                '<td>' + $('<div/>').text(match.kind || 'Unknown').html() + '</td>' +
+                                '<td>' + $('<div/>').text(match.pubdate || '').html() + '</td>' +
+                                '<td>' + $('<div/>').text(match.reason || 'Unknown reason').html() + '</td>' +
+                                '<td><button class="download-rejected-btn" data-issueid="' + $('<div/>').text(issueId).html() + '" data-match-index="' + index + '">Download</button></td>' +
+                                '</tr>';
+                            tbody.append(row);
+                        });
+                        
+                        $('#rejected_matches_content').show();
+                    } else {
+                        // No matches found
+                        $('#rejected_matches_empty').show();
+                    }
+                }).fail(function(jqXHR, textStatus, errorThrown) {
+                    $('#rejected_matches_loading').hide();
+                    alert('Error loading rejected matches: ' + textStatus);
+                });
+                
+                return false;
+            });
+
+            // Handle download button click
+            $(document).on('click', '.download-rejected-btn', function(e) {
+                e.preventDefault();
+                var issueId = $(this).data('issueid');
+                var matchIndex = $(this).data('match-index');
+                var btn = $(this);
+                
+                // Disable button and show loading
+                btn.prop('disabled', true).text('Adding...');
+                
+                $.getJSON('select_rejected_match', {
+                    IssueID: issueId,
+                    match_index: matchIndex
+                }, function(data) {
+                    if (data.status === 'success') {
+                        // Success - close dialog and show message
+                        $("#rejected_matches_dialog").dialog("close");
+                        alert('Successfully added to download queue: ' + (data.nzbname || ''));
+                        
+                        // Optionally reload the table to reflect changes
+                        if ($.fn.dataTable.isDataTable('#wanted_table')) {
+                            $('#wanted_table').DataTable().ajax.reload(null, false);
+                        }
+                    } else {
+                        // Error
+                        alert('Error: ' + (data.message || 'Failed to add to download queue'));
+                        btn.prop('disabled', false).text('Download');
+                    }
+                }).fail(function(jqXHR, textStatus, errorThrown) {
+                    alert('Error: ' + textStatus);
+                    btn.prop('disabled', false).text('Download');
+                });
+                
+                return false;
             });
 	});
 	</script>

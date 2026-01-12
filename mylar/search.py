@@ -1314,6 +1314,40 @@ def verification(verified_matches, is_info):
         for verified in verified_matches:
             # we need to make sure we index the correct match
             #logger.fdebug('verified: %s' % (verified,))
+            # Store rejected matches (downloadit=False) for user review
+            if not verified.get('downloadit', False) and 'IssueID' in verified:
+                try:
+                    IssueID = verified['IssueID']
+                    if IssueID not in mylar.REJECTED_MATCHES:
+                        mylar.REJECTED_MATCHES[IssueID] = []
+                    
+                    # Determine rejection reason
+                    reason = "Not selected for download"
+                    if verified.get('pack', False):
+                        reason = "Pack detected but not preferred"
+                    elif verified.get('alt_match', False):
+                        reason = "Alternate series match (not primary match)"
+                    else:
+                        reason = "Match found but not selected (manual search or alternate match)"
+                    
+                    # Create rejected match object
+                    rejected_match = {
+                        "title": verified.get('nzbtitle', verified.get('ComicTitle', 'Unknown')),
+                        "provider": verified.get('provider', verified.get('nzbprov', 'Unknown')),
+                        "size": verified.get('size', 'Unknown'),
+                        "kind": verified.get('kind', 'Unknown'),
+                        "link": verified.get('link', ''),
+                        "pubdate": verified.get('pubdate', ''),
+                        "reason": reason,
+                        "nzbid": verified.get('nzbid', None),
+                        "entry": verified.get('entry', {}),
+                        "relevance_score": 0.8,  # High relevance - passed all checks but not selected
+                        "verified_data": verified  # Store full verified data for later use
+                    }
+                    mylar.REJECTED_MATCHES[IssueID].append(rejected_match)
+                except Exception as e:
+                    logger.fdebug('[REJECTED-MATCHES] Error storing rejected match in verification: %s' % e)
+            
             if verified['downloadit']:
                 try:
                     if verified['chkit']:

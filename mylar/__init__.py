@@ -153,6 +153,7 @@ MASS_REFRESH = None
 REFRESH_QUEUE = queue.Queue()
 DDL_QUEUED = []
 PACK_ISSUEIDS_DONT_QUEUE = {}
+REJECTED_MATCHES = {}  # Cache for rejected search matches: {IssueID: [match_objects]}
 EXT_SERVER = False
 SEARCH_TIER_DATE = None
 COMICSORT = None
