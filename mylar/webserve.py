@@ -3819,6 +3819,7 @@ class WebInterface(object):
                              'id': x['id']})
 
         if itemlist is not None:
+            items_added = 0
             for item in itemlist:
                 seriesname = item['series']
                 seriessize = item['size']
@@ -3852,27 +3853,45 @@ class WebInterface(object):
                     continue
                 else:
                     resume = None
-                mylar.DDL_QUEUE.put({'link': item['link'],
-                                     'mainlink': item['mainlink'],
-                                     'series': item['series'],
-                                     'year': item['year'],
-                                     'size': item['size'],
-                                     'comicid': item['comicid'],
-                                     'issueid': item['issueid'],
-                                     'oneoff': item['oneoff'],
-                                     'id': item['id'],
-                                     'link_type': item['link_type'],
-                                     'filename': item['filename'],
-                                     'comicinfo': None,
-                                     'packinfo': None,
-                                     'site': item['site'],
-                                     'remote_filesize': item['remote_filesize'],
-                                     'resume': resume})
+                
+                # Add item to DDL_QUEUE
+                try:
+                    # Check if item is already in queue or downloading
+                    if item['id'] in mylar.DDL_QUEUED:
+                        logger.debug('[DDL-REQUEUE] Item %s (%s) [ID: %s] already in queue or downloading, skipping duplicate' % 
+                                    (item['series'], item['year'], item['id']))
+                        continue
+                    
+                    mylar.DDL_QUEUE.put({'link': item['link'],
+                                         'mainlink': item['mainlink'],
+                                         'series': item['series'],
+                                         'year': item['year'],
+                                         'size': item['size'],
+                                         'comicid': item['comicid'],
+                                         'issueid': item['issueid'],
+                                         'oneoff': item['oneoff'],
+                                         'id': item['id'],
+                                         'link_type': item['link_type'],
+                                         'filename': item['filename'],
+                                         'comicinfo': None,
+                                         'packinfo': None,
+                                         'site': item['site'],
+                                         'remote_filesize': item['remote_filesize'],
+                                         'resume': resume})
+                    # Add to DDL_QUEUED to prevent duplicates
+                    mylar.DDL_QUEUED.append(item['id'])
+                    items_added += 1
+                    if mode == 'restart_queue':
+                        logger.debug('[DDL-RESTART-QUEUE] Added item to queue: %s (%s) [ID: %s] - Queue size: %s' % 
+                                    (item['series'], item['year'], item['id'], mylar.DDL_QUEUE.qsize()))
+                except Exception as e:
+                    logger.error('[DDL-REQUEUE] Error adding item %s to queue: %s' % (item.get('id', 'Unknown'), e))
 
                 linemessage = '%s successful for %s' % (mode, item['series'])
 
             if mode == 'restart_queue':
-                logger.info('[DDL-RESTART-QUEUE] DDL Queue successfully restarted. Put %s items back into the queue for downloading..' % len(itemlist))
+                logger.info('[DDL-RESTART-QUEUE] DDL Queue successfully restarted. Put %s items back into the queue for downloading (Queue size now: %s)..' % 
+                           (items_added, mylar.DDL_QUEUE.qsize()))
                 linemessage = 'Successfully restarted Queue'
             elif mode == 'restart':
                 logger.info('[DDL-RESTART] Successfully restarted %s [%s] for downloading..' % (seriesname, seriessize))
