@@ -529,15 +529,38 @@ def GetComicInfo(comicid, dom, safechk=None, series=False):
     try:
         site_urls = dom.getElementsByTagName('site_detail_url')
         if len(site_urls) > 0:
-            # Use index 0, not trackcnt - site_detail_url is at results level
-            comic['ComicURL'] = site_urls[0].firstChild.wholeText
+            # Find site_detail_url at results (volume) level, not issue level
+            # XML response can contain multiple site_detail_url elements (one for volume, one for each issue)
+            volume_url = None
+            for url_elem in site_urls:
+                if url_elem.parentNode.nodeName == 'results':
+                    volume_url = url_elem.firstChild.wholeText
+                    break
+            
+            if volume_url:
+                comic['ComicURL'] = volume_url
+            else:
+                # Fallback: construct volume URL from comicid
+                # Ensure comicid has the correct prefix
+                vol_id = comicid
+                if not vol_id.startswith('4050-'):
+                    vol_id = '4050-' + str(vol_id)
+                comic['ComicURL'] = 'https://comicvine.gamespot.com/volume/' + str(vol_id) + '/'
+                logger.warn('Could not find volume-level site_detail_url for comicid: %s, constructed URL: %s' % (comicid, comic['ComicURL']))
         else:
-            logger.warn('No site_detail_url found in ComicVine response for comicid: %s' % comicid)
-            comic['ComicURL'] = 'None'
+            # Construct volume URL from comicid if not found
+            vol_id = comicid
+            if not vol_id.startswith('4050-'):
+                vol_id = '4050-' + str(vol_id)
+            comic['ComicURL'] = 'https://comicvine.gamespot.com/volume/' + str(vol_id) + '/'
+            logger.warn('No site_detail_url found in ComicVine response for comicid: %s, constructed URL: %s' % (comicid, comic['ComicURL']))
     except Exception as e:
         logger.warn('Unable to retrieve URL for volume: %s. This is usually due to a timeout to CV, or going over the API.' % e)
-        comic['ComicURL'] = 'None'
-        # Don't retry here - continue with other data
+        # Construct volume URL from comicid as fallback
+        vol_id = comicid
+        if not vol_id.startswith('4050-'):
+            vol_id = '4050-' + str(vol_id)
+        comic['ComicURL'] = 'https://comicvine.gamespot.com/volume/' + str(vol_id) + '/'
 
 
     try:
