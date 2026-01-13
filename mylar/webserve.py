@@ -4164,6 +4164,25 @@ class WebInterface(object):
             mylar.DDL_QUEUED = []
             logger.info('[DDL-RESTART-QUEUE] Cleared DDL_QUEUED list to allow requeuing all items')
             
+            # Empty the DDL_QUEUE to prevent duplicates
+            # Python queue.Queue doesn't have clear(), so we need to drain it manually
+            queue_size_before = mylar.DDL_QUEUE.qsize()
+            if queue_size_before > 0:
+                logger.info('[DDL-RESTART-QUEUE] Emptying existing queue (%s items) to prevent duplicates' % queue_size_before)
+                try:
+                    items_drained = 0
+                    while True:
+                        try:
+                            mylar.DDL_QUEUE.get_nowait()
+                            items_drained += 1
+                        except:
+                            break
+                    logger.info('[DDL-RESTART-QUEUE] Drained %s items from queue' % items_drained)
+                except Exception as e:
+                    logger.warn('[DDL-RESTART-QUEUE] Error emptying queue: %s' % e)
+                    import traceback
+                    logger.debug('[DDL-RESTART-QUEUE] Traceback: %s' % traceback.format_exc())
+            
             # Reset all "Downloading" items to "Queued" status
             downloading_items = myDB.select("SELECT * FROM ddl_info WHERE status = 'Downloading'")
             if downloading_items:

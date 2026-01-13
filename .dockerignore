@@ -28,3 +28,13 @@ Dockerfile
 # Other
 .DS_Store
 *.log
+
+# Temporary/artifact files
+=
+[internal]
+ERROR
+extracting
+resolve
+transferring
+.LAST_RELEASE
+sha256:*

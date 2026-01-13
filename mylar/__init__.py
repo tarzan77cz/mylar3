@@ -174,6 +174,7 @@ DOWNLOAD_APIKEY = None
 APILOCK = False
 SEARCHLOCK = False
 DDL_LOCK = False
+DDL_STARTUP_LOADED = False
 CMTAGGER_PATH = None
 STATIC_COMICRN_VERSION = "1.01"
 STATIC_APC_VERSION = "2.04"
@@ -619,14 +620,16 @@ def start():
                 queue_schedule('pp_queue', 'start')
 
             if CONFIG.ENABLE_DDL is True:
+                # Load queued items from ddl_info table on startup FIRST
+                # This must happen before starting the ddl_downloader thread to prevent race conditions
+                helpers.ddl_load_queued_items()
+                
+                # Now start the DDL queue and downloader thread
                 queue_schedule('ddl_queue', 'start')
                 # Start DDL watchdog thread to detect stuck downloads
                 watchdog_thread = threading.Thread(target=helpers.ddl_watchdog, name="ddl-watchdog", daemon=True)
                 watchdog_thread.start()
                 logger.info('[DDL-WATCHDOG] DDL Watchdog thread started - will monitor for stuck downloads')
-                
-                # Load queued items from ddl_info table on startup
-                helpers.ddl_load_queued_items()
 
             helpers.latestdate_fix()
 
