@@ -22,6 +22,60 @@ from wsgiref.handlers import format_date_time
 
 import mylar
 from mylar import logger, filechecker, helpers, search
+import time
+
+
+def _is_duplicate_rejected_match(IssueID, link, nzbid):
+    """Check if rejected match with given link and nzbid already exists for IssueID"""
+    if IssueID not in mylar.REJECTED_MATCHES:
+        return False
+    for match in mylar.REJECTED_MATCHES[IssueID]:
+        if match.get('link') == link and match.get('nzbid') == nzbid:
+            return True
+    return False
+
+
+def _find_rejected_match_index(IssueID, link, nzbid):
+    """Find index of rejected match with given link and nzbid, or None if not found"""
+    if IssueID not in mylar.REJECTED_MATCHES:
+        return None
+    for idx, match in enumerate(mylar.REJECTED_MATCHES[IssueID]):
+        if match.get('link') == link and match.get('nzbid') == nzbid:
+            return idx
+    return None
+
+
+def _add_or_update_rejected_match(IssueID, link, nzbid, match_data, update_only=False):
+    """Add new or update existing rejected match. Returns True if added/updated, False otherwise."""
+    try:
+        if IssueID not in mylar.REJECTED_MATCHES:
+            mylar.REJECTED_MATCHES[IssueID] = []
+        
+        match_idx = _find_rejected_match_index(IssueID, link, nzbid)
+        
+        if match_idx is not None:
+            # Update existing match - merge new data with existing data
+            existing_match = mylar.REJECTED_MATCHES[IssueID][match_idx]
+            # Preserve original data and update with new data
+            existing_match.update(match_data)
+            existing_match['last_updated'] = time.time()
+            logger.fdebug('[REJECTED-MATCHES] Updated rejected match for IssueID %s: %s' % 
+                         (IssueID, match_data.get('title', 'Unknown')))
+            return True
+        elif not update_only:
+            # Add new match
+            match_data['last_updated'] = time.time()
+            if 'initial_added' not in match_data:
+                match_data['initial_added'] = True
+            mylar.REJECTED_MATCHES[IssueID].append(match_data)
+            logger.fdebug('[REJECTED-MATCHES] Added new rejected match for IssueID %s: %s' % 
+                         (IssueID, match_data.get('title', 'Unknown')))
+            return True
+        
+        return False
+    except Exception as e:
+        logger.fdebug('[REJECTED-MATCHES] Error in _add_or_update_rejected_match: %s' % e)
+        return False
 
 
 class search_check(object):
@@ -30,45 +84,73 @@ class search_check(object):
         pass
 
     def _store_rejected_match(self, entry, is_info, reason, comsize_m=None, pubdate=None, nzbid=None, relevance_score=0.3):
-        """Helper function to store rejected matches for user review"""
+        """Helper function to store rejected matches for user review - uses update mechanism"""
         if not is_info or 'IssueID' not in is_info:
             return
         
         try:
             IssueID = is_info['IssueID']
-            if IssueID not in mylar.REJECTED_MATCHES:
-                mylar.REJECTED_MATCHES[IssueID] = []
-            
-            # Check if this specific match (by link/nzbid) is already stored
-            is_duplicate = False
             entry_link = entry.get('link', '')
             entry_id = nzbid if nzbid else entry.get('id')
             
-            for existing_match in mylar.REJECTED_MATCHES[IssueID]:
-                if existing_match.get('link') == entry_link and \
-                   existing_match.get('nzbid') == entry_id:
-                    is_duplicate = True
-                    break
+            rejected_match = {
+                "title": entry.get('title', 'Unknown'),
+                "provider": is_info.get('nzbprov', 'Unknown'),
+                "size": comsize_m if comsize_m else 'Unknown',
+                "kind": entry.get('kind', 'Unknown'),
+                "link": entry_link,
+                "pubdate": pubdate if pubdate else entry.get('pubdate', ''),
+                "reason": reason,
+                "nzbid": entry_id,
+                "entry": entry,
+                "relevance_score": relevance_score,
+                "verified_data": None,  # Not verified yet, rejected early
+                "initial_added": False  # This is being added with a reason, not from initial search
+            }
             
-            if not is_duplicate:
-                rejected_match = {
-                    "title": entry.get('title', 'Unknown'),
-                    "provider": is_info.get('nzbprov', 'Unknown'),
-                    "size": comsize_m if comsize_m else 'Unknown',
-                    "kind": "Unknown",  # Will be determined later if entry passes more checks
-                    "link": entry_link,
-                    "pubdate": pubdate if pubdate else '',
-                    "reason": reason,
-                    "nzbid": entry_id,
-                    "entry": entry,
-                    "relevance_score": relevance_score,
-                    "verified_data": None  # Not verified yet, rejected early
-                }
-                mylar.REJECTED_MATCHES[IssueID].append(rejected_match)
-                logger.fdebug('[REJECTED-MATCHES] Stored rejected match for IssueID %s: %s (Reason: %s)' % 
-                            (IssueID, entry.get('title', 'Unknown'), reason))
+            # Use _add_or_update_rejected_match which handles duplicates automatically
+            _add_or_update_rejected_match(IssueID, entry_link, entry_id, rejected_match, update_only=False)
+            logger.fdebug('[REJECTED-MATCHES] Stored/updated rejected match for IssueID %s: %s (Reason: %s)' % 
+                        (IssueID, entry.get('title', 'Unknown'), reason))
         except Exception as e:
             logger.fdebug('[REJECTED-MATCHES] Error storing rejected match: %s' % e)
+
+    def _add_all_entries_to_rejected_matches(self, entries, is_info):
+        """Add all entries from search to rejected matches with minimal data"""
+        if not is_info or 'IssueID' not in is_info:
+            return
+        
+        try:
+            IssueID = is_info['IssueID']
+            nzbprov = is_info.get('nzbprov', 'Unknown')
+            
+            for entry in entries:
+                entry_link = entry.get('link', '')
+                entry_id = entry.get('id')  # nzbid might not be available yet at this stage
+                
+                # Create minimal match data - will be updated later when we know more
+                minimal_match = {
+                    "title": entry.get('title', 'Unknown'),
+                    "provider": entry.get('site', nzbprov),
+                    "size": entry.get('length', 'Unknown'),
+                    "kind": "Unknown",  # Will be determined later
+                    "link": entry_link,
+                    "pubdate": entry.get('pubdate', ''),
+                    "reason": "",  # No reason yet - will be updated when we know why it was rejected
+                    "nzbid": entry_id,
+                    "entry": entry,
+                    "relevance_score": 0.0,  # Will be updated later
+                    "verified_data": None,
+                    "initial_added": True  # Mark as added from initial search
+                }
+                
+                # Use _add_or_update_rejected_match - it will only add if doesn't exist
+                _add_or_update_rejected_match(IssueID, entry_link, entry_id, minimal_match, update_only=False)
+            
+            logger.fdebug('[REJECTED-MATCHES] Added %d entries to rejected matches for IssueID %s' % 
+                         (len(entries), IssueID))
+        except Exception as e:
+            logger.fdebug('[REJECTED-MATCHES] Error adding entries to rejected matches: %s' % e)
 
     def _process_entry(self, entry, is_info):
         if is_info:
@@ -1355,33 +1437,30 @@ class search_check(object):
                     # Store rejected match if entry was relevant but issue number didn't match
                     if is_info and 'IssueID' in is_info and 'filecomic' in locals():
                         try:
-                            IssueID = is_info['IssueID']
-                            if IssueID not in mylar.REJECTED_MATCHES:
-                                mylar.REJECTED_MATCHES[IssueID] = []
-                            
                             # Get issue number found in file
                             found_issue = filecomic.get('justthedigits', 'Unknown') if filecomic else 'Unknown'
                             expected_issue = is_info.get('IssueNumber', 'Unknown')
+                            reason = "Issue number mismatch: expected %s, found %s" % (expected_issue, found_issue)
                             
-                            # Create rejected match object
-                            rejected_match = {
-                                "title": entry.get('title', 'Unknown'),
-                                "provider": nzbprov if is_info else 'Unknown',
-                                "size": comsize_m if 'comsize_m' in locals() else 'Unknown',
-                                "kind": kind if 'kind' in locals() else 'Unknown',
-                                "link": entry.get('link', ''),
-                                "pubdate": pubdate if 'pubdate' in locals() else '',
-                                "reason": "Issue number mismatch: expected %s, found %s" % (expected_issue, found_issue),
-                                "nzbid": nzbid if 'nzbid' in locals() else None,
-                                "entry": entry,
-                                "relevance_score": 0.5  # Partial match - series name matched but issue didn't
-                            }
-                            mylar.REJECTED_MATCHES[IssueID].append(rejected_match)
+                            # Use _store_rejected_match which handles duplicates and updates automatically
+                            self._store_rejected_match(
+                                entry, 
+                                is_info, 
+                                reason,
+                                comsize_m=comsize_m if 'comsize_m' in locals() else None,
+                                pubdate=pubdate if 'pubdate' in locals() else None,
+                                nzbid=nzbid if 'nzbid' in locals() else None,
+                                relevance_score=0.5  # Partial match - series name matched but issue didn't
+                            )
                         except Exception as e:
                             logger.fdebug('[REJECTED-MATCHES] Error storing rejected match: %s' % e)
         return None
 
     def checker(self, entries, is_info=None):
+        # Add all entries to rejected matches first (before processing)
+        if entries and is_info:
+            self._add_all_entries_to_rejected_matches(entries, is_info)
+        
         mylar.COMICINFO = []
         hold_the_matches = []
 

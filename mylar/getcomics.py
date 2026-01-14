@@ -225,8 +225,16 @@ class GC(object):
 
                 result_generator = self.perform_search_queries(queryline)
                 sfs = search_filer.search_check()
+                
+                # Convert generator to list so we can add all results to rejected matches
+                result_list = list(result_generator)
+                
+                # Add all entries to rejected matches first (before processing)
+                if result_list and is_info:
+                    sfs._add_all_entries_to_rejected_matches(result_list, is_info)
+                
                 match = sfs.check_for_first_result(
-                    result_generator, is_info, prefer_pack=mylar.CONFIG.PACK_PRIORITY
+                    result_list, is_info, prefer_pack=mylar.CONFIG.PACK_PRIORITY
                 )
                 if match is not None:
                     verified_matches = [match]

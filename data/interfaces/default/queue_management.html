@@ -53,11 +53,9 @@
             </div>
             </br></br>
             <h2><center><bold>HISTORY</bold></center></h2>
-            %if status_summary:
-            <div style="text-align: center; margin: 10px 0; padding: 5px; background-color: #f0f0f0; border-radius: 3px;">
-                <strong>${status_summary}</strong>
+            <div id="status_summary_div" style="text-align: center; margin-top: 5px; margin-bottom: 10px; padding: 5px; color: #AAAAAA; display: ${'block' if status_summary else 'none'};">
+                <strong>${status_summary if status_summary else ''}</strong>
             </div>
-            %endif
             <div style="margin-bottom: 10px; text-align: left; padding-left: 10px;">
                 <label>
                     <input type="checkbox" id="hide_completed_checkbox" style="margin-right: 5px;">Hide COMPLETED
@@ -98,6 +96,22 @@
         var ImportTimer = setInterval(activecheck, 5000);
         var previousStatus = null;
         var previousAid = null;
+        
+        function updateStatusSummary() {
+            $.getJSON('get_status_summary', function(data) {
+                if (data.status === 'success') {
+                    if (data.status_summary) {
+                        $('#status_summary_div strong').text(data.status_summary);
+                        $('#status_summary_div').show();
+                    } else {
+                        $('#status_summary_div').hide();
+                    }
+                }
+            }).fail(function() {
+                // Silently fail - status summary update is not critical
+            });
+        }
+        
         function activecheck() {
                 $.get('check_ActiveDDL',
                     function(data){
@@ -116,6 +130,7 @@
                             // Status changed - reload the history table
                             if ($.fn.dataTable.isDataTable('#queue_table')) {
                                 $('#queue_table').DataTable().ajax.reload(null, false);
+                                updateStatusSummary();
                             }
                         }
                         previousStatus = status;
@@ -177,6 +192,7 @@
                         if (percent == '100%') {
                             clearInterval(ImportTimer);
                             $('#queue_table').DataTable().ajax.reload(null, false);
+                            updateStatusSummary();
                             ImportTimer = setInterval(activecheck, 5000);
                         }
                 });
@@ -209,6 +225,7 @@
             });
             $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
             $('#queue_table').DataTable().ajax.reload(null, false);
+            updateStatusSummary();
         };
         function initThisPage() {
             initActions();
@@ -223,6 +240,7 @@
             }
             if ( $.fn.dataTable.isDataTable( '#queue_table' ) ) {
                 $('#queue_table').DataTable().ajax.reload(null, false);
+                updateStatusSummary();
             } else {
                 $('#queue_table').DataTable( {
                     "preDrawCallback": function (settings){
@@ -345,6 +363,7 @@
                          return nRow;
                      },
                      "drawCallback": function (o) {
+                        updateStatusSummary();
                          // Jump to top of page
                          $('html,body').scrollTop(0);
                          $('#queue_table div.dataTables_scrollBody').scrollTop(pageScrollPos);

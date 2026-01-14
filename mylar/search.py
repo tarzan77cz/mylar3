@@ -1318,8 +1318,6 @@ def verification(verified_matches, is_info):
             if not verified.get('downloadit', False) and 'IssueID' in verified:
                 try:
                     IssueID = verified['IssueID']
-                    if IssueID not in mylar.REJECTED_MATCHES:
-                        mylar.REJECTED_MATCHES[IssueID] = []
                     
                     # Determine rejection reason
                     reason = "Not selected for download"
@@ -1330,21 +1328,26 @@ def verification(verified_matches, is_info):
                     else:
                         reason = "Match found but not selected (manual search or alternate match)"
                     
-                    # Create rejected match object
+                    # Create rejected match object for update
+                    link = verified.get('link', '')
+                    nzbid = verified.get('nzbid', None)
                     rejected_match = {
                         "title": verified.get('nzbtitle', verified.get('ComicTitle', 'Unknown')),
                         "provider": verified.get('provider', verified.get('nzbprov', 'Unknown')),
                         "size": verified.get('size', 'Unknown'),
                         "kind": verified.get('kind', 'Unknown'),
-                        "link": verified.get('link', ''),
+                        "link": link,
                         "pubdate": verified.get('pubdate', ''),
                         "reason": reason,
-                        "nzbid": verified.get('nzbid', None),
+                        "nzbid": nzbid,
                         "entry": verified.get('entry', {}),
                         "relevance_score": 0.8,  # High relevance - passed all checks but not selected
-                        "verified_data": verified  # Store full verified data for later use
+                        "verified_data": verified,  # Store full verified data for later use
+                        "initial_added": False  # This is being updated with a reason
                     }
-                    mylar.REJECTED_MATCHES[IssueID].append(rejected_match)
+                    
+                    # Use update mechanism - will update existing match or add if doesn't exist
+                    search_filer._add_or_update_rejected_match(IssueID, link, nzbid, rejected_match, update_only=False)
                 except Exception as e:
                     logger.fdebug('[REJECTED-MATCHES] Error storing rejected match in verification: %s' % e)
             

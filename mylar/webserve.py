@@ -3660,6 +3660,49 @@ class WebInterface(object):
 
     loadupcoming.exposed = True
 
+    def _sort_rejected_matches(self, matches):
+        """
+        Sort rejected matches by relevance_score (descending), then by pubdate (descending - newest first).
+        Returns a sorted list of match dictionaries.
+        """
+        def sort_key(m):
+            relevance = m.get("relevance_score", 0.0)
+            pubdate_str = m.get("pubdate", "")
+            # Try to parse date for proper sorting
+            date_sort = 0
+            if pubdate_str:
+                try:
+                    import email.utils
+                    # Try to parse common date formats
+                    try:
+                        # Try ISO format first (YYYY-MM-DD)
+                        if len(pubdate_str) == 10 and pubdate_str.count('-') == 2:
+                            date_val = datetime.datetime.strptime(pubdate_str, '%Y-%m-%d')
+                            date_sort = date_val.timestamp()
+                        else:
+                            # Try parsing as email date format (RFC 2822)
+                            date_tuple = email.utils.parsedate_tz(pubdate_str)
+                            if date_tuple:
+                                if date_tuple[-1] is not None:
+                                    date_sort = time.mktime(date_tuple[:len(date_tuple)-1]) - date_tuple[-1]
+                                else:
+                                    date_sort = time.mktime(date_tuple[:len(date_tuple)-1])
+                            else:
+                                # If parsing fails, use string comparison (newer dates come first in string sort)
+                                date_sort = -len(pubdate_str)  # Longer strings (newer dates) sort first
+                    except Exception:
+                        # If parsing fails, use string comparison
+                        date_sort = -len(pubdate_str) if pubdate_str else 0
+                except Exception:
+                    date_sort = 0
+            # Return tuple: (-relevance for descending, -date_sort for descending)
+            return (-relevance, -date_sort)
+        
+        # Create a copy to avoid modifying the original list
+        sorted_matches = list(matches)
+        sorted_matches.sort(key=sort_key)
+        return sorted_matches
+
     def get_rejected_matches(self, IssueID):
         """
         Get rejected matches for a given IssueID.
@@ -3685,40 +3728,7 @@ class WebInterface(object):
                     })
                 
                 # Sort by relevance_score (descending), then by pubdate (descending - newest first)
-                def sort_key(m):
-                    relevance = m.get("relevance_score", 0.0)
-                    pubdate_str = m.get("pubdate", "")
-                    # Try to parse date for proper sorting
-                    date_sort = 0
-                    if pubdate_str:
-                        try:
-                            import email.utils
-                            # Try to parse common date formats
-                            try:
-                                # Try ISO format first (YYYY-MM-DD)
-                                if len(pubdate_str) == 10 and pubdate_str.count('-') == 2:
-                                    date_val = datetime.datetime.strptime(pubdate_str, '%Y-%m-%d')
-                                    date_sort = date_val.timestamp()
-                                else:
-                                    # Try parsing as email date format (RFC 2822)
-                                    date_tuple = email.utils.parsedate_tz(pubdate_str)
-                                    if date_tuple:
-                                        if date_tuple[-1] is not None:
-                                            date_sort = time.mktime(date_tuple[:len(date_tuple)-1]) - date_tuple[-1]
-                                        else:
-                                            date_sort = time.mktime(date_tuple[:len(date_tuple)-1])
-                                    else:
-                                        # If parsing fails, use string comparison (newer dates come first in string sort)
-                                        date_sort = -len(pubdate_str)  # Longer strings (newer dates) sort first
-                            except Exception:
-                                # If parsing fails, use string comparison
-                                date_sort = -len(pubdate_str) if pubdate_str else 0
-                        except Exception:
-                            date_sort = 0
-                    # Return tuple: (-relevance for descending, -date_sort for descending)
-                    return (-relevance, -date_sort)
-                
-                result.sort(key=sort_key)
+                result = self._sort_rejected_matches(result)
                 
                 return json.dumps({"status": "success", "matches": result})
             else:
@@ -3741,6 +3751,8 @@ class WebInterface(object):
                 return json.dumps({"status": "error", "message": "No rejected matches found for this issue"})
             
             matches = mylar.REJECTED_MATCHES[IssueID]
+            # Sort matches to ensure consistent ordering with frontend
+            matches = self._sort_rejected_matches(matches)
             if match_index < 0 or match_index >= len(matches):
                 return json.dumps({"status": "error", "message": "Invalid match index"})
             
@@ -4440,6 +4452,41 @@ class WebInterface(object):
 
         return serve_template(templatename="queue_management.html", title="Queue Management", resultlist=resultlist, status_summary=status_summary) #activelist=activelist, resultlist=resultlist)
     queueManage.exposed = True
+
+    def get_status_summary(self):
+        """Get status summary for queue management page"""
+        myDB = db.DBConnection()
+        
+        # Get status statistics from ddl_info table
+        status_stats = myDB.select("""
+            SELECT status, COUNT(*) as count 
+            FROM ddl_info 
+            GROUP BY status 
+            ORDER BY 
+                CASE status
+                    WHEN 'Downloading' THEN 1
+                    WHEN 'Queued' THEN 2
+                    WHEN 'Completed' THEN 3
+                    WHEN 'Failed' THEN 4
+                    ELSE 5
+                END
+        """)
+        
+        # Format statistics string
+        stats_dict = {row['status']: row['count'] for row in status_stats}
+        stats_parts = []
+        for status in ['Downloading', 'Queued', 'Completed', 'Failed']:
+            if status in stats_dict:
+                stats_parts.append(f"{stats_dict[status]} {status}")
+        # Add any other statuses
+        for status, count in stats_dict.items():
+            if status not in ['Downloading', 'Queued', 'Completed', 'Failed']:
+                stats_parts.append(f"{count} {status}")
+        
+        status_summary = ", ".join(stats_parts) if stats_parts else "0 items"
+        
+        return json.dumps({"status": "success", "status_summary": status_summary})
+    get_status_summary.exposed = True
 
     def queueManageIt(self, iDisplayStart=0, iDisplayLength=100, iSortCol_0=5, sSortDir_0="desc", sSearch="", **kwargs):
         iDisplayStart = int(iDisplayStart)

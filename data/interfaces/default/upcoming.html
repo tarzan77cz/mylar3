@@ -4,6 +4,15 @@
 %>
 
 <%def name="headerIncludes()">
+	<style>
+		#rejected_matches_table tbody tr:hover {
+			background-color: #4a4a4a;
+			cursor: pointer;
+		}
+		#rejected_matches_table tbody tr {
+			transition: background-color 0.2s ease;
+		}
+	</style>
 	<div id="subhead_container">
 		<div id="subhead_menu">
 			<a href="#" id="menu_link_scan" onclick="doAjaxCall('forceSearch',$(this))" data-success="Checking for wanted issues successful" data-error="Error checking wanted issues">Force Check Tier-1</a>
@@ -153,7 +162,11 @@
                     %for f_nodata in future_nodata_upcoming:
                             <tr class="gradeZ">
                                     <td id="delcolumn">
-                                    <a href="upcoming#tabs-2" title="Delete series from auto-Want list" onclick="doAjaxCall('removeautowant?comicname=${f_nodata['ComicName'] |u}&release=${f_nodata['IssueDate']}',$(this),'table')" data-success="${f_nodata['ComicName']} has been removed from the auto-want list"><img src="images/skipped_icon.png" height="25" width="25" class="highqual" /></a>
+                                    <%
+                                        comic_name_escaped = f_nodata['ComicName'].replace("'", "\\'").replace('"', '\\"')
+                                        issue_date_escaped = f_nodata['IssueDate'].replace("'", "\\'").replace('"', '\\"') if f_nodata['IssueDate'] else ''
+                                    %>
+                                    <a href="upcoming#tabs-2" title="Delete series from auto-Want list" onclick="doAjaxCall('removeautowant?comicname=${comic_name_escaped |u}&release=${issue_date_escaped |u}',$(this),'table')" data-success="${comic_name_escaped} has been removed from the auto-want list"><img src="images/skipped_icon.png" height="25" width="25" class="highqual" /></a>
                                     </td>
                                     %if f_nodata['ComicID'] is not None:
                                         <td id="comicname"><a href="comicDetails?ComicID=${f_nodata['ComicID']}">${f_nodata['ComicName']}</a></td>
@@ -687,16 +700,15 @@
                     match_index: matchIndex
                 }, function(data) {
                     if (data.status === 'success') {
-                        // Success - close dialog and show message
+                        // Success - close dialog silently
                         $("#rejected_matches_dialog").dialog("close");
-                        alert('Successfully added to download queue: ' + (data.nzbname || ''));
                         
-                        // Optionally reload the table to reflect changes
+                        // Reload the table to reflect changes
                         if ($.fn.dataTable.isDataTable('#wanted_table')) {
                             $('#wanted_table').DataTable().ajax.reload(null, false);
                         }
                     } else {
-                        // Error
+                        // Error - show alert and allow retry
                         alert('Error: ' + (data.message || 'Failed to add to download queue'));
                         btn.prop('disabled', false).text('Download');
                     }
