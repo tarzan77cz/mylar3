@@ -4327,6 +4327,34 @@ class WebInterface(object):
     def queueManage(self): # **args):
         myDB = db.DBConnection()
 
+        # Get status statistics from ddl_info table
+        status_stats = myDB.select("""
+            SELECT status, COUNT(*) as count 
+            FROM ddl_info 
+            GROUP BY status 
+            ORDER BY 
+                CASE status
+                    WHEN 'Downloading' THEN 1
+                    WHEN 'Queued' THEN 2
+                    WHEN 'Completed' THEN 3
+                    WHEN 'Failed' THEN 4
+                    ELSE 5
+                END
+        """)
+
+        # Format statistics string
+        stats_dict = {row['status']: row['count'] for row in status_stats}
+        stats_parts = []
+        for status in ['Downloading', 'Queued', 'Completed', 'Failed']:
+            if status in stats_dict:
+                stats_parts.append(f"{stats_dict[status]} {status}")
+        # Add any other statuses
+        for status, count in stats_dict.items():
+            if status not in ['Downloading', 'Queued', 'Completed', 'Failed']:
+                stats_parts.append(f"{count} {status}")
+
+        status_summary = ", ".join(stats_parts) if stats_parts else "0 items"
+
         resultlist = 'There are currently no items waiting in the Direct Download (DDL) Queue for processing.'
         s_info = myDB.select("SELECT a.ComicName, a.ComicVersion, a.ComicID, a.ComicYear, b.Issue_Number, b.IssueID, c.series as filename, c.size, c.status, c.id, c.updated_date, c.issues, c.year, c.pack FROM comics as a INNER JOIN issues as b ON a.ComicID = b.ComicID INNER JOIN ddl_info as c ON b.IssueID = c.IssueID") # WHERE c.status != 'Downloading'")
         o_info = myDB.select("Select a.ComicName, b.Issue_Number, a.IssueID, a.ComicID, c.series as filename, c.size, c.status, c.id, c.updated_date, c.issues, c.year, c.pack from oneoffhistory a join snatched b on a.issueid=b.issueid join ddl_info c on b.issueid=c.issueid where b.provider like 'DDL%'")
@@ -4410,7 +4438,7 @@ class WebInterface(object):
 
             #logger.info('o_info: %s' % (resultlist))
 
-        return serve_template(templatename="queue_management.html", title="Queue Management", resultlist=resultlist) #activelist=activelist, resultlist=resultlist)
+        return serve_template(templatename="queue_management.html", title="Queue Management", resultlist=resultlist, status_summary=status_summary) #activelist=activelist, resultlist=resultlist)
     queueManage.exposed = True
 
     def queueManageIt(self, iDisplayStart=0, iDisplayLength=100, iSortCol_0=5, sSortDir_0="desc", sSearch="", **kwargs):

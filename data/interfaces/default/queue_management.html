@@ -53,6 +53,11 @@
             </div>
             </br></br>
             <h2><center><bold>HISTORY</bold></center></h2>
+            %if status_summary:
+            <div style="text-align: center; margin: 10px 0; padding: 5px; background-color: #f0f0f0; border-radius: 3px;">
+                <strong>${status_summary}</strong>
+            </div>
+            %endif
             <div style="margin-bottom: 10px; text-align: left; padding-left: 10px;">
                 <label>
                     <input type="checkbox" id="hide_completed_checkbox" style="margin-right: 5px;">Hide COMPLETED
