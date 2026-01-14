@@ -1,0 +1,7 @@
+[
+    {
+        "key": "ctrl+/ m",
+        "command": "workbench.action.tasks.runTask",
+        "args": "Copy all changed files to Mylar container"
+    }
+]

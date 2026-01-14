@@ -12,7 +12,8 @@
         {
             "label": "Copy changed files to Mylar container",
             "type": "shell",
-            "command": "CONTAINER=$(docker ps --filter 'name=mylar' --format '{{.Names}}' | head -1); if [ -z \"$CONTAINER\" ]; then echo '❌ Mylar container not found!'; exit 1; fi; echo '📦 Copying files to container: $CONTAINER'; echo \"${input:filesToCopy}\" | tr ',' '\\n' | while read file; do file=$(echo \"$file\" | xargs); if [ -n \"$file\" ] && [ -f \"$file\" ]; then echo \"Copying $file...\"; docker cp \"$file\" $CONTAINER:/app/mylar/\"$file\" && echo \"✅ $file copied\" || echo \"⚠️  Failed to copy $file\"; else echo \"⚠️  File not found: $file\"; fi; done; echo '✅ Done!'",
+            "command": "${workspaceFolder}/.vscode/copy_files_to_mylar.sh",
+            "args": ["${input:filesToCopy}"],
             "problemMatcher": [],
             "presentation": {
                 "reveal": "always",
@@ -23,7 +24,7 @@
         {
             "label": "Copy all changed files to Mylar container",
             "type": "shell",
-            "command": "CONTAINER=$(docker ps --filter 'name=mylar' --format '{{.Names}}' | head -n 1); if [ -z \"$CONTAINER\" ]; then echo '❌ Mylar container not found!'; exit 1; fi; echo '📦 Copying all changed files to container: $CONTAINER'; git diff --name-only HEAD | while read file; do if [ -f \"$file\" ]; then echo \"Copying $file...\"; docker cp \"$file\" $CONTAINER:/app/mylar/\"$file\" 2>/dev/null || echo \"⚠️  Failed to copy $file\"; fi; done; echo '✅ Done!'",
+            "command": "${workspaceFolder}/.vscode/copy_all_changed_to_mylar.sh",
             "problemMatcher": [],
             "presentation": {
                 "reveal": "always",
