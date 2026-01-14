@@ -1373,6 +1373,7 @@ def forceRescan(ComicID, archive=None, module=None, recheck=False):
 
                 fnd_iss_except = 'None'
 
+                # Try integer-based matching first
                 if int(fcdigit) == int_iss:
                     logger.fdebug(module + ' [' + str(reiss['IssueID']) + '] Issue match - fcdigit: ' + str(fcdigit) + ' ... int_iss: ' + str(int_iss))
 
@@ -1486,6 +1487,25 @@ def forceRescan(ComicID, archive=None, module=None, recheck=False):
                 if issuedupe == "yes":
                     logger.fdebug(module + ' I should break out here because of a dupe.')
                     break
+
+                # If integer matching failed, try string-based matching for exception matches (like "Alpha", "Omega")
+                if haveissue != "yes" and issuedupe != "yes" and temploc is not None:
+                    # Compare temploc (issue number from filename) with Issue_Number from database
+                    # This handles pure string issue numbers like "Alpha" or "Omega"
+                    if temploc.lower().strip() == reiss['Issue_Number'].lower().strip():
+                        logger.fdebug(module + ' [' + str(reiss['IssueID']) + '] String-based issue match - temploc: ' + temploc + ' ... Issue_Number: ' + reiss['Issue_Number'])
+                        havefiles+=1
+                        haveissue = "yes"
+                        isslocation = tmpfc['ComicFilename']
+                        issSize = str(tmpfc['ComicSize'])
+                        logger.fdebug(module + ' .......filename: ' + isslocation)
+                        logger.fdebug(module + ' .......filesize: ' + str(tmpfc['ComicSize']))
+                        issuedupechk.append({'fcdigit':   helpers.issue_number_parser(temploc).asInt,
+                                             'filename':  tmpfc['ComicFilename'],
+                                             'filesize':  tmpfc['ComicSize'],
+                                             'issueyear': issyear,
+                                             'issueid':   reiss['IssueID']})
+                        break
 
                 if haveissue == "yes" or issuedupe == "yes": break
                 n+=1

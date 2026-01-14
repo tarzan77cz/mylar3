@@ -146,6 +146,21 @@
         }
         % endif
 
+        // Helper function to escape HTML entities
+        function escapeHtml(text) {
+            if (text == null || text === undefined) {
+                return '';
+            }
+            var map = {
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#39;'
+            };
+            return String(text).replace(/[&<>"']/g, function(m) { return map[m]; });
+        }
+
         $.fn.DataTable.ext.pager.numbers_length = 3;
         function initThisPage() {
             % if alphaindex:
@@ -210,9 +225,11 @@
                                } else {
                                  cn = full[1];
                                }
-                               return '<span title="' + full[1] + '"></span><a title="'+ full[1] +'"href="comicDetails?ComicID=' + full[10] + '">' + cn + vol + bt + '</a>';
+                               var escapedTitle = escapeHtml(full[1]);
+                               return '<span title="' + escapedTitle + '"></span><a title="'+ escapedTitle +'"href="comicDetails?ComicID=' + full[10] + '">' + escapeHtml(cn) + escapeHtml(vol) + escapeHtml(bt) + '</a>';
                             } else {
-                               return '<span title="' + full[1] + '"></span><a title="'+ full[1] +'"href="comicDetails?ComicID=' + full[10] + '">' + full[1] + '</a>';
+                               var escapedTitle = escapeHtml(full[1]);
+                               return '<span title="' + escapedTitle + '"></span><a title="'+ escapedTitle +'"href="comicDetails?ComicID=' + full[10] + '">' + escapeHtml(full[1]) + '</a>';
                             }
                        }
                     },

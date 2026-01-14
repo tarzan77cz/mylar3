@@ -554,8 +554,17 @@ class FileChecker(object):
                                                     'mod_position': self.char_file_position(modfilename, sf, lastmod_position),
                                                     'validcountchk': validcountchk})
                     else:
+                        # Pure string exception match (like "Alpha" or "Omega") without numeric part
+                        # Add it to possible_issuenumbers as a standalone issue number
                         test_position = modfilename[self.char_file_position(modfilename, sf,lastmod_position)-1]
                         if test_position == '#':
+                            possible_issuenumbers.append({'number':       sf,
+                                                        'position':     split_file.index(sf),
+                                                        'mod_position': self.char_file_position(modfilename, sf, lastmod_position),
+                                                        'validcountchk': validcountchk})
+                        else:
+                            # Even if not preceded by '#', if it's a pure string exception match, add it
+                            # This handles cases like "God Is Dead The Book of Acts Alpha (2014).cbz"
                             possible_issuenumbers.append({'number':       sf,
                                                         'position':     split_file.index(sf),
                                                         'mod_position': self.char_file_position(modfilename, sf, lastmod_position),
