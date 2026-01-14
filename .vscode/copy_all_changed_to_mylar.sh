@@ -37,13 +37,13 @@ echo "$CHANGED_FILES" | while read -r file; do
     
     if [ -f "$file" ]; then
         echo "Copying $file..."
-        if docker cp "$file" "$CONTAINER:/app/mylar/$file" 2>/dev/null; then
+        if docker cp "$file" "$CONTAINER:/app/mylar/$file"; then
             echo "✅ $file copied"
         else
             echo "⚠️  Failed to copy $file"
         fi
     else
-        echo "⏭️  Skipping $file (not found)"
+        echo "⚠️  File not found: $file"
     fi
 done
 
