@@ -465,7 +465,14 @@
                         "targets": [ 4 ],
                         "visible": true,
                         "render":function (data,type,full) {
-                            return full[6];
+                            var status = full[6];
+                            var has_ddl_info = full[13] !== undefined ? full[13] : true; // Default to true if not set (for backwards compatibility)
+                            
+                            // If status is Snatched and no ddl_info exists, add warning icon
+                            if (status === 'Snatched' && !has_ddl_info) {
+                                return status + ' <img src="images/cross.png" height="16" width="16" style="margin-left: 5px; vertical-align: middle;" title="Download failed - no download information available. Please mark as Wanted and search again." />';
+                            }
+                            return status;
                         }
                     },
                     {
@@ -473,17 +480,24 @@
                         "targets": [ 5 ],
                         "visible": true,
                         "render":function (data,type,full){
-                            // Add magnifying glass icon for Wanted issues
+                            // Add magnifying glass icon for Wanted issues or Snatched issues without ddl_info
                             var tierText = full[4];
                             var issueId = full[3];
                             var rejectedCount = full[12] || 0; // Get rejected matches count (default to 0 if undefined)
-                            if (full[6] === "Wanted" && issueId) {
+                            var has_ddl_info = full[13] !== undefined ? full[13] : true; // Default to true if not set (for backwards compatibility)
+                            var status = full[6];
+                            
+                            // Show rejected matches link for Wanted issues, or Snatched issues without ddl_info
+                            if (issueId && (status === "Wanted" || (status === "Snatched" && !has_ddl_info))) {
                                 var iconHtml = '<img src="images/search.png" height="16" width="16" style="margin-left: 5px; vertical-align: middle;" />';
                                 if (rejectedCount > 0) {
                                     // Add count badge
                                     iconHtml += '<span style="background-color: #ff6b6b; color: white; border-radius: 50%; padding: 1px 5px; font-size: 10px; font-weight: bold; margin-left: 2px; vertical-align: super;">' + rejectedCount + '</span>';
                                 }
                                 var titleText = rejectedCount > 0 ? 'View rejected search matches (' + rejectedCount + ' available)' : 'View rejected search matches';
+                                if (status === "Snatched" && !has_ddl_info) {
+                                    titleText = 'Download failed - try alternative download from rejected matches' + (rejectedCount > 0 ? ' (' + rejectedCount + ' available)' : '');
+                                }
                                 tierText += ' <a href="#" class="rejected-matches-link" data-issueid="' + $('<div/>').text(issueId).html() + '" title="' + titleText + '">' + iconHtml + '</a>';
                             }
                             return tierText;
@@ -660,6 +674,12 @@
                         tbody.empty();
                         
                         $.each(data.matches, function(index, match) {
+                            // Use unique identifier (nzbid + link) instead of index
+                            var matchNzbId = match.nzbid || '';
+                            var matchLink = match.link || '';
+                            var matchNzbIdEscaped = $('<div/>').text(matchNzbId).html();
+                            var matchLinkEscaped = $('<div/>').text(matchLink).html();
+                            
                             var row = '<tr>' +
                                 '<td>' + $('<div/>').text(match.title || 'Unknown').html() + '</td>' +
                                 '<td>' + $('<div/>').text(match.provider || 'Unknown').html() + '</td>' +
@@ -667,7 +687,7 @@
                                 '<td>' + $('<div/>').text(match.kind || 'Unknown').html() + '</td>' +
                                 '<td>' + $('<div/>').text(match.pubdate || '').html() + '</td>' +
                                 '<td>' + $('<div/>').text(match.reason || 'Unknown reason').html() + '</td>' +
-                                '<td><button class="download-rejected-btn" data-issueid="' + $('<div/>').text(issueId).html() + '" data-match-index="' + index + '">Download</button></td>' +
+                                '<td><button class="download-rejected-btn" data-issueid="' + $('<div/>').text(issueId).html() + '" data-nzbid="' + matchNzbIdEscaped + '" data-link="' + matchLinkEscaped + '">Download</button></td>' +
                                 '</tr>';
                             tbody.append(row);
                         });
@@ -689,7 +709,8 @@
             $(document).on('click', '.download-rejected-btn', function(e) {
                 e.preventDefault();
                 var issueId = $(this).data('issueid');
-                var matchIndex = $(this).data('match-index');
+                var matchNzbId = $(this).data('nzbid');
+                var matchLink = $(this).data('link');
                 var btn = $(this);
                 
                 // Disable button and show loading
@@ -697,7 +718,8 @@
                 
                 $.getJSON('select_rejected_match', {
                     IssueID: issueId,
-                    match_index: matchIndex
+                    nzbid: matchNzbId,
+                    link: matchLink
                 }, function(data) {
                     if (data.status === 'success') {
                         // Success - close dialog silently

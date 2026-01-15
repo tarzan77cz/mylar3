@@ -280,8 +280,19 @@
                            "sortable": true,
                            "targets": [ 2 ],
                            "visible": true,
+                           "width": "20%",
                            "render":function (data,type,full) {
-                                return full[8];
+                                var linkType = full[8] || '';
+                                var articleTitle = full[9] || ''; // article_title from ddl_info
+                                
+                                var result = linkType;
+                                if (articleTitle) {
+                                    // Escape HTML entities in the article title for tooltip
+                                    var escapedTitle = $('<div/>').text(articleTitle).html();
+                                    // Use Unicode info icon (ⓘ) or fallback to text
+                                    result += ' <span style="color: #4a9eff; font-weight: bold; cursor: help; margin-left: 5px;" title="' + escapedTitle + '">ⓘ</span>';
+                                }
+                                return result;
                            }
                         },
                         {
@@ -312,6 +323,7 @@
                            "sortable": false,
                            "targets": [ 6 ],
                            "visible": true,
+                           "width": "10%",
                            "render":function (data,type,full) {
                                     val = full[3]
                                     var restartline = "('ddl_requeue?mode=restart&id="+String(full[5])+"',$(this));"

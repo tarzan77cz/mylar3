@@ -3566,11 +3566,21 @@ class WebInterface(object):
 
                 try:
                     rejected_count = len(mylar.REJECTED_MATCHES.get(row['IssueID'], []))
-                    filtered.append([row['ComicName'], row['Issue_Number'], row['ReleaseDate'], row['IssueID'], tier, row['ComicID'], row['Status'], storyarc, storyarcid, issuearcid, watcharc, row['Int_IssueNumber'], rejected_count])
+                    # Check if Snatched issue has ddl_info entry
+                    has_ddl_info = False
+                    if row['Status'] == 'Snatched':
+                        ddl_check = myDB.selectone("SELECT id FROM ddl_info WHERE issueid=?", [row['IssueID']]).fetchone()
+                        has_ddl_info = ddl_check is not None
+                    filtered.append([row['ComicName'], row['Issue_Number'], row['ReleaseDate'], row['IssueID'], tier, row['ComicID'], row['Status'], storyarc, storyarcid, issuearcid, watcharc, row['Int_IssueNumber'], rejected_count, has_ddl_info])
                 except Exception as e:
                     #logger.warn('danger Wil Robinson: %s' % (e,))
                     rejected_count = len(mylar.REJECTED_MATCHES.get(row['IssueID'], []))
-                    filtered.append([row['ComicName'], row['Issue_Number'], row['ReleaseDate'], row['IssueID'], tier, row['ComicID'], row['Status'], None, None, None, watcharc, row['Int_IssueNumber'], rejected_count])
+                    # Check if Snatched issue has ddl_info entry
+                    has_ddl_info = False
+                    if row['Status'] == 'Snatched':
+                        ddl_check = myDB.selectone("SELECT id FROM ddl_info WHERE issueid=?", [row['IssueID']]).fetchone()
+                        has_ddl_info = ddl_check is not None
+                    filtered.append([row['ComicName'], row['Issue_Number'], row['ReleaseDate'], row['IssueID'], tier, row['ComicID'], row['Status'], None, None, None, watcharc, row['Int_IssueNumber'], rejected_count, has_ddl_info])
 
         if mylar.CONFIG.UPCOMING_STORYARCS is True:
             for key, ark in arcs.items():
@@ -3620,7 +3630,12 @@ class WebInterface(object):
 
                 if matched is True:
                     rejected_count = len(mylar.REJECTED_MATCHES.get(key, []))
-                    filtered.append([ark['comicname'], ark['issuenumber'], ark['releasedate'], key, tier, ark['comicid'], ark['status'], ark['storyarc'], ark['storyarcid'], ark['issuearcid'], "oneoff", ark['int_issuenumber'], rejected_count])
+                    # Check if Snatched issue has ddl_info entry
+                    has_ddl_info = False
+                    if ark['status'] == 'Snatched':
+                        ddl_check = myDB.selectone("SELECT id FROM ddl_info WHERE issueid=?", [key]).fetchone()
+                        has_ddl_info = ddl_check is not None
+                    filtered.append([ark['comicname'], ark['issuenumber'], ark['releasedate'], key, tier, ark['comicid'], ark['status'], ark['storyarc'], ark['storyarcid'], ark['issuearcid'], "oneoff", ark['int_issuenumber'], rejected_count, has_ddl_info])
 
         #logger.fdebug('[%s] one-off arcs: %s' % (len(arcs), arcs,))
 
@@ -3740,23 +3755,40 @@ class WebInterface(object):
             return json.dumps({"status": "error", "message": str(e)})
     get_rejected_matches.exposed = True
 
-    def select_rejected_match(self, IssueID, match_index):
+    def select_rejected_match(self, IssueID, match_index=None, nzbid=None, link=None):
         """
         Select a rejected match and add it to download queue.
-        match_index: index in the rejected matches list for this IssueID
+        Can use either match_index (for backwards compatibility) or nzbid+link (preferred, unique identifier).
         """
         try:
-            match_index = int(match_index)
             if IssueID not in mylar.REJECTED_MATCHES:
                 return json.dumps({"status": "error", "message": "No rejected matches found for this issue"})
             
             matches = mylar.REJECTED_MATCHES[IssueID]
-            # Sort matches to ensure consistent ordering with frontend
-            matches = self._sort_rejected_matches(matches)
-            if match_index < 0 or match_index >= len(matches):
-                return json.dumps({"status": "error", "message": "Invalid match index"})
+            match = None
+            match_index_to_remove = None
             
-            match = matches[match_index]
+            # Prefer unique identifier (nzbid + link) over index
+            if nzbid is not None and link is not None:
+                # Find match by unique identifier and also get its index for removal
+                for idx, m in enumerate(matches):
+                    if m.get('nzbid') == nzbid and m.get('link') == link:
+                        match = m
+                        match_index_to_remove = idx
+                        break
+                if not match:
+                    return json.dumps({"status": "error", "message": "Rejected match not found with given nzbid and link"})
+            elif match_index is not None:
+                # Fallback to index-based lookup (for backwards compatibility)
+                match_index = int(match_index)
+                # Sort matches to ensure consistent ordering with frontend
+                matches = self._sort_rejected_matches(matches)
+                if match_index < 0 or match_index >= len(matches):
+                    return json.dumps({"status": "error", "message": "Invalid match index"})
+                match = matches[match_index]
+                match_index_to_remove = match_index
+            else:
+                return json.dumps({"status": "error", "message": "Either match_index or nzbid+link must be provided"})
             
             # Get issue info from database
             myDB = db.DBConnection()
@@ -3898,7 +3930,18 @@ class WebInterface(object):
                         logger.error('[SELECT-REJECTED-MATCH] Error updating status to Snatched: %s' % e)
                     
                     # Remove from rejected matches
-                    matches.pop(match_index)
+                    if match_index_to_remove is not None:
+                        matches.pop(match_index_to_remove)
+                    else:
+                        # Fallback: remove by value if index not available
+                        try:
+                            matches.remove(match)
+                        except ValueError:
+                            # Match not in list, try to find and remove by nzbid+link
+                            for idx, m in enumerate(matches):
+                                if m.get('nzbid') == match.get('nzbid') and m.get('link') == match.get('link'):
+                                    matches.pop(idx)
+                                    break
                     if len(matches) == 0:
                         del mylar.REJECTED_MATCHES[IssueID]
                     
@@ -4034,7 +4077,19 @@ class WebInterface(object):
                     except Exception as e:
                         logger.error('[SELECT-REJECTED-MATCH] Error updating status to Snatched: %s' % e)
                     
-                    matches.pop(match_index)
+                    # Remove from rejected matches
+                    if match_index_to_remove is not None:
+                        matches.pop(match_index_to_remove)
+                    else:
+                        # Fallback: remove by value if index not available
+                        try:
+                            matches.remove(match)
+                        except ValueError:
+                            # Match not in list, try to find and remove by nzbid+link
+                            for idx, m in enumerate(matches):
+                                if m.get('nzbid') == match.get('nzbid') and m.get('link') == match.get('link'):
+                                    matches.pop(idx)
+                                    break
                     if len(matches) == 0:
                         del mylar.REJECTED_MATCHES[IssueID]
                     
@@ -4532,10 +4587,28 @@ class WebInterface(object):
                         else:
                             series = '%s (%s)' % (si['ComicName'], year)
 
+                # Build article title from series, issues, and year (e.g., "Ghost Rider #9 (2022)")
+                # Note: c.series is aliased as 'filename' in SQL query
+                article_title = ''
+                try:
+                    ddl_series = si['filename'] if si['filename'] else ''  # c.series is aliased as filename
+                    ddl_issues = si['issues'] if si['issues'] else ''
+                    ddl_year = si['year'] if si['year'] else ''
+                    
+                    if ddl_series:
+                        article_title = ddl_series
+                        if ddl_issues:
+                            article_title += ' #' + str(ddl_issues)
+                        if ddl_year:
+                            article_title += ' (' + str(ddl_year) + ')'
+                except (KeyError, TypeError):
+                    pass
+                
                 resultlist.append({'series':       series, #i['ComicName'],
                                    'issue':        issue,
                                    'queueid':      si['id'],
                                    'linktype':     si['link_type'],
+                                   'article_title': article_title,
                                    'volume':       si['ComicVersion'],
                                    'year':         year,
                                    'size':         si['size'].strip(),
@@ -4584,11 +4657,29 @@ class WebInterface(object):
                     else:
                         series = '%s (%s)' % (oi['ComicName'], year)
 
+                # Build article title from series, issues, and year (e.g., "Ghost Rider #9 (2022)")
+                # Note: c.series is aliased as 'filename' in SQL query
+                article_title = ''
+                try:
+                    ddl_series = oi['filename'] if oi['filename'] else ''  # c.series is aliased as filename
+                    ddl_issues = oi['issues'] if oi['issues'] else ''
+                    ddl_year = oi['year'] if oi['year'] else ''
+                    
+                    if ddl_series:
+                        article_title = ddl_series
+                        if ddl_issues:
+                            article_title += ' #' + str(ddl_issues)
+                        if ddl_year:
+                            article_title += ' (' + str(ddl_year) + ')'
+                except (KeyError, TypeError):
+                    pass
+                
                 resultlist.append({'series':       series,
                                    'issue':        issue,
                                    'queueid':      oi['id'],
                                    'volume':       None,
                                    'linktype':     oi['link_type'],
+                                   'article_title': article_title,
                                    'year':         year,
                                    'size':         oi['size'].strip(),
                                    'comicid':      oi['ComicID'],
@@ -4619,7 +4710,7 @@ class WebInterface(object):
             rows = filtered[iDisplayStart:(iDisplayStart + iDisplayLength)]
         else:
             rows = filtered
-        rows = [[row['series'], row['size'], row['progress'], row['status'], row['updated_date'], row['queueid'], row['issueid'], row['comicid'], row['linktype']] for row in rows]
+        rows = [[row['series'], row['size'], row['progress'], row['status'], row['updated_date'], row['queueid'], row['issueid'], row['comicid'], row['linktype'], row.get('article_title', '')] for row in rows]
         #rows = [{'comicid': row['comicid'], 'series': row['series'], 'size': row['size'], 'progress': row['progress'], 'status': row['status'], 'updated_date': row['updated_date']} for row in rows]
         #logger.info('rows: %s' % rows)
         return json.dumps({

@@ -2945,7 +2945,7 @@ def ddl_watchdog():
                                         item_id = downloading_item['id']
                                         if item_id in mylar.DDL_QUEUED:
                                             mylar.DDL_QUEUED.remove(item_id)
-                                    except (KeyError, TypeError):
+                                    except (ValueError, KeyError, TypeError):
                                         pass
                                     
                                     items_fixed += 1
@@ -3077,7 +3077,7 @@ def ddl_watchdog():
                                         item_id = downloading_item['id']
                                         if item_id in mylar.DDL_QUEUED:
                                             mylar.DDL_QUEUED.remove(item_id)
-                                    except (KeyError, TypeError):
+                                    except (ValueError, KeyError, TypeError):
                                         pass
                                     
                                     items_fixed += 1
@@ -3150,8 +3150,11 @@ def ddl_watchdog():
                                             myDB.upsert('ddl_info', val, ctrlval)
                                             
                                             # Remove from DDL_QUEUED if present
-                                            if downloading_item['id'] in mylar.DDL_QUEUED:
-                                                mylar.DDL_QUEUED.remove(downloading_item['id'])
+                                            try:
+                                                if downloading_item['id'] in mylar.DDL_QUEUED:
+                                                    mylar.DDL_QUEUED.remove(downloading_item['id'])
+                                            except (ValueError, KeyError):
+                                                pass
                                             
                                             try:
                                                 series_name = downloading_item['series']
@@ -3189,8 +3192,11 @@ def ddl_watchdog():
                                                'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}
                                         myDB.upsert('ddl_info', val, ctrlval)
                                         
-                                        if downloading_item['id'] in mylar.DDL_QUEUED:
-                                            mylar.DDL_QUEUED.remove(downloading_item['id'])
+                                        try:
+                                            if downloading_item['id'] in mylar.DDL_QUEUED:
+                                                mylar.DDL_QUEUED.remove(downloading_item['id'])
+                                        except (ValueError, KeyError):
+                                            pass
                                         
                                         try:
                                             series_name = downloading_item['series']
@@ -3307,8 +3313,8 @@ def ddl_downloader(queue):
         loop_count += 1
         current_time = time.time()
         
-        # Log status every 30 seconds for debugging
-        if current_time - last_status_log >= 30:
+        # Log status every 60 seconds (1 minute) for debugging
+        if current_time - last_status_log >= 60:
             logger.info('[DDL-DOWNLOADER] Status - Loop: %s, DDL_LOCK: %s, Queue size: %s, DDL_QUEUED count: %s' % 
                        (loop_count, mylar.DDL_LOCK, queue.qsize(), len(mylar.DDL_QUEUED)))
             last_status_log = current_time
@@ -3423,7 +3429,12 @@ def ddl_downloader(queue):
                     logger.error('process error: %s [%s]' %(e, ddzstat))
 
                 #logger.fdebug('mylar.ddl_queued: %s' % mylar.DDL_QUEUED)
-                mylar.DDL_QUEUED.remove(item['id'])
+                # Remove from DDL_QUEUED if present (may have been removed by watchdog)
+                try:
+                    if item['id'] in mylar.DDL_QUEUED:
+                        mylar.DDL_QUEUED.remove(item['id'])
+                except (ValueError, KeyError):
+                    pass
                 try:
                     link_type_failure.pop(item['id'])
                 except KeyError:
@@ -3470,7 +3481,10 @@ def ddl_downloader(queue):
                         myDB.upsert('ddl_info', nval, ctrlval)
                         #undo all snatched items, to previous status via item['id'] - this will be set to Skipped currently regardless of previous status
                         reverse_the_pack_snatch(item['id'], item['comicid'])
-                        link_type_failure.pop(item['id'])
+                        try:
+                            link_type_failure.pop(item['id'])
+                        except KeyError:
+                            pass
                         ddl_cleanup(item['id'])
                 else:
                     logger.info('[Status: %s] Failed to download item from %s : %s ' % (ddzstat['success'], item['site'], ddzstat))
@@ -3491,7 +3505,6 @@ def ddl_downloader(queue):
                         time.sleep(2)
                         continue
                     
-                    logger.debug('[DDL-DOWNLOADER] Queue empty, checking DB for queued items...')
                     try:
                         queued_items = myDB.select("SELECT * FROM ddl_info WHERE status = 'Queued' ORDER BY updated_date ASC")
                         if queued_items:
@@ -3557,7 +3570,6 @@ def ddl_downloader(queue):
                                 time.sleep(5)
                         else:
                             # No queued items in DB, sleep a bit before checking again
-                            logger.debug('[DDL-DOWNLOADER] Queue empty, no queued items in DB. Sleeping...')
                             time.sleep(5)
                     except Exception as e:
                         logger.error('[DDL-DOWNLOADER] Error checking DB for queued items: %s' % e)
