@@ -17,6 +17,11 @@
 from lib.rarfile import rarfile
 import requests
 import zipfile
+try:
+    from curl_cffi import requests as curl_requests
+    CURL_CFFI_AVAILABLE = True
+except ImportError:
+    CURL_CFFI_AVAILABLE = False
 from io import BytesIO
 from pathlib import Path
 
@@ -191,7 +196,12 @@ def extract_image(location, single=False, imquality=None, comicname=None):
 
 def retrieve_image(url):
     try:
-        r = requests.get(url, params=None, verify=mylar.CONFIG.CV_VERIFY, headers=mylar.CV_HEADERS)
+        if CURL_CFFI_AVAILABLE:
+            # Use curl_cffi for CloudFlare bypass (TLS fingerprinting)
+            r = curl_requests.get(url, headers=mylar.CV_HEADERS, impersonate="chrome110", verify=mylar.CONFIG.CV_VERIFY, timeout=30)
+        else:
+            # Fallback to regular requests if curl_cffi is not available
+            r = requests.get(url, params=None, verify=mylar.CONFIG.CV_VERIFY, headers=mylar.CV_HEADERS)
     except Exception as e:
         logger.warn('[ERROR: %s] Unable to download image from CV URL link: %s' % (e, url))
         ComicImage = None

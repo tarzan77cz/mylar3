@@ -21,6 +21,11 @@ from datetime import timedelta, date
 import subprocess
 import requests
 import cfscrape
+try:
+    from curl_cffi import requests as curl_requests
+    CURL_CFFI_AVAILABLE = True
+except ImportError:
+    CURL_CFFI_AVAILABLE = False
 import shlex
 import queue
 import json
@@ -4482,28 +4487,47 @@ def getImage(comicid, url, issueid=None, thumbnail_path=None, apicall=False, ove
     if apicall is False:
         logger.info('Attempting to retrieve the comic image for series')
     
-    # Use cfscrape for CloudFlare bypass
+    # Use curl_cffi for CloudFlare bypass (TLS fingerprinting)
     try:
-        scraper = cfscrape.create_scraper()
-        # Update headers with ComicVine-specific ones
-        scraper.headers.update({
-            'User-Agent': mylar.CV_HEADERS.get('User-Agent', mylar.CONFIG.CV_USER_AGENT),
-            'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Referer': 'https://comicvine.gamespot.com/',
-            'Origin': 'https://comicvine.gamespot.com',
-            'Sec-Fetch-Dest': 'image',
-            'Sec-Fetch-Mode': 'no-cors',
-            'Sec-Fetch-Site': 'same-site',
-            'DNT': '1',
-        })
-        r = scraper.get(url, stream=True, verify=mylar.CONFIG.CV_VERIFY, timeout=30)
+        if CURL_CFFI_AVAILABLE:
+            # Prepare headers with ComicVine-specific ones
+            headers = {
+                'User-Agent': mylar.CV_HEADERS.get('User-Agent', mylar.CONFIG.CV_USER_AGENT),
+                'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Referer': 'https://comicvine.gamespot.com/',
+                'Origin': 'https://comicvine.gamespot.com',
+                'Sec-Fetch-Dest': 'image',
+                'Sec-Fetch-Mode': 'no-cors',
+                'Sec-Fetch-Site': 'same-site',
+                'DNT': '1',
+            }
+            r = curl_requests.get(url, headers=headers, impersonate="chrome110", verify=mylar.CONFIG.CV_VERIFY, stream=True, timeout=30)
+        else:
+            raise ImportError("curl_cffi not available")
     except ImportError:
-        # Fallback to regular requests if cfscrape is not available
-        logger.warn('[getImage] cfscrape not available, falling back to requests')
-        session = requests.Session()
-        session.headers.update(mylar.CV_HEADERS)
-        r = session.get(url, params=None, stream=True, verify=mylar.CONFIG.CV_VERIFY, timeout=30)
+        # Fallback to cfscrape if curl_cffi is not available
+        try:
+            scraper = cfscrape.create_scraper()
+            # Update headers with ComicVine-specific ones
+            scraper.headers.update({
+                'User-Agent': mylar.CV_HEADERS.get('User-Agent', mylar.CONFIG.CV_USER_AGENT),
+                'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Referer': 'https://comicvine.gamespot.com/',
+                'Origin': 'https://comicvine.gamespot.com',
+                'Sec-Fetch-Dest': 'image',
+                'Sec-Fetch-Mode': 'no-cors',
+                'Sec-Fetch-Site': 'same-site',
+                'DNT': '1',
+            })
+            r = scraper.get(url, stream=True, verify=mylar.CONFIG.CV_VERIFY, timeout=30)
+        except ImportError:
+            # Fallback to regular requests if cfscrape is also not available
+            logger.warn('[getImage] curl_cffi and cfscrape not available, falling back to requests')
+            session = requests.Session()
+            session.headers.update(mylar.CV_HEADERS)
+            r = session.get(url, params=None, stream=True, verify=mylar.CONFIG.CV_VERIFY, timeout=30)
     except Exception as e:
         if apicall is False:
             logger.warn('[ERROR: %s] Unable to download image from CV URL link: %s' % (e, url))
