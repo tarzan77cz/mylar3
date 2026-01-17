@@ -51,3 +51,6 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+
+# Cursor rules
+.cursorrules
