@@ -8,6 +8,7 @@
                 <div id="subhead_menu">
                       <a id="menu_link_refresh" href="#" title="Restart stalled queue" onclick="doAjaxCall('ddl_requeue?mode=restart_queue',$(this),'table')" data-success="Restarted Queue">Restart Queue</a>
                       <a id="menu_link_refresh" href="#" title="Clear the queue of all Qeueued entries" onclick="ajaxcallit('clear_queue')" data-success="Qeueue successfully cleared">Clear Queue</a>
+                      <a id="menu_link_refresh" href="#" title="Clear all Completed entries from history" onclick="ajaxcallit('clear_completed')" data-success="Completed items cleared">Clear Completed</a>
                 </div>
         </div>
 </%def>
@@ -52,6 +53,14 @@
             </div>
             </br></br>
             <h2><center><bold>HISTORY</bold></center></h2>
+            <div id="status_summary_div" style="text-align: center; margin-top: 5px; margin-bottom: 10px; padding: 5px; color: #AAAAAA; display: ${'block' if status_summary else 'none'};">
+                <strong>${status_summary if status_summary else ''}</strong>
+            </div>
+            <div style="margin-bottom: 10px; text-align: left; padding-left: 10px;">
+                <label>
+                    <input type="checkbox" id="hide_completed_checkbox" style="margin-right: 5px;">Hide COMPLETED
+                </label>
+            </div>
             %if type(resultlist) == str:
                 <center>${resultlist}</center></br>
             %else:
@@ -85,6 +94,24 @@
         <script src="js/libs/full_numbers_no_ellipses.js"></script>
         <script>
         var ImportTimer = setInterval(activecheck, 5000);
+        var previousStatus = null;
+        var previousAid = null;
+        
+        function updateStatusSummary() {
+            $.getJSON('get_status_summary', function(data) {
+                if (data.status === 'success') {
+                    if (data.status_summary) {
+                        $('#status_summary_div strong').text(data.status_summary);
+                        $('#status_summary_div').show();
+                    } else {
+                        $('#status_summary_div').hide();
+                    }
+                }
+            }).fail(function() {
+                // Silently fail - status summary update is not critical
+            });
+        }
+        
         function activecheck() {
                 $.get('check_ActiveDDL',
                     function(data){
@@ -96,6 +123,18 @@
                         var percent = obj['percent'];
                         var status = obj['status'];
                         var aid = obj['a_id'];
+                        
+                        // Check if download status changed (new download started or previous completed)
+                        var statusChanged = (previousStatus !== status) || (previousAid !== aid);
+                        if (statusChanged && previousStatus !== null) {
+                            // Status changed - reload the history table
+                            if ($.fn.dataTable.isDataTable('#queue_table')) {
+                                $('#queue_table').DataTable().ajax.reload(null, false);
+                                updateStatusSummary();
+                            }
+                        }
+                        previousStatus = status;
+                        previousAid = aid;
                         if (status == 'Downloading') {
                             acm = document.getElementById("active_message");
                             acm.style.display = "none";
@@ -153,6 +192,7 @@
                         if (percent == '100%') {
                             clearInterval(ImportTimer);
                             $('#queue_table').DataTable().ajax.reload(null, false);
+                            updateStatusSummary();
                             ImportTimer = setInterval(activecheck, 5000);
                         }
                 });
@@ -178,19 +218,29 @@
                        $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+objd['message']+"</div>");
                    } else if (qmode == 'clear_queue') {
                        $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+objd['message']+"</div>");
+                   } else if (qmode == 'clear_completed') {
+                       $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+objd['message']+"</div>");
                    }
 
             });
             $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
             $('#queue_table').DataTable().ajax.reload(null, false);
+            updateStatusSummary();
         };
         function initThisPage() {
             initActions();
             $("#btn_container #btn_menu #arestartddl, #qrestartddl").button({ icons: { primary: "ui-icon-refresh" }  });
             $("#btn_container #btn_menu #aresumeddl, #qresumeddl").button({ icons: { primary: "ui-icon-pencil" }  });
             $("#btn_container #btn_menu #aabortddl, #qabortddl").button({ icons: { primary: "ui-icon-pencil" }  });
+            
+            // Load checkbox state from localStorage
+            var hideCompleted = localStorage.getItem('queue_management_hide_completed');
+            if (hideCompleted === 'true') {
+                $('#hide_completed_checkbox').prop('checked', true);
+            }
             if ( $.fn.dataTable.isDataTable( '#queue_table' ) ) {
                 $('#queue_table').DataTable().ajax.reload(null, false);
+                updateStatusSummary();
             } else {
                 $('#queue_table').DataTable( {
                     "preDrawCallback": function (settings){
@@ -230,8 +280,19 @@
                            "sortable": true,
                            "targets": [ 2 ],
                            "visible": true,
+                           "width": "20%",
                            "render":function (data,type,full) {
-                                return full[8];
+                                var linkType = full[8] || '';
+                                var articleTitle = full[9] || ''; // article_title from ddl_info
+                                
+                                var result = linkType;
+                                if (articleTitle) {
+                                    // Escape HTML entities in the article title for tooltip
+                                    var escapedTitle = $('<div/>').text(articleTitle).html();
+                                    // Use Unicode info icon (ⓘ) or fallback to text
+                                    result += ' <span style="color: #4a9eff; font-weight: bold; cursor: help; margin-left: 5px;" title="' + escapedTitle + '">ⓘ</span>';
+                                }
+                                return result;
                            }
                         },
                         {
@@ -262,6 +323,7 @@
                            "sortable": false,
                            "targets": [ 6 ],
                            "visible": true,
+                           "width": "10%",
                            "render":function (data,type,full) {
                                     val = full[3]
                                     var restartline = "('ddl_requeue?mode=restart&id="+String(full[5])+"',$(this));"
@@ -289,6 +351,14 @@
                          "infoFiltered":"(filtered from _MAX_ total items)"
                      },
                     "rowCallback": function (nRow, aData, iDisplayIndex, iDisplayIndexFull) {
+                         // Hide rows with "Completed" status if checkbox is checked
+                         var hideCompleted = $('#hide_completed_checkbox').is(':checked');
+                         if (hideCompleted && aData[3] === "Completed") {
+                             $(nRow).hide();
+                         } else {
+                             $(nRow).show();
+                         }
+                         
                          if (aData[3] === "Completed") {
                             $('td', nRow).closest('tr').addClass("gradeA");
                          } else if (aData[3] === "Queued") {
@@ -305,6 +375,7 @@
                          return nRow;
                      },
                      "drawCallback": function (o) {
+                        updateStatusSummary();
                          // Jump to top of page
                          $('html,body').scrollTop(0);
                          $('#queue_table div.dataTables_scrollBody').scrollTop(pageScrollPos);
@@ -324,6 +395,15 @@
         };
         $(document).ready(function() {       
             initThisPage();
+            
+            // Handle checkbox change
+            $('#hide_completed_checkbox').change(function() {
+                var isChecked = $(this).is(':checked');
+                localStorage.setItem('queue_management_hide_completed', isChecked);
+                if ($.fn.dataTable.isDataTable('#queue_table')) {
+                    $('#queue_table').DataTable().draw();
+                }
+            });
         });
         </script>
 </%def>

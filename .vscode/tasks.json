@@ -1,0 +1,36 @@
+{
+    "version": "2.0.0",
+    "inputs": [
+        {
+            "id": "filesToCopy",
+            "description": "Files to copy (comma-separated, relative paths from project root)",
+            "default": "data/interfaces/default/queue_management.html,mylar/webserve.py",
+            "type": "promptString"
+        }
+    ],
+    "tasks": [
+        {
+            "label": "Copy changed files to Mylar container",
+            "type": "shell",
+            "command": "${workspaceFolder}/.vscode/copy_files_to_mylar.sh",
+            "args": ["${input:filesToCopy}"],
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "new",
+                "focus": false
+            }
+        },
+        {
+            "label": "Copy all changed files to Mylar container",
+            "type": "shell",
+            "command": "${workspaceFolder}/.vscode/copy_all_changed_to_mylar.sh",
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "new",
+                "focus": false
+            }
+        }
+    ]
+}

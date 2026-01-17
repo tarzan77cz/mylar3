@@ -50,6 +50,8 @@ from operator import itemgetter
 
 import xml.etree.ElementTree as ET
 
+from string import ascii_lowercase
+
 import mylar
 from mylar import (
     carepackage,
@@ -227,7 +229,7 @@ class WebInterface(object):
 
             if os.path.exists(test_path):
                 try:
-                    shutil.remove(test_path)
+                    shutil.rmtree(test_path)
                 except Exception:
                     return
 
@@ -269,6 +271,21 @@ class WebInterface(object):
                 #    logger.info('[COMIC-LOCATION-CHECK] Copying from cache to series directory successful (for metadata writing)')
                 #    c_status = 'success'
 
+        # Perform checks for a valid unrar (more important now this is a pre-requisite for CRC checks)
+        
+        if mylar.REQS['rar']['rar_failure']:
+            if 'windows' in mylar.OS_DETECT.lower():
+                rartool = 'unrar/WinRAR'
+            else:
+                rartool = 'unrar'
+
+            rar_msg = f'<center>Could not find a valid unrar executable in the PATH for the user running Mylar.  You must install {rartool}.</center>'
+            if c_status == 'failure':
+                c_msg += '<br />' + rar_msg
+            else:
+                c_msg = rar_msg
+                c_status = 'failure'
+
         #only display a popup on error
         mylar.START_UP = False
 
@@ -290,20 +307,47 @@ class WebInterface(object):
                              'loading': '#1c5188',
                              'failed': '#641716'}
 
-        if mylar.CONFIG.ALPHAINDEX == True:
-            comics = helpers.havetotals()
-            return serve_template(templatename="index-alphaindex.html", title="Home", comics=comics, alphaindex=mylar.CONFIG.ALPHAINDEX, legend_colors=legend_colors)
-        else:
-            return serve_template(templatename="index.html", title="Home", legend_colors=legend_colors)
+        return serve_template(templatename="index.html", title="Home", alphaindex=mylar.CONFIG.ALPHAINDEX, legend_colors=legend_colors)
     home.exposed = True
 
-    def loadhome(self, iDisplayStart=0, iDisplayLength=100, iSortCol_0=5, sSortDir_0="desc", sSearch="", **kwargs):
-        resultlist = helpers.havetotals()
-        iDisplayStart = int(iDisplayStart)
-        iDisplayLength = int(iDisplayLength)
+    def alpha_volume_counts(self, as_json = True, **kwargs):
+        # Convert if calling from params
+        if as_json == 'true':
+            as_json = True
+        elif as_json == 'false':
+            as_json = False
+
+        alphabet_lengths = dict.fromkeys(['All','#'] + list(ascii_lowercase), 0)
+        # Saving this regexp version but I can't see how it's performant compared to using in-built functions
+        #letter_query = "SELECT lower(substr(c.ComicName,1,1)) AS 'Character', Count(c.ComicID) AS 'Count' FROM Comics c WHERE c.ComicName REGEXP '^[a-zA-Z]' GROUP BY 1 UNION SELECT '#' AS 'Character', Count(c.ComicID) AS 'Count' FROM Comics c WHERE c.ComicName REGEXP '^[^a-zA-Z]' GROUP BY 1"
+        letter_query = "SELECT lower(substr(c.ComicName,1,1)) as 'Character', COUNT(c.ComicID) as 'Count' FROM Comics c WHERE hex(lower(substr(c.ComicName,1,1))) BETWEEN '61' AND '7A' GROUP BY 1 UNION SELECT '#' as 'Character', COUNT(c.ComicID) as 'Count' FROM Comics c WHERE NOT hex(lower(substr(c.ComicName,1,1))) BETWEEN '61' AND '7A' GROUP BY 1;"
+        myDB = db.DBConnection()
+        result = myDB.select(letter_query)
+        for letter_count in result:
+            alphabet_lengths['All'] += letter_count['Count']
+            alphabet_lengths[letter_count['Character']] += letter_count['Count']
+
+        if as_json:
+            return json.dumps(alphabet_lengths)
+        else:
+            return alphabet_lengths
+    alpha_volume_counts.exposed = True
+
+
+    def loadhome(self, **kwargs):
+        iDisplayStart = int(kwargs['start'])
+        iDisplayLength = int(kwargs['length'])
+        
+        if not 'selected' in kwargs.keys() or kwargs['selected'] == 'All':
+            resultlist = helpers.havetotals()
+        else:
+            resultlist = helpers.havetotals(start_char_filter=kwargs['selected'])
+
+        sSearch = kwargs['search[value]']        
         filtered = []
+
         if sSearch == "" or sSearch == None:
-            filtered = resultlist[::]
+            filtered = resultlist
         else:
             ignore_terms = []
             tsearch = sSearch
@@ -351,42 +395,56 @@ class WebInterface(object):
                 except Exception as e:
                     pass
 
-        sortcolumn = 'ComicPublisher'
-        if iSortCol_0 == '0':
-            sortcolumn = 'ComicPublisher'
-        elif iSortCol_0 == '1':
-            sortcolumn = 'ComicName'
-        elif iSortCol_0 == '2':
-            sortcolumn = 'ComicYear'
-        elif iSortCol_0 == '3':
-            sortcolumn = 'LatestIssue'
-        elif iSortCol_0 == '4':
-            sortcolumn = 'LatestDate'
-        elif iSortCol_0 == '5':
-            sortcolumn = 'percent'
-        elif iSortCol_0 == '6':
-            sortcolumn = 'Status'
+        # Multisort by using the stable nature of sort in reverse order
+        # We have to work out the number of columns based on kwargs keys
+        sort_columns = 0        
+        while f"order[{sort_columns}][column]" in kwargs.keys():
+            sort_columns += 1
 
-        #below sort is for multi-sort columns, maybe make them user configurable - not sure how to pass mutli-sort thru otherwise
-        #filtered.sort(key= itemgetter(sortcolumn2, sortcolumn), reverse=sSortDir_0 == "desc")
-        if sortcolumn == 'percent':
-            filtered.sort(key=lambda x: (x['totalissues'] is None, x['totalissues'] == '', x['totalissues']), reverse=sSortDir_0 == "asc")
-            filtered.sort(key=lambda x: (x['percent'] is None, x['percent'] == '', x['percent']), reverse=sSortDir_0 == "desc")
-            filtered.sort(key=lambda x: (x['haveissues'] is None, x['haveissues'] == '', x['haveissues']), reverse=sSortDir_0 == "desc")
-            filtered.sort(key=lambda x: (x['percent'] is None, x['percent'] == '', x['percent']), reverse=sSortDir_0 == "desc")
-        elif sortcolumn == 'LatestIssue':
-            filtered.sort(key=lambda x: (x['IntLatestIssue'] is None, x['IntLatestIssue'] == '', x['IntLatestIssue']), reverse=sSortDir_0 == "asc")
-        else:
-            filtered.sort(key=lambda x: (x[sortcolumn] is None, x[sortcolumn] == '', x[sortcolumn]), reverse=sSortDir_0 == "desc")
+        for sort_pos in range(sort_columns, 0, -1):
+            iSortCol = kwargs[f'order[{sort_pos-1}][column]']
+            sSortDir = kwargs[f'order[{sort_pos-1}][dir]']
+        
+            if iSortCol == '0':
+                sortcolumn = 'ComicPublisher'
+            elif iSortCol == '1':
+                sortcolumn = 'ComicName'
+            elif iSortCol == '2':
+                sortcolumn = 'ComicYear'
+            elif iSortCol == '3':
+                sortcolumn = 'LatestIssue'
+            elif iSortCol == '4':
+                sortcolumn = 'LatestDate'
+            elif iSortCol == '5':
+                sortcolumn = 'percent'
+            elif iSortCol == '6':
+                sortcolumn = 'recentstatus'
+            elif iSortCol == '7':
+                sortcolumn = 'Status'
+            else:
+                sortcolumn = 'ComicPublisher'
+
+            if sortcolumn == 'percent':
+                filtered.sort(key=lambda x: (x['totalissues'] is None, x['totalissues'] == '', x['totalissues'] == '?', x['totalissues']), reverse=sSortDir == "asc")
+                filtered.sort(key=lambda x: (x['percent'] is None, x['percent'] == '', x['percent']), reverse=sSortDir == "desc")
+                filtered.sort(key=lambda x: (x['haveissues'] is None, x['haveissues'] == '', x['haveissues']), reverse=sSortDir == "desc")
+                filtered.sort(key=lambda x: (x['percent'] is None, x['percent'] == '', x['percent']), reverse=sSortDir == "desc")
+            elif sortcolumn == 'LatestIssue':
+                filtered.sort(key=lambda x: (x['IntLatestIssue'] is None, x['IntLatestIssue'] == '', x['IntLatestIssue']), reverse=sSortDir == "asc")
+            else:
+                filtered.sort(key=lambda x: (x[sortcolumn] is None, x[sortcolumn] == '', x[sortcolumn]), reverse=sSortDir == "desc")
+
+
         if iDisplayLength != -1:
             rows = filtered[iDisplayStart:(iDisplayStart + iDisplayLength)]
         else:
             rows = filtered
         rows = [[row['ComicPublisher'], row['ComicName'], row['ComicYear'], row['LatestIssue'], row['LatestDate'], row['recentstatus'], row['Status'], row['percent'], row['haveissues'], row['totalissues'], row['ComicID'], row['displaytype'], row['ComicVolume'], row['cv_removed']] for row in rows]
+        
         return json.dumps({
-            'iTotalDisplayRecords': len(filtered),
-            'iTotalRecords': len(resultlist),
-            'aaData': rows,
+            'recordsFiltered': len(filtered),
+            'recordsTotal': len(resultlist),
+            'data': rows,
         })
     loadhome.exposed = True
 
@@ -548,8 +606,54 @@ class WebInterface(object):
                     comicImage = "data:image/webp;base64,%s" % mylar.getimage.load_image(os.path.join(mylar.CONFIG.CACHE_DIR, ComicID + '.jpg'), 263)
                 elif os.path.exists(os.path.join(mylar.CONFIG.CACHE_DIR, ComicID + '.png')):
                     comicImage = "data:image/webp;base64,%s" % mylar.getimage.load_image(os.path.join(mylar.CONFIG.CACHE_DIR, ComicID + '.png'), 263)
-                else:
-                    comicImage = "data:image/gif;base64,%s" % mylar.getimage.load_image(os.path.join(mylar.PROG_DIR, 'data', 'images', 'blank.gif'),263)
+                
+                # Pokud obrázek stále není v cache, zkusit ho stáhnout
+                if not comicImage:
+                    try:
+                        # Získat image URL
+                        image_url = None
+                        try:
+                            if comic['ComicImageURL'] is not None and comic['ComicImageURL'] != 'None':
+                                image_url = comic['ComicImageURL']
+                        except (KeyError, TypeError):
+                            pass
+                        if not image_url:
+                            try:
+                                if comic['ComicImage'] is not None and comic['ComicImage'] != 'None':
+                                    image_url = comic['ComicImage']
+                            except (KeyError, TypeError):
+                                pass
+                        
+                        # Pokud není URL v DB, získat z ComicVine API
+                        image_data = None
+                        if not image_url:
+                            fullcomicid = '4050-' + str(ComicID)
+                            image_data = mylar.cv.getComic(fullcomicid, 'image')
+                            image_url = image_data.get('image')
+                            if not image_url:
+                                image_url = image_data.get('image_alt')
+                        
+                        # Zkusit stáhnout obrázek
+                        if image_url:
+                            coverchk = helpers.getImage(ComicID, image_url, overwrite=False)
+                            if coverchk.get('status') == 'success':
+                                # Obrázek se úspěšně stáhl, načíst z cache
+                                cache_file = os.path.join(mylar.CONFIG.CACHE_DIR, ComicID + '.jpg')
+                                if os.path.exists(cache_file):
+                                    comicImage = "data:image/webp;base64,%s" % mylar.getimage.load_image(cache_file, 263)
+                            elif coverchk.get('status') == 'retry' and image_data and image_data.get('image_alt'):
+                                # Zkusit alternativní URL
+                                coverchk = helpers.getImage(ComicID, image_data['image_alt'], overwrite=False)
+                                if coverchk.get('status') == 'success':
+                                    cache_file = os.path.join(mylar.CONFIG.CACHE_DIR, ComicID + '.jpg')
+                                    if os.path.exists(cache_file):
+                                        comicImage = "data:image/webp;base64,%s" % mylar.getimage.load_image(cache_file, 263)
+                    except Exception as e:
+                        logger.warn('[comicDetails] Failed to download cover image: %s' % e)
+                    
+                    # Pokud se nepovedlo stáhnout, zobrazit placeholder
+                    if not comicImage:
+                        comicImage = "data:image/gif;base64,%s" % mylar.getimage.load_image(os.path.join(mylar.PROG_DIR, 'data', 'images', 'blank.gif'),263)
 
             comicpublisher = helpers.publisherImages(comic['ComicPublisher'])
 
@@ -1111,7 +1215,9 @@ class WebInterface(object):
         logger.info('# of results: %s' % len(filtered))
         iDisplayStart = int(iDisplayStart)
         iDisplayLength = int(iDisplayLength)
-        filtered = filtered[iDisplayStart:(iDisplayStart + iDisplayLength)]
+        # -1 is used for "All" in DataTables filters
+        if iDisplayLength > 0:
+            filtered = filtered[iDisplayStart:(iDisplayStart + iDisplayLength)]
         rows = [[row['comicid'], row['comicname'], row['publisher'], row['comicyear'], row['issues'], row['deck'], row['url'], row['type'], row['description'], row['haveit'], row['query_id']] for row in filtered]
 
         return json.dumps({
@@ -1659,7 +1765,7 @@ class WebInterface(object):
                 digitaldate = str(arcval['Digital_Date'])
                 storedate = str(arcval['Store_Date'])
 
-                int_issnum = helpers.issuedigits(issnum)
+                int_issnum = helpers.issue_number_parser(issnum).asInt
 
                 #verify the reading order if present.
                 findorder = arclist.find(issid)
@@ -2030,7 +2136,7 @@ class WebInterface(object):
                 myDB.action('DELETE from annuals WHERE ComicID=?', [ComicID])
             myDB.action('DELETE from upcoming WHERE ComicID=?', [ComicID])
             myDB.action('DELETE from readlist WHERE ComicID=?', [ComicID])
-            myDB.action('UPDATE weekly SET Status="Skipped" WHERE ComicID=? AND Status="Wanted"', [ComicID])
+            myDB.action("UPDATE weekly SET Status='Skipped' WHERE ComicID=? AND Status='Wanted'", [ComicID])
             if delete_dir: #mylar.CONFIG.DELETE_REMOVE_DIR:
                 logger.fdebug('Remove directory on series removal enabled.')
                 if seriesdir is not None:
@@ -2990,7 +3096,7 @@ class WebInterface(object):
                 try:
                     x = float(weekly['ISSUE'])
                 except ValueError as e:
-                    if any(ext in weekly['ISSUE'].upper() for ext in mylar.ISSUE_EXCEPTIONS):
+                    if helpers.issueExceptionCheck(weekly['ISSUE'], full_match=False):
                         x = weekly['ISSUE']
 
                 if x is not None:
@@ -3505,10 +3611,22 @@ class WebInterface(object):
                     watcharc = None
 
                 try:
-                    filtered.append([row['ComicName'], row['Issue_Number'], row['ReleaseDate'], row['IssueID'], tier, row['ComicID'], row['Status'], storyarc, storyarcid, issuearcid, watcharc, row['Int_IssueNumber']])
+                    rejected_count = len(mylar.REJECTED_MATCHES.get(row['IssueID'], []))
+                    # Check if Snatched issue has ddl_info entry
+                    has_ddl_info = False
+                    if row['Status'] == 'Snatched':
+                        ddl_check = myDB.selectone("SELECT id FROM ddl_info WHERE issueid=?", [row['IssueID']]).fetchone()
+                        has_ddl_info = ddl_check is not None
+                    filtered.append([row['ComicName'], row['Issue_Number'], row['ReleaseDate'], row['IssueID'], tier, row['ComicID'], row['Status'], storyarc, storyarcid, issuearcid, watcharc, row['Int_IssueNumber'], rejected_count, has_ddl_info])
                 except Exception as e:
                     #logger.warn('danger Wil Robinson: %s' % (e,))
-                    filtered.append([row['ComicName'], row['Issue_Number'], row['ReleaseDate'], row['IssueID'], tier, row['ComicID'], row['Status'], None, None, None, watcharc, row['Int_IssueNumber']])
+                    rejected_count = len(mylar.REJECTED_MATCHES.get(row['IssueID'], []))
+                    # Check if Snatched issue has ddl_info entry
+                    has_ddl_info = False
+                    if row['Status'] == 'Snatched':
+                        ddl_check = myDB.selectone("SELECT id FROM ddl_info WHERE issueid=?", [row['IssueID']]).fetchone()
+                        has_ddl_info = ddl_check is not None
+                    filtered.append([row['ComicName'], row['Issue_Number'], row['ReleaseDate'], row['IssueID'], tier, row['ComicID'], row['Status'], None, None, None, watcharc, row['Int_IssueNumber'], rejected_count, has_ddl_info])
 
         if mylar.CONFIG.UPCOMING_STORYARCS is True:
             for key, ark in arcs.items():
@@ -3557,7 +3675,13 @@ class WebInterface(object):
                         matched = True
 
                 if matched is True:
-                    filtered.append([ark['comicname'], ark['issuenumber'], ark['releasedate'], key, tier, ark['comicid'], ark['status'], ark['storyarc'], ark['storyarcid'], ark['issuearcid'], "oneoff", ark['int_issuenumber']])
+                    rejected_count = len(mylar.REJECTED_MATCHES.get(key, []))
+                    # Check if Snatched issue has ddl_info entry
+                    has_ddl_info = False
+                    if ark['status'] == 'Snatched':
+                        ddl_check = myDB.selectone("SELECT id FROM ddl_info WHERE issueid=?", [key]).fetchone()
+                        has_ddl_info = ddl_check is not None
+                    filtered.append([ark['comicname'], ark['issuenumber'], ark['releasedate'], key, tier, ark['comicid'], ark['status'], ark['storyarc'], ark['storyarcid'], ark['issuearcid'], "oneoff", ark['int_issuenumber'], rejected_count, has_ddl_info])
 
         #logger.fdebug('[%s] one-off arcs: %s' % (len(arcs), arcs,))
 
@@ -3596,6 +3720,448 @@ class WebInterface(object):
         })
 
     loadupcoming.exposed = True
+
+    def _sort_rejected_matches(self, matches):
+        """
+        Sort rejected matches by relevance_score (descending), then by pubdate (descending - newest first).
+        Returns a sorted list of match dictionaries.
+        """
+        def sort_key(m):
+            relevance = m.get("relevance_score", 0.0)
+            pubdate_str = m.get("pubdate", "")
+            # Try to parse date for proper sorting
+            date_sort = 0
+            if pubdate_str:
+                try:
+                    import email.utils
+                    # Try to parse common date formats
+                    try:
+                        # Try ISO format first (YYYY-MM-DD)
+                        if len(pubdate_str) == 10 and pubdate_str.count('-') == 2:
+                            date_val = datetime.datetime.strptime(pubdate_str, '%Y-%m-%d')
+                            date_sort = date_val.timestamp()
+                        else:
+                            # Try parsing as email date format (RFC 2822)
+                            date_tuple = email.utils.parsedate_tz(pubdate_str)
+                            if date_tuple:
+                                if date_tuple[-1] is not None:
+                                    date_sort = time.mktime(date_tuple[:len(date_tuple)-1]) - date_tuple[-1]
+                                else:
+                                    date_sort = time.mktime(date_tuple[:len(date_tuple)-1])
+                            else:
+                                # If parsing fails, use string comparison (newer dates come first in string sort)
+                                date_sort = -len(pubdate_str)  # Longer strings (newer dates) sort first
+                    except Exception:
+                        # If parsing fails, use string comparison
+                        date_sort = -len(pubdate_str) if pubdate_str else 0
+                except Exception:
+                    date_sort = 0
+            # Return tuple: (-relevance for descending, -date_sort for descending)
+            return (-relevance, -date_sort)
+        
+        # Create a copy to avoid modifying the original list
+        sorted_matches = list(matches)
+        sorted_matches.sort(key=sort_key)
+        return sorted_matches
+
+    def get_rejected_matches(self, IssueID):
+        """
+        Get rejected matches for a given IssueID.
+        Returns JSON with list of rejected matches or empty list if none found.
+        Sorted by relevance_score (descending), then by pubdate (descending - newest first).
+        """
+        try:
+            if IssueID in mylar.REJECTED_MATCHES:
+                matches = mylar.REJECTED_MATCHES[IssueID]
+                # Convert to JSON-serializable format
+                result = []
+                for match in matches:
+                    result.append({
+                        "title": match.get("title", "Unknown"),
+                        "provider": match.get("provider", "Unknown"),
+                        "size": match.get("size", "Unknown"),
+                        "kind": match.get("kind", "Unknown"),
+                        "link": match.get("link", ""),
+                        "pubdate": match.get("pubdate", ""),
+                        "reason": match.get("reason", "Unknown reason"),
+                        "nzbid": match.get("nzbid", None),
+                        "relevance_score": match.get("relevance_score", 0.0)
+                    })
+                
+                # Sort by relevance_score (descending), then by pubdate (descending - newest first)
+                result = self._sort_rejected_matches(result)
+                
+                return json.dumps({"status": "success", "matches": result})
+            else:
+                return json.dumps({"status": "success", "matches": []})
+        except Exception as e:
+            logger.error('[GET-REJECTED-MATCHES] Error: %s' % e)
+            import traceback
+            logger.error(traceback.format_exc())
+            return json.dumps({"status": "error", "message": str(e)})
+    get_rejected_matches.exposed = True
+
+    def select_rejected_match(self, IssueID, match_index=None, nzbid=None, link=None):
+        """
+        Select a rejected match and add it to download queue.
+        Can use either match_index (for backwards compatibility) or nzbid+link (preferred, unique identifier).
+        """
+        try:
+            if IssueID not in mylar.REJECTED_MATCHES:
+                return json.dumps({"status": "error", "message": "No rejected matches found for this issue"})
+            
+            matches = mylar.REJECTED_MATCHES[IssueID]
+            match = None
+            match_index_to_remove = None
+            
+            # Prefer unique identifier (nzbid + link) over index
+            if nzbid is not None and link is not None:
+                # Find match by unique identifier and also get its index for removal
+                for idx, m in enumerate(matches):
+                    if m.get('nzbid') == nzbid and m.get('link') == link:
+                        match = m
+                        match_index_to_remove = idx
+                        break
+                if not match:
+                    return json.dumps({"status": "error", "message": "Rejected match not found with given nzbid and link"})
+            elif match_index is not None:
+                # Fallback to index-based lookup (for backwards compatibility)
+                match_index = int(match_index)
+                # Sort matches to ensure consistent ordering with frontend
+                matches = self._sort_rejected_matches(matches)
+                if match_index < 0 or match_index >= len(matches):
+                    return json.dumps({"status": "error", "message": "Invalid match index"})
+                match = matches[match_index]
+                match_index_to_remove = match_index
+            else:
+                return json.dumps({"status": "error", "message": "Either match_index or nzbid+link must be provided"})
+            
+            # Get issue info from database
+            myDB = db.DBConnection()
+            issue = myDB.selectone("SELECT * FROM issues WHERE IssueID=?", [IssueID]).fetchone()
+            if not issue:
+                return json.dumps({"status": "error", "message": "Issue not found in database"})
+            
+            comic = myDB.selectone("SELECT * FROM comics WHERE ComicID=?", [issue['ComicID']]).fetchone()
+            if not comic:
+                return json.dumps({"status": "error", "message": "Comic not found in database"})
+            
+            # Reconstruct verified match data from stored rejected match
+            verified_data = match.get("verified_data")
+            if verified_data:
+                # Use stored verified data if available - reconstruct full comicinfo
+                # Get booktype from verified_data or comic (use Corrected_Type if available, otherwise Type)
+                booktype = verified_data.get('booktype')
+                if not booktype:
+                    # sqlite3.Row doesn't have .get(), use direct access with try/except
+                    try:
+                        booktype = comic['Corrected_Type'] if comic['Corrected_Type'] else comic['Type']
+                    except (KeyError, TypeError):
+                        try:
+                            booktype = comic['Type']
+                        except (KeyError, TypeError):
+                            booktype = None
+                
+                comicinfo = [{
+                    'ComicName': verified_data.get('ComicName', comic['ComicName']),
+                    'IssueNumber': verified_data.get('IssueNumber', issue['Issue_Number']),
+                    'comyear': verified_data.get('comyear', comic['ComicYear']),
+                    'oneoff': verified_data.get('oneoff', False),
+                    'nzbid': verified_data.get('nzbid', match.get('nzbid')),
+                    'ComicID': issue['ComicID'],
+                    'IssueID': IssueID,
+                    'pack': verified_data.get('pack', False),
+                    'pack_numbers': verified_data.get('pack_numbers'),
+                    'pack_issuelist': verified_data.get('pack_issuelist'),
+                    'SARC': verified_data.get('SARC'),
+                    'IssueArcID': verified_data.get('IssueArcID'),
+                    'size': verified_data.get('size', match.get('size', 'Unknown')),
+                    'nzbtitle': verified_data.get('nzbtitle', match.get('title', '')),
+                    'IssueDate': verified_data.get('IssueDate') or (issue['IssueDate'] if 'IssueDate' in issue else ''),
+                    'booktype': booktype
+                }]
+                
+                # Prepare link
+                if isinstance(verified_data.get('entry'), dict):
+                    entry = verified_data['entry']
+                    try:
+                        entry_link = entry.get('link')
+                        entry_id = entry.get('id')
+                        if entry_link or entry_id:
+                            links = {'id': entry_id, 'link': entry_link or ''}
+                        else:
+                            # Fallback to match link, ensure it's a dict if we have an id
+                            match_link = match.get('link', '')
+                            match_id = match.get('nzbid')
+                            if match_id:
+                                links = {'id': match_id, 'link': match_link}
+                            else:
+                                links = match_link if match_link else ''
+                    except:
+                        match_link = entry.get('link') or match.get('link') or ''
+                        match_id = match.get('nzbid')
+                        if match_id and match_link:
+                            links = {'id': match_id, 'link': match_link}
+                        else:
+                            links = match_link
+                else:
+                    match_link = match.get('link', '')
+                    match_id = match.get('nzbid')
+                    if match_id and match_link:
+                        links = {'id': match_id, 'link': match_link}
+                    else:
+                        links = match_link if match_link else ''
+                
+                # Call searcher to add to download queue
+                # Get provider_stat if available, otherwise create minimal one
+                provider_stat = verified_data.get('provider_stat')
+                if not provider_stat:
+                    # Create minimal provider_stat based on provider type
+                    provider = verified_data.get('nzbprov', match.get('provider', 'Unknown'))
+                    if 'newznab' in provider.lower() or provider == 'experimental':
+                        provider_stat = {'type': 'newznab'}
+                    elif 'torznab' in provider.lower():
+                        provider_stat = {'type': 'torznab'}
+                    elif 'DDL' in provider:
+                        provider_stat = {'type': 'ddl'}
+                    else:
+                        provider_stat = {'type': 'torrent'}
+                
+                # Get nzbname - use ComicTitle from verified_data, or nzbtitle from comicinfo, or title from match
+                nzbname_param = verified_data.get('ComicTitle') or comicinfo[0].get('nzbtitle') or match.get('title', '')
+                if not nzbname_param:
+                    # Last resort: construct from ComicName and IssueNumber
+                    nzbname_param = '%s #%s' % (comicinfo[0].get('ComicName', ''), comicinfo[0].get('IssueNumber', ''))
+                
+                searchresult = search.searcher(
+                    verified_data.get('nzbprov', match.get('provider', 'Unknown')),
+                    nzbname_param,
+                    comicinfo,
+                    links,
+                    IssueID,
+                    issue['ComicID'],
+                    verified_data.get('tmpprov', ''),
+                    newznab=verified_data.get('newznab'),
+                    torznab=verified_data.get('torznab'),
+                    rss='no',
+                    provider_stat=provider_stat
+                )
+                
+                # search.searcher returns dict with keys: nzbid, nzbname, sent_to, SARC, alt_nzbname, t_hash
+                # OR error string on failure (ddl-fail, torrent-fail, etc.)
+                # OR None
+                logger.fdebug('[SELECT-REJECTED-MATCH] search.searcher returned: %s (type: %s)' % (searchresult, type(searchresult)))
+                # Check if it's a successful result (dict with nzbname or sent_to) or a non-error string
+                is_success = False
+                if isinstance(searchresult, dict):
+                    # Dict means success for DDL/torrent providers
+                    is_success = bool(searchresult.get('nzbname') or searchresult.get('sent_to'))
+                elif isinstance(searchresult, str) and searchresult.strip():
+                    # String means success for NZB providers, unless it's an error code
+                    is_success = searchresult not in ['ddl-fail', 'torrent-fail', 'blackhole-fail', 'downloadchk-fail', 'sab-fail']
+                
+                if is_success:
+                    # Successfully added to queue
+                    # Update status to Snatched
+                    provider = verified_data.get('nzbprov', match.get('provider', 'Unknown'))
+                    try:
+                        updater.foundsearch(
+                            issue['ComicID'],
+                            IssueID,
+                            mode=None,
+                            provider=provider
+                        )
+                        logger.info('[SELECT-REJECTED-MATCH] Updated status to Snatched for IssueID %s' % IssueID)
+                    except Exception as e:
+                        logger.error('[SELECT-REJECTED-MATCH] Error updating status to Snatched: %s' % e)
+                    
+                    # Remove from rejected matches
+                    if match_index_to_remove is not None:
+                        matches.pop(match_index_to_remove)
+                    else:
+                        # Fallback: remove by value if index not available
+                        try:
+                            matches.remove(match)
+                        except ValueError:
+                            # Match not in list, try to find and remove by nzbid+link
+                            for idx, m in enumerate(matches):
+                                if m.get('nzbid') == match.get('nzbid') and m.get('link') == match.get('link'):
+                                    matches.pop(idx)
+                                    break
+                    if len(matches) == 0:
+                        del mylar.REJECTED_MATCHES[IssueID]
+                    
+                    # Extract nzbname from dict if it's a dict, otherwise use the string
+                    nzbname_result = searchresult.get('nzbname', searchresult) if isinstance(searchresult, dict) else searchresult
+                    return json.dumps({
+                        "status": "success",
+                        "message": "Successfully added to download queue",
+                        "nzbname": nzbname_result
+                    })
+                else:
+                    error_msg = "Failed to add to download queue"
+                    if searchresult:
+                        error_msg += ": %s" % str(searchresult)
+                    logger.error('[SELECT-REJECTED-MATCH] %s' % error_msg)
+                    return json.dumps({
+                        "status": "error",
+                        "message": error_msg
+                    })
+            else:
+                # Fallback: try to use entry data
+                entry = match.get("entry", {})
+                if not entry:
+                    return json.dumps({"status": "error", "message": "No entry data available"})
+                
+                # Create minimal comicinfo
+                # Check if entry has pack information
+                pack = entry.get('pack', False) if isinstance(entry, dict) else False
+                
+                # Get booktype from comic (use Corrected_Type if available, otherwise Type)
+                # sqlite3.Row doesn't have .get(), use direct access with try/except
+                try:
+                    booktype = comic['Corrected_Type'] if comic['Corrected_Type'] else comic['Type']
+                except (KeyError, TypeError):
+                    try:
+                        booktype = comic['Type']
+                    except (KeyError, TypeError):
+                        booktype = None
+                
+                comicinfo = [{
+                    'ComicName': comic['ComicName'],
+                    'IssueNumber': issue['Issue_Number'],
+                    'comyear': comic['ComicYear'],
+                    'oneoff': False,
+                    'nzbid': match.get('nzbid'),
+                    'ComicID': issue['ComicID'],
+                    'IssueID': IssueID,
+                    'pack': pack,
+                    'pack_numbers': entry.get('pack_numbers') if isinstance(entry, dict) else None,
+                    'pack_issuelist': entry.get('pack_issuelist') if isinstance(entry, dict) else None,
+                    'booktype': booktype,
+                    'SARC': None,  # May not be available in fallback
+                    'IssueArcID': None,  # May not be available in fallback
+                    'size': match.get('size', 'Unknown'),
+                    'nzbtitle': match.get('title', ''),
+                    'IssueDate': issue['IssueDate'] if 'IssueDate' in issue else ''
+                }]
+                
+                # Prepare links - ensure it's either a dict with 'link' key or a string
+                entry_link = entry.get('link') if isinstance(entry, dict) else None
+                match_link = match.get('link', '')
+                match_id = match.get('nzbid')
+                
+                if entry_link:
+                    entry_id = entry.get('id') if isinstance(entry, dict) else None
+                    if entry_id or match_id:
+                        links = {'id': entry_id or match_id, 'link': entry_link}
+                    else:
+                        links = entry_link
+                elif match_link:
+                    if match_id:
+                        links = {'id': match_id, 'link': match_link}
+                    else:
+                        links = match_link
+                else:
+                    links = ''
+                
+                provider = match.get('provider', 'Unknown')
+                
+                # Create minimal provider_stat based on provider type
+                if 'newznab' in provider.lower() or provider == 'experimental':
+                    provider_stat = {'type': 'newznab'}
+                elif 'torznab' in provider.lower():
+                    provider_stat = {'type': 'torznab'}
+                elif 'DDL' in provider:
+                    provider_stat = {'type': 'ddl'}
+                else:
+                    provider_stat = {'type': 'torrent'}
+                
+                # Get nzbname - use title from match, or nzbtitle from comicinfo, or construct from ComicName and IssueNumber
+                nzbname_param = match.get('title') or comicinfo[0].get('nzbtitle') or ''
+                if not nzbname_param:
+                    # Last resort: construct from ComicName and IssueNumber
+                    nzbname_param = '%s #%s' % (comicinfo[0].get('ComicName', ''), comicinfo[0].get('IssueNumber', ''))
+                
+                searchresult = search.searcher(
+                    provider,
+                    nzbname_param,
+                    comicinfo,
+                    links,
+                    IssueID,
+                    issue['ComicID'],
+                    '',
+                    rss='no',
+                    provider_stat=provider_stat
+                )
+                
+                # search.searcher returns dict with keys: nzbid, nzbname, sent_to, SARC, alt_nzbname, t_hash
+                # OR error string on failure (ddl-fail, torrent-fail, etc.)
+                # OR None
+                logger.fdebug('[SELECT-REJECTED-MATCH] search.searcher returned: %s (type: %s)' % (searchresult, type(searchresult)))
+                # Check if it's a successful result (dict with nzbname or sent_to) or a non-error string
+                is_success = False
+                if isinstance(searchresult, dict):
+                    # Dict means success for DDL/torrent providers
+                    is_success = bool(searchresult.get('nzbname') or searchresult.get('sent_to'))
+                elif isinstance(searchresult, str) and searchresult.strip():
+                    # String means success for NZB providers, unless it's an error code
+                    is_success = searchresult not in ['ddl-fail', 'torrent-fail', 'blackhole-fail', 'downloadchk-fail', 'sab-fail']
+                
+                if is_success:
+                    # Successfully added to queue
+                    # Update status to Snatched
+                    provider = match.get('provider', 'Unknown')
+                    try:
+                        updater.foundsearch(
+                            issue['ComicID'],
+                            IssueID,
+                            mode=None,
+                            provider=provider
+                        )
+                        logger.info('[SELECT-REJECTED-MATCH] Updated status to Snatched for IssueID %s' % IssueID)
+                    except Exception as e:
+                        logger.error('[SELECT-REJECTED-MATCH] Error updating status to Snatched: %s' % e)
+                    
+                    # Remove from rejected matches
+                    if match_index_to_remove is not None:
+                        matches.pop(match_index_to_remove)
+                    else:
+                        # Fallback: remove by value if index not available
+                        try:
+                            matches.remove(match)
+                        except ValueError:
+                            # Match not in list, try to find and remove by nzbid+link
+                            for idx, m in enumerate(matches):
+                                if m.get('nzbid') == match.get('nzbid') and m.get('link') == match.get('link'):
+                                    matches.pop(idx)
+                                    break
+                    if len(matches) == 0:
+                        del mylar.REJECTED_MATCHES[IssueID]
+                    
+                    # Extract nzbname from dict if it's a dict, otherwise use the string
+                    nzbname_result = searchresult.get('nzbname', searchresult) if isinstance(searchresult, dict) else searchresult
+                    return json.dumps({
+                        "status": "success",
+                        "message": "Successfully added to download queue",
+                        "nzbname": nzbname_result
+                    })
+                else:
+                    error_msg = "Failed to add to download queue"
+                    if searchresult:
+                        error_msg += ": %s" % str(searchresult)
+                    logger.error('[SELECT-REJECTED-MATCH] %s' % error_msg)
+                    return json.dumps({
+                        "status": "error",
+                        "message": error_msg
+                    })
+                    
+        except Exception as e:
+            logger.error('[SELECT-REJECTED-MATCH] Error: %s' % e)
+            import traceback
+            logger.error(traceback.format_exc())
+            return json.dumps({"status": "error", "message": str(e)})
+    select_rejected_match.exposed = True
 
     def searchformissing(self, ComicID):
         #search for 'missing' issues for a given series without marking them as Wanted (issues that are in a Skipped or Wanted state).
@@ -3689,7 +4255,60 @@ class WebInterface(object):
             myDB.action("DELETE FROM ddl_info WHERE status = 'Queued'")
             return json.dumps({'status': True, 'message': 'Successfully cleared %s items from the Queue' % countchk})
 
-        if id is None:
+        if mode == 'clear_completed':
+            chk = myDB.selectone("SELECT count(*) AS count FROM ddl_info WHERE status = 'Completed'").fetchone()
+            countchk = 0
+            if chk:
+                countchk = chk['count']
+
+            if countchk == 0:
+                return json.dumps({'status': True, 'message': 'No completed items to clear'})
+
+            myDB.action("DELETE FROM ddl_info WHERE status = 'Completed'")
+            return json.dumps({'status': True, 'message': 'Successfully cleared %s completed items from the history' % countchk})
+
+        if mode == 'restart_queue':
+            # Reset DDL_LOCK first
+            mylar.DDL_LOCK = False
+            logger.info('[DDL-RESTART-QUEUE] Reset DDL_LOCK')
+            
+            # Clear DDL_QUEUED to allow requeuing all items
+            # This ensures that items that were in queue but not yet processed can be requeued
+            mylar.DDL_QUEUED = []
+            logger.info('[DDL-RESTART-QUEUE] Cleared DDL_QUEUED list to allow requeuing all items')
+            
+            # Empty the DDL_QUEUE to prevent duplicates
+            # Python queue.Queue doesn't have clear(), so we need to drain it manually
+            queue_size_before = mylar.DDL_QUEUE.qsize()
+            if queue_size_before > 0:
+                logger.info('[DDL-RESTART-QUEUE] Emptying existing queue (%s items) to prevent duplicates' % queue_size_before)
+                try:
+                    items_drained = 0
+                    while True:
+                        try:
+                            mylar.DDL_QUEUE.get_nowait()
+                            items_drained += 1
+                        except:
+                            break
+                    logger.info('[DDL-RESTART-QUEUE] Drained %s items from queue' % items_drained)
+                except Exception as e:
+                    logger.warn('[DDL-RESTART-QUEUE] Error emptying queue: %s' % e)
+                    import traceback
+                    logger.debug('[DDL-RESTART-QUEUE] Traceback: %s' % traceback.format_exc())
+            
+            # Reset all "Downloading" items to "Queued" status
+            downloading_items = myDB.select("SELECT * FROM ddl_info WHERE status = 'Downloading'")
+            if downloading_items:
+                for item in downloading_items:
+                    ctrlval = {'id': item['id']}
+                    val = {'status': 'Queued',
+                           'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}
+                    myDB.upsert('ddl_info', val, ctrlval)
+                logger.info('[DDL-RESTART-QUEUE] Reset %s stuck "Downloading" items to "Queued" status' % len(downloading_items))
+            
+            # Now get all Queued items (including the ones we just reset)
+            items = myDB.select("SELECT * FROM ddl_info WHERE status = 'Queued' ORDER BY updated_date DESC")
+        elif id is None:
             items = myDB.select("SELECT * FROM ddl_info WHERE status = 'Queued' ORDER BY updated_date DESC")
         else:
             oneitem = myDB.selectone("SELECT * FROM DDL_INFO WHERE ID=?", [id]).fetchone()
@@ -3727,6 +4346,7 @@ class WebInterface(object):
                              'id': x['id']})
 
         if itemlist is not None:
+            items_added = 0
             for item in itemlist:
                 seriesname = item['series']
                 seriessize = item['size']
@@ -3760,27 +4380,45 @@ class WebInterface(object):
                     continue
                 else:
                     resume = None
-                mylar.DDL_QUEUE.put({'link': item['link'],
-                                     'mainlink': item['mainlink'],
-                                     'series': item['series'],
-                                     'year': item['year'],
-                                     'size': item['size'],
-                                     'comicid': item['comicid'],
-                                     'issueid': item['issueid'],
-                                     'oneoff': item['oneoff'],
-                                     'id': item['id'],
-                                     'link_type': item['link_type'],
-                                     'filename': item['filename'],
-                                     'comicinfo': None,
-                                     'packinfo': None,
-                                     'site': item['site'],
-                                     'remote_filesize': item['remote_filesize'],
-                                     'resume': resume})
+                
+                # Add item to DDL_QUEUE
+                try:
+                    # Check if item is already in queue or downloading
+                    if item['id'] in mylar.DDL_QUEUED:
+                        logger.debug('[DDL-REQUEUE] Item %s (%s) [ID: %s] already in queue or downloading, skipping duplicate' % 
+                                    (item['series'], item['year'], item['id']))
+                        continue
+                    
+                    mylar.DDL_QUEUE.put({'link': item['link'],
+                                         'mainlink': item['mainlink'],
+                                         'series': item['series'],
+                                         'year': item['year'],
+                                         'size': item['size'],
+                                         'comicid': item['comicid'],
+                                         'issueid': item['issueid'],
+                                         'oneoff': item['oneoff'],
+                                         'id': item['id'],
+                                         'link_type': item['link_type'],
+                                         'filename': item['filename'],
+                                         'comicinfo': None,
+                                         'packinfo': None,
+                                         'site': item['site'],
+                                         'remote_filesize': item['remote_filesize'],
+                                         'resume': resume})
+                    # Add to DDL_QUEUED to prevent duplicates
+                    mylar.DDL_QUEUED.append(item['id'])
+                    items_added += 1
+                    if mode == 'restart_queue':
+                        logger.debug('[DDL-RESTART-QUEUE] Added item to queue: %s (%s) [ID: %s] - Queue size: %s' % 
+                                    (item['series'], item['year'], item['id'], mylar.DDL_QUEUE.qsize()))
+                except Exception as e:
+                    logger.error('[DDL-REQUEUE] Error adding item %s to queue: %s' % (item.get('id', 'Unknown'), e))
 
                 linemessage = '%s successful for %s' % (mode, item['series'])
 
             if mode == 'restart_queue':
-                logger.info('[DDL-RESTART-QUEUE] DDL Queue successfully restarted. Put %s items back into the queue for downloading..' % len(itemlist))
+                logger.info('[DDL-RESTART-QUEUE] DDL Queue successfully restarted. Put %s items back into the queue for downloading (Queue size now: %s)..' % 
+                           (items_added, mylar.DDL_QUEUE.qsize()))
                 linemessage = 'Successfully restarted Queue'
             elif mode == 'restart':
                 logger.info('[DDL-RESTART] Successfully restarted %s [%s] for downloading..' % (seriesname, seriessize))
@@ -3801,6 +4439,34 @@ class WebInterface(object):
 
     def queueManage(self): # **args):
         myDB = db.DBConnection()
+
+        # Get status statistics from ddl_info table
+        status_stats = myDB.select("""
+            SELECT status, COUNT(*) as count 
+            FROM ddl_info 
+            GROUP BY status 
+            ORDER BY 
+                CASE status
+                    WHEN 'Downloading' THEN 1
+                    WHEN 'Queued' THEN 2
+                    WHEN 'Completed' THEN 3
+                    WHEN 'Failed' THEN 4
+                    ELSE 5
+                END
+        """)
+
+        # Format statistics string
+        stats_dict = {row['status']: row['count'] for row in status_stats}
+        stats_parts = []
+        for status in ['Downloading', 'Queued', 'Completed', 'Failed']:
+            if status in stats_dict:
+                stats_parts.append(f"{stats_dict[status]} {status}")
+        # Add any other statuses
+        for status, count in stats_dict.items():
+            if status not in ['Downloading', 'Queued', 'Completed', 'Failed']:
+                stats_parts.append(f"{count} {status}")
+
+        status_summary = ", ".join(stats_parts) if stats_parts else "0 items"
 
         resultlist = 'There are currently no items waiting in the Direct Download (DDL) Queue for processing.'
         s_info = myDB.select("SELECT a.ComicName, a.ComicVersion, a.ComicID, a.ComicYear, b.Issue_Number, b.IssueID, c.series as filename, c.size, c.status, c.id, c.updated_date, c.issues, c.year, c.pack FROM comics as a INNER JOIN issues as b ON a.ComicID = b.ComicID INNER JOIN ddl_info as c ON b.IssueID = c.IssueID") # WHERE c.status != 'Downloading'")
@@ -3885,8 +4551,43 @@ class WebInterface(object):
 
             #logger.info('o_info: %s' % (resultlist))
 
-        return serve_template(templatename="queue_management.html", title="Queue Management", resultlist=resultlist) #activelist=activelist, resultlist=resultlist)
+        return serve_template(templatename="queue_management.html", title="Queue Management", resultlist=resultlist, status_summary=status_summary) #activelist=activelist, resultlist=resultlist)
     queueManage.exposed = True
+
+    def get_status_summary(self):
+        """Get status summary for queue management page"""
+        myDB = db.DBConnection()
+        
+        # Get status statistics from ddl_info table
+        status_stats = myDB.select("""
+            SELECT status, COUNT(*) as count 
+            FROM ddl_info 
+            GROUP BY status 
+            ORDER BY 
+                CASE status
+                    WHEN 'Downloading' THEN 1
+                    WHEN 'Queued' THEN 2
+                    WHEN 'Completed' THEN 3
+                    WHEN 'Failed' THEN 4
+                    ELSE 5
+                END
+        """)
+        
+        # Format statistics string
+        stats_dict = {row['status']: row['count'] for row in status_stats}
+        stats_parts = []
+        for status in ['Downloading', 'Queued', 'Completed', 'Failed']:
+            if status in stats_dict:
+                stats_parts.append(f"{stats_dict[status]} {status}")
+        # Add any other statuses
+        for status, count in stats_dict.items():
+            if status not in ['Downloading', 'Queued', 'Completed', 'Failed']:
+                stats_parts.append(f"{count} {status}")
+        
+        status_summary = ", ".join(stats_parts) if stats_parts else "0 items"
+        
+        return json.dumps({"status": "success", "status_summary": status_summary})
+    get_status_summary.exposed = True
 
     def queueManageIt(self, iDisplayStart=0, iDisplayLength=100, iSortCol_0=5, sSortDir_0="desc", sSearch="", **kwargs):
         iDisplayStart = int(iDisplayStart)
@@ -3916,7 +4617,7 @@ class WebInterface(object):
                     si_status = ''
 
                 if si['pack']:
-                    if si['year'] not in si['filename']:
+                    if si['year'] is not None and si['year'] not in si['filename']:
                         series = '%s (%s)' % (si['filename'], si['year'])
                     else:
                         series = si['filename']
@@ -3932,10 +4633,28 @@ class WebInterface(object):
                         else:
                             series = '%s (%s)' % (si['ComicName'], year)
 
+                # Build article title from series, issues, and year (e.g., "Ghost Rider #9 (2022)")
+                # Note: c.series is aliased as 'filename' in SQL query
+                article_title = ''
+                try:
+                    ddl_series = si['filename'] if si['filename'] else ''  # c.series is aliased as filename
+                    ddl_issues = si['issues'] if si['issues'] else ''
+                    ddl_year = si['year'] if si['year'] else ''
+                    
+                    if ddl_series:
+                        article_title = ddl_series
+                        if ddl_issues:
+                            article_title += ' #' + str(ddl_issues)
+                        if ddl_year:
+                            article_title += ' (' + str(ddl_year) + ')'
+                except (KeyError, TypeError):
+                    pass
+                
                 resultlist.append({'series':       series, #i['ComicName'],
                                    'issue':        issue,
                                    'queueid':      si['id'],
                                    'linktype':     si['link_type'],
+                                   'article_title': article_title,
                                    'volume':       si['ComicVersion'],
                                    'year':         year,
                                    'size':         si['size'].strip(),
@@ -3984,11 +4703,29 @@ class WebInterface(object):
                     else:
                         series = '%s (%s)' % (oi['ComicName'], year)
 
+                # Build article title from series, issues, and year (e.g., "Ghost Rider #9 (2022)")
+                # Note: c.series is aliased as 'filename' in SQL query
+                article_title = ''
+                try:
+                    ddl_series = oi['filename'] if oi['filename'] else ''  # c.series is aliased as filename
+                    ddl_issues = oi['issues'] if oi['issues'] else ''
+                    ddl_year = oi['year'] if oi['year'] else ''
+                    
+                    if ddl_series:
+                        article_title = ddl_series
+                        if ddl_issues:
+                            article_title += ' #' + str(ddl_issues)
+                        if ddl_year:
+                            article_title += ' (' + str(ddl_year) + ')'
+                except (KeyError, TypeError):
+                    pass
+                
                 resultlist.append({'series':       series,
                                    'issue':        issue,
                                    'queueid':      oi['id'],
                                    'volume':       None,
                                    'linktype':     oi['link_type'],
+                                   'article_title': article_title,
                                    'year':         year,
                                    'size':         oi['size'].strip(),
                                    'comicid':      oi['ComicID'],
@@ -4019,7 +4756,7 @@ class WebInterface(object):
             rows = filtered[iDisplayStart:(iDisplayStart + iDisplayLength)]
         else:
             rows = filtered
-        rows = [[row['series'], row['size'], row['progress'], row['status'], row['updated_date'], row['queueid'], row['issueid'], row['comicid'], row['linktype']] for row in rows]
+        rows = [[row['series'], row['size'], row['progress'], row['status'], row['updated_date'], row['queueid'], row['issueid'], row['comicid'], row['linktype'], row.get('article_title', '')] for row in rows]
         #rows = [{'comicid': row['comicid'], 'series': row['series'], 'size': row['size'], 'progress': row['progress'], 'status': row['status'], 'updated_date': row['updated_date']} for row in rows]
         #logger.info('rows: %s' % rows)
         return json.dumps({
@@ -4424,7 +5161,7 @@ class WebInterface(object):
                     DynamicName = v
                     if volume is None or volume == 'None':
                         logger.info('Removing ' + ComicName + ' from the Import list')
-                        myDB.action('DELETE from importresults WHERE DynamicName=? AND (Volume is NULL OR Volume="None")', [DynamicName])
+                        myDB.action("DELETE from importresults WHERE DynamicName=? AND (Volume is NULL OR Volume='None')", [DynamicName])
                     else:
                         logger.info('Removing ' + ComicName + ' [' + str(volume) + '] from the Import list')
                         myDB.action('DELETE from importresults WHERE DynamicName=? AND Volume=?', [DynamicName, volume])
@@ -5148,12 +5885,14 @@ class WebInterface(object):
             for MSCheck in AMS:
                 thischk = myDB.select('SELECT * FROM storyarcs WHERE ComicName=? AND SeriesYear=?', [MSCheck['ComicName'], MSCheck['SeriesYear']])
                 for tchk in thischk:
-                    if helpers.issuedigits(tchk['IssueNumber']) > helpers.issuedigits(MSCheck['highvalue']):
+                    issueNumber_asInt = helpers.issue_number_parser(tchk['IssueNumber']).asInt
+
+                    if issueNumber_asInt > helpers.issue_number_parser(MSCheck['highvalue']).asInt:
                         for key in list(MSCheck.keys()):
                             if key == "highvalue":
                                 MSCheck[key] = tchk['IssueNumber']
 
-                    if helpers.issuedigits(tchk['IssueNumber']) < helpers.issuedigits(MSCheck['lowvalue']):
+                    if issueNumber_asInt < helpers.issue_number_parser(MSCheck['lowvalue']).asInt:
                         for key in list(MSCheck.keys()):
                             if key == "lowvalue":
                                 MSCheck[key] = tchk['IssueNumber']
@@ -5349,7 +6088,7 @@ class WebInterface(object):
                             logger.fdebug("issue converted to %s" % GCDissue)
                             isschk = myDB.selectone("SELECT * FROM issues WHERE Issue_Number=? AND ComicID=?", [str(GCDissue), comic['ComicID']]).fetchone()
                         else:
-                            issue_int = helpers.issuedigits(arc['IssueNumber'])
+                            issue_int = helpers.issue_number_parser(arc['IssueNumber']).asInt
                             logger.fdebug('int_issue = %s' % issue_int)
                             if mylar.CONFIG.ANNUALS_ON and 'annual' in arc['ComicName'].lower():
                                 logger.fdebug('annual checking: %s -- %s' % (issue_int, comic['ComicID']))
@@ -5442,9 +6181,9 @@ class WebInterface(object):
                             if temploc:
                                 temploc = temploc.replace('_', ' ')
                             else:
-                                logger.debug('could not parse issue number: %r', tmpfc)
-                            fcdigit = helpers.issuedigits(arc['IssueNumber'])
-                            int_iss = helpers.issuedigits(temploc)
+                                logger.debug('could not parse issue number: %r', tmpfc)                                
+                            fcdigit = helpers.issue_number_parser(arc['IssueNumber']).asInt
+                            int_iss = helpers.issue_number_parser(temploc).asInt
                             if int_iss == fcdigit:
                                 logger.fdebug('%s Issue #%s already present in StoryArc directory' % (arc['ComicName'], arc['IssueNumber']))
                                 #update storyarcs db to reflect status.
@@ -5495,7 +6234,7 @@ class WebInterface(object):
             for m_arc in arc_match:
                 #now we cycle through the issues looking for a match.
                 if m_arc['match_annual']:
-                    issue = myDB.selectone("SELECT a.Issue_Number, a.Status, a.IssueID, a.ComicName, a.IssueDate, a.Location, b.readingorder FROM annuals AS a INNER JOIN storyarcs AS b ON a.comicid = b.comicid where a.comicid=? and a.issue_number=? and a.issueid=?", [m_arc['match_id'], m_arc['match_issue'], m_arc['match_issueid']]).fetchone()
+                    issue = myDB.selectone("SELECT a.Issue_Number, a.Status, a.IssueID, a.ComicName, a.IssueDate, a.Location, b.readingorder FROM annuals AS a INNER JOIN storyarcs AS b ON a.releasecomicid = b.comicid where a.comicid=? and a.issue_number=? and a.issueid=?", [m_arc['match_id'], m_arc['match_issue'], m_arc['match_issueid']]).fetchone()
                 else:
                     issue = myDB.selectone("SELECT a.Issue_Number, a.Status, a.IssueID, a.ComicName, a.IssueDate, a.Location, b.readingorder FROM issues AS a INNER JOIN storyarcs AS b ON a.comicid = b.comicid where a.comicid=? and a.issue_number=?", [m_arc['match_id'], m_arc['match_issue']]).fetchone()
                 if issue is None: pass
@@ -6158,7 +6897,7 @@ class WebInterface(object):
             logname = ComicName + '[' + str(volume) + ']'
         logger.info("Removing import data for Comic: " + logname)
         if volume is None or volume == 'None':
-            myDB.action('DELETE from importresults WHERE DynamicName=? AND Status=? AND (Volume is NULL OR Volume="None")', [DynamicName, Status])
+            myDB.action("DELETE from importresults WHERE DynamicName=? AND Status=? AND (Volume is NULL OR Volume='None')", [DynamicName, Status])
         else:
             myDB.action('DELETE from importresults WHERE DynamicName=? AND Volume=? AND Status=?', [DynamicName, volume, Status])
         raise cherrypy.HTTPRedirect("importResults")
@@ -6318,16 +7057,16 @@ class WebInterface(object):
                                     if result['ComicYear'] != "0000" and result['ComicYear'] is not None:
                                         yearRANGE.append(str(result['ComicYear']))
                                         yearTOP = str(result['ComicYear'])
-                                getiss_num = helpers.issuedigits(getiss)
-                                miniss_num = helpers.issuedigits(minISSUE)
-                                startiss_num = helpers.issuedigits(startISSUE)
+                                getiss_num = helpers.issue_number_parser(getiss).asInt
+                                miniss_num = helpers.issue_number_parser(minISSUE).asInt
+                                startiss_num = helpers.issue_number_parser(startISSUE).asInt
                                 if int(getiss_num) > int(miniss_num):
                                     logger.fdebug('Minimum issue now set to : %s - it was %s' % (getiss, minISSUE))
                                     minISSUE = getiss
                                 if int(getiss_num) < int(startiss_num):
                                     logger.fdebug('Start issue now set to : %s - it was %s' % (getiss, startISSUE))
                                     startISSUE = str(getiss)
-                                    if helpers.issuedigits(startISSUE) == 1000 and result['ComicYear'] is not None:  # if it's an issue #1, get the year and assume that's the start.
+                                    if helpers.issue_number_parser(startISSUE).asInt == helpers.issue_number_to_int(1,None) and result['ComicYear'] is not None:  # if it's an issue #1, get the year and assume that's the start.
                                         startyear = result['ComicYear']
 
                 #taking this outside of the transaction in an attempt to stop db locking.
@@ -6342,7 +7081,7 @@ class WebInterface(object):
                 if starttheyear is None:
                     if all([yearTOP != None, yearTOP != 'None']):
                         if int(str(yearTOP)) > 0:
-                            minni = helpers.issuedigits(minISSUE)
+                            minni = helpers.issue_number_parser(minISSUE).asInt
                             #logger.info(minni)
                             if minni < 1 or minni > 999999999:
                                 maxyear = int(str(yearTOP))
@@ -6752,6 +7491,8 @@ class WebInterface(object):
                     "http_port": mylar.CONFIG.HTTP_PORT,
                     "http_root": mylar.CONFIG.HTTP_ROOT,
                     "http_pass": mylar.CONFIG.HTTP_PASSWORD,
+                    "instance_name" : mylar.CONFIG.INSTANCE_NAME,
+                    "host_return" : mylar.CONFIG.HOST_RETURN,
                     "enable_https": helpers.checked(mylar.CONFIG.ENABLE_HTTPS),
                     "https_cert": mylar.CONFIG.HTTPS_CERT,
                     "https_key": mylar.CONFIG.HTTPS_KEY,
@@ -6839,6 +7580,14 @@ class WebInterface(object):
                     "extra_newznabs": sorted(mylar.CONFIG.EXTRA_NEWZNABS, key=itemgetter(5), reverse=True),
                     "enable_ddl": helpers.checked(mylar.CONFIG.ENABLE_DDL),
                     "enable_getcomics": helpers.checked(mylar.CONFIG.ENABLE_GETCOMICS),
+                    "enable_airdcpp": helpers.checked(mylar.CONFIG.ENABLE_AIRDCPP),
+                    "airdcpp_host": mylar.CONFIG.AIRDCPP_HOST,
+                    "airdcpp_username": mylar.CONFIG.AIRDCPP_USERNAME,
+                    "airdcpp_password": mylar.CONFIG.AIRDCPP_PASSWORD,
+                    "airdcpp_download_dir": mylar.CONFIG.AIRDCPP_DOWNLOAD_DIR,
+                    "airdcpp_hubs": mylar.CONFIG.AIRDCPP_HUBS,
+                    "airdcpp_announce_hub": mylar.CONFIG.AIRDCPP_ANNOUNCE_HUB,
+                    "airdcpp_announce_bots": mylar.CONFIG.AIRDCPP_ANNOUNCE_BOTS,
                     "ddl_prefer_upscaled": helpers.checked(mylar.CONFIG.DDL_PREFER_UPSCALED),
                     "enable_external_server": helpers.checked(mylar.CONFIG.ENABLE_EXTERNAL_SERVER),
                     "external_server": mylar.CONFIG.EXTERNAL_SERVER,
@@ -7330,7 +8079,7 @@ class WebInterface(object):
                            'prowl_enabled', 'prowl_onsnatch', 'pushover_enabled', 'pushover_onsnatch', 'pushover_image', 'mattermost_enabled', 'mattermost_onsnatch', 'boxcar_enabled',
                            'boxcar_onsnatch', 'pushbullet_enabled', 'pushbullet_onsnatch', 'telegram_enabled', 'telegram_onsnatch', 'telegram_image', 'discord_enabled', 'discord_onsnatch', 'slack_enabled', 'slack_onsnatch',
                            'email_enabled', 'email_enc', 'email_ongrab', 'email_onpost', 'gotify_enabled', 'gotify_server_url', 'gotify_token', 'gotify_onsnatch', 'opds_enable', 'opds_authentication', 'opds_metainfo', 'opds_pagesize', 'enable_ddl',
-                           'enable_getcomics', 'enable_external_server', 'ddl_prefer_upscaled', 'deluge_pause'] #enable_public
+                           'enable_getcomics', 'enable_airdcpp', 'enable_external_server', 'ddl_prefer_upscaled', 'deluge_pause'] #enable_public
 
         for checked_config in checked_configs:
             if checked_config not in kwargs:
@@ -7507,6 +8256,96 @@ class WebInterface(object):
         return json.dumps({"status": True, "message": "Successfully verified API Key.", "version": str(version)})
 
     SABtest.exposed = True
+
+    def AirDCPPtest(self, airdcpphost=None, airdcppusername=None, airdcpppassword=None):
+        if airdcpphost is None:
+            airdcpphost = mylar.CONFIG.AIRDCPP_HOST
+        if airdcppusername is None:
+            airdcppusername = mylar.CONFIG.AIRDCPP_USERNAME
+        if airdcpppassword is None:
+            airdcpppassword = mylar.CONFIG.AIRDCPP_PASSWORD
+
+        logger.fdebug('Now attempting to test AirDC++ connection')
+        logger.fdebug('testing connection to AirDC++ @ ' + airdcpphost)
+
+        if not airdcpphost.endswith('/'):
+            airdcpphost = airdcpphost + '/'
+
+        api_url = airdcpphost
+        if not api_url.endswith('api/v1'):
+            api_url += 'api/v1'
+
+        query_url = f"{api_url}/system/system_info"
+
+        if airdcpphost.startswith('https'):
+            verify = True
+        else:
+            verify = False
+
+        version = 'Unknown'
+        try:
+            session = requests.Session()
+            if airdcppusername and airdcpppassword:
+                session.auth = (airdcppusername, airdcpppassword)
+
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/88.0.4324.182 Safari/537.36'
+            }
+
+            r = session.get(query_url, headers=headers, verify=verify, timeout=30)
+        except Exception as e:
+            logger.warn('Error fetching data from %s: %s' % (query_url, e))
+            if requests.exceptions.SSLError:
+                logger.warn(
+                    'Cannot verify ssl certificate. Attempting to authenticate with no ssl-certificate verification.')
+                try:
+                    from requests.packages.urllib3 import disable_warnings
+                    disable_warnings()
+                except:
+                    logger.warn('Unable to disable https warnings. Expect some spam if using https providers.')
+
+                verify = False
+
+                try:
+                    session = requests.Session()
+                    if airdcppusername and airdcpppassword:
+                        session.auth = (airdcppusername, airdcpppassword)
+
+                    r = session.get(query_url, headers=headers, verify=verify, timeout=30)
+                except Exception as e:
+                    logger.warn('Error fetching data from %s: %s' % (airdcpphost, e))
+                    return json.dumps(
+                        {"status": False, "message": "Unable to retrieve data from AirDC++.", "version": str(version)})
+            else:
+                return json.dumps(
+                    {"status": False, "message": "Unable to retrieve data from AirDC++.", "version": str(version)})
+
+        logger.fdebug('status code: ' + str(r.status_code))
+
+        if str(r.status_code) != '200':
+            logger.warn('Unable to properly query AirDC++ @' + airdcpphost + ' [Status Code returned: ' + str(
+                r.status_code) + ']')
+            return json.dumps(
+                {"status": False, "message": "Invalid credentials or connection error.", "version": str(version)})
+        else:
+            data = r.json()
+            try:
+                # Try to extract version from the response
+                version = data.get('client_version', 'Unknown')
+                logger.info('AirDC++ version: %s' % version)
+
+                # Save the version to config
+                mylar.CONFIG.AIRDCPP_VERSION = version
+                mylar.CONFIG.writeconfig(values={'airdcpp_version': version})
+
+                return json.dumps(
+                    {"status": True, "message": "Successfully connected to AirDC++.", "version": str(version)})
+            except Exception as e:
+                logger.error('Error parsing AirDC++ response: %s' % e)
+                return json.dumps(
+                    {"status": False, "message": "Error parsing AirDC++ response.", "version": str(version)})
+
+    AirDCPPtest.exposed = True
 
     def NZBGet_test(self, nzbhost=None, nzbport=None, nzbusername=None, nzbpassword=None, nzbsub=None):
         if any([nzbhost is None, nzbhost == 'None']):
@@ -8651,7 +9490,7 @@ class WebInterface(object):
 
     def check_ActiveDDL(self):
          myDB = db.DBConnection()
-         active = myDB.selectone("SELECT * FROM DDL_INFO WHERE STATUS = 'Downloading'").fetchone()
+         active = myDB.selectone("SELECT * FROM DDL_INFO WHERE STATUS = 'Downloading' ORDER BY updated_date DESC, id DESC").fetchone()
          if active is None:
              return json.dumps({'status':   'There are no active downloads currently being attended to',
                                 'percent':   0,
@@ -8753,7 +9592,7 @@ class WebInterface(object):
                 try:
                     x = float(weekly['ISSUE'])
                 except ValueError as e:
-                    if any(ext in weekly['ISSUE'].upper() for ext in mylar.ISSUE_EXCEPTIONS):
+                    if helpers.issueExceptionCheck(weekly['ISSUE'], full_match=False):
                         x = weekly['ISSUE']
 
                 if x is not None:
@@ -9462,7 +10301,7 @@ class WebInterface(object):
                 myDB.action("DELETE FROM annuals WHERE ComicID=?", [comicid])
             myDB.action('DELETE from upcoming WHERE ComicID=?', [comicid])
             myDB.action('DELETE from readlist WHERE ComicID=?', [comicid])
-            myDB.action('UPDATE weekly SET Status="Skipped" WHERE ComicID=? AND Status="Wanted"', [comicid])
+            myDB.action("UPDATE weekly SET Status='Skipped' WHERE ComicID=? AND Status='Wanted'", [comicid])
             warnings = 0
             if delete_dir:
                 logger.fdebug('Remove directory on series removal enabled.')
@@ -9521,6 +10360,7 @@ class WebInterface(object):
         issuesonly = True if issuesonly == 'true' else False
 
         results = []
+        warnings = set()
 
         try:
             books = cblRoot.findall(".//Book")
@@ -9568,25 +10408,27 @@ class WebInterface(object):
                     if iss_exists:
                         iss_status = issue['Status']
                         
-                        match iss_status:
-                            case 'Downloaded' | 'Wanted' | 'Snatched' | 'Failed':
-                                action_text = 'No action needed'
-                            case 'Archived':
-                                if ignorearchived :
-                                    action_text = 'No action needed' 
-                                else:
-                                    action_text = "Mark issue as Wanted"
-                                    missing_issue_count += 1
-                            case _:
+                        if iss_status in ['Downloaded', 'Wanted', 'Snatched', 'Failed']:
+                            action_text = 'No action needed'
+                        elif iss_status == 'Archived':
+                            if ignorearchived :
+                                action_text = 'No action needed' 
+                            else:
+                                action_text = "Mark issue as Wanted"
                                 missing_issue_count += 1
-                                action_text = 'Mark issue as Wanted'
+                        else:
+                            missing_issue_count += 1
+                            action_text = 'Mark issue as Wanted'
+                    else:
+                        action_text = f'Warning: Could not find issue {cvIssueID} in volume {cvSeriesID}.'
+                        missing_issue_count += 1
+                        warnings.add('Volumes in Mylar do not recognise some Issue IDs.  This may be due to a list error.')
                 else:
                     iss_exists = False
                     iss_status = 'Missing'
                     missing_issue_count += 1
                     action_text = 'Add volume & mark issue as Wanted'
                 
-
                 # List to return to import table display: Entry, Volume, Issue, Status, Action
                 results.append([issueIndex, 
                                 f'<a href="{"comicDetails?ComicID=" if vol_exists else "https://comicvine.com/volume/4050-"}{cvSeriesID}" target="{"_self" if vol_exists else "_blank"}">{volumeName} ({volumeYear})</a>',
@@ -9598,9 +10440,12 @@ class WebInterface(object):
             return json.dumps({'status': 'error', 'message' : f'Error processing CBL file.  Unhandled Exception: {str(e)}'})
         
         if newvol_count > 200:
-            warning_text = 'Attempting to add more than 200 series may cause problems due to CV API limits.  Consider breaking up this list into smaller parts.'
+            warnings.add('Attempting to add more than 200 series may cause problems due to CV API limits.  Consider breaking up this list into smaller parts.')
         elif newvol_count > 100:
-            warning_text = 'Attempting to add a lot of new series.  Consider your CV API limits before triggering the import.'
+            warnings.add('Attempting to add a lot of new series.  Consider your CV API limits before triggering the import.')
+
+        if len(warnings) > 0:
+            warning_text = '<br >'.join(warnings)
         else:
             warning_text = ''
 
@@ -9627,7 +10472,7 @@ class WebInterface(object):
 
         logger.info(f'Processing CBL File {cblFile.filename} to set up volumes and wanted issues')
         warning_text = ''
-        warnings = {}
+        warnings = set()
 
         try:
             cblXML = ET.parse(cblFile.file)
@@ -9692,18 +10537,17 @@ class WebInterface(object):
                         warnings.add(f'Some issues of existing volumes could not be found.  Check logs for details.')
                     else:
                         wantissue = False
-                        match issue['Status']:
-                            case 'Downloaded' | 'Wanted' | 'Snatched' | 'Failed':
-                                logger.fdebug(f'CBL File: Volume "{volumeName} ({volumeYear})" exists, Issue #{issueNumber} already Wanted')
+                        if issue['Status'] in ['Downloaded', 'Wanted', 'Snatched', 'Failed']:
+                            logger.fdebug(f'CBL File: Volume "{volumeName} ({volumeYear})" exists, Issue #{issueNumber} already Wanted')
+                            counters['issues_skipped'] += 1
+                        elif issue['Status'] == 'Archived':
+                            if ignorearchived :
+                                logger.fdebug(f'CBL File: Volume "{volumeName} ({volumeYear})" exists, Issue #{issueNumber} Archived.  Ignoring')
                                 counters['issues_skipped'] += 1
-                            case 'Archived':
-                                if ignorearchived :
-                                    logger.fdebug(f'CBL File: Volume "{volumeName} ({volumeYear})" exists, Issue #{issueNumber} Archived.  Ignoring')
-                                    counters['issues_skipped'] += 1
-                                else:
-                                    wantissue = True
-                            case _:
+                            else:
                                 wantissue = True
+                        else:
+                            wantissue = True
                         
                         if wantissue:
                             logger.fdebug(f'CBL File: Volume "{volumeName} ({volumeYear})" already exists, Issue #{issueNumber} to be marked as Wanted')

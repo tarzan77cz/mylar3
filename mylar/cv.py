@@ -15,6 +15,7 @@
 import re
 import time
 import pytz
+import traceback
 from mylar import db, logger, helpers
 import mylar
 from bs4 import BeautifulSoup as Soup
@@ -81,30 +82,80 @@ def pulldetails(comicid, rtype, issueid=None, offset=1, arclist=None, comicidlis
         else:
             return False
 
-    mylar.BACKENDSTATUS_CV = 'up'
+    # Check status code first
+    if r.status_code != 200:
+        logger.warn('[WARNING] ComicVine returned status code %s. This usually indicates a rate limit or server issue.' % r.status_code)
+        mylar.BACKENDSTATUS_CV = 'down'
+        return None
+    
     #logger.fdebug('cv status code : ' + str(r.status_code))
     #logger.fdebug('rtype: %s' % rtype)
+    
+    # Debug: Log full response for comic type requests
+    if rtype == 'comic':
+        try:
+            logger.fdebug('[CV-DEBUG] ComicVine API response for comicid %s:' % comicid)
+            logger.fdebug('[CV-DEBUG] Status code: %s' % r.status_code)
+            logger.fdebug('[CV-DEBUG] Response length: %s bytes' % len(r.content))
+            # Log first 2000 chars of response for debugging - safely decode
+            try:
+                response_preview = r.content.decode('utf-8', errors='ignore')[:2000]
+                # Remove any non-printable characters that might cause issues
+                response_preview = ''.join(c for c in response_preview if c.isprintable() or c in '\n\r\t')
+                logger.fdebug('[CV-DEBUG] Response preview (first 2000 chars):\n%s' % response_preview)
+            except Exception as decode_err:
+                logger.warn('[CV-DEBUG] Error decoding response preview: %s' % decode_err)
+                # Fallback: log as repr
+                logger.fdebug('[CV-DEBUG] Response preview (repr, first 500 chars):\n%s' % repr(r.content[:500]))
+            if len(r.content) > 2000:
+                logger.fdebug('[CV-DEBUG] ... (response truncated, total %s bytes)' % len(r.content))
+        except Exception as e:
+            logger.warn('[CV-DEBUG] Error logging response: %s' % e)
+    
     try:
         if any([rtype == 'single_issue', rtype == 'db_updater']):
             dom = r.json()
             #logger.info('cv_data returned: %s' % dom)
         else:
             dom = parseString(r.content)
+            # Additional validation for comic type
+            if rtype == 'comic':
+                # Check if we got valid XML structure
+                results = dom.getElementsByTagName('results')
+                if len(results) == 0:
+                    logger.error('[CV-DEBUG] No results element found in ComicVine XML response for comicid: %s' % comicid)
+                    logger.fdebug('[CV-DEBUG] Full XML response:\n%s' % r.content.decode('utf-8', errors='ignore'))
+                    mylar.BACKENDSTATUS_CV = 'down'
+                    return None
     except ExpatError:
-        if '<title>Abnormal Traffic Detected' in r.content.decode('utf-8'):
+        # Try to safely decode the content to check for error messages
+        try:
+            # Try UTF-8 first
+            content_str = r.content.decode('utf-8', errors='ignore')
+        except (UnicodeDecodeError, AttributeError):
+            # If UTF-8 fails, try latin-1 as fallback (it can decode any byte)
+            try:
+                content_str = r.content.decode('latin-1', errors='ignore')
+            except:
+                content_str = str(r.content)[:500]  # Last resort: convert to string
+        
+        if '<title>Abnormal Traffic Detected' in content_str or 'Abnormal Traffic Detected' in content_str:
             logger.error('ComicVine has banned this server\'s IP address because it exceeded the API rate limit.')
         else:
             logger.warn('[WARNING] ComicVine is not responding correctly at the moment. This is usually due to some problems on their end. If you re-try things again in a few moments, things might work')
+            logger.fdebug('[CV-DEBUG] ComicVine response (status: %s, length: %s bytes):\n%s' % (r.status_code, len(r.content), content_str[:2000]))
             mylar.BACKENDSTATUS_CV = 'down'
-        return
+        return None
     except Exception as e:
         if all(['Expecting value: line 1 column 1' in str(e), rtype == 'db_updater']):
             return False
         else:
             logger.warn('[ERROR] Error returned from CV: %s [%s]' % (e, r.content))
             mylar.BACKENDSTATUS_CV = 'down'
-            return
+            return None
     else:
+        # Only set to 'up' after successful parsing
+        mylar.BACKENDSTATUS_CV = 'up'
         return dom
 
 def getComic(comicid, rtype, issueid=None, arc=None, arcid=None, arclist=None, comicidlist=None, dateinfo=None, series=False):
@@ -300,14 +351,37 @@ def GetComicInfo(comicid, dom, safechk=None, series=False):
         safechk = 1
     elif safechk > 4:
         logger.error('Unable to add / refresh the series due to inablity to retrieve data from ComicVine. You might want to try abit later and/or make sure ComicVine is up.')
-        return
+        return None
+    
+    # Validate that we have a valid DOM object
+    if dom is None:
+        logger.error('GetComicInfo: dom is None for comicid: %s' % comicid)
+        return None
+    
+    # Debug: Log what we received
+    try:
+        logger.fdebug('[CV-DEBUG] GetComicInfo called for comicid: %s' % comicid)
+        # Check for results element
+        results = dom.getElementsByTagName('results')
+        if len(results) == 0:
+            logger.error('[CV-DEBUG] No results element in XML - invalid ComicVine response for comicid: %s' % comicid)
+            try:
+                xml_str = dom.toxml()[:1000] if hasattr(dom, 'toxml') else str(dom)[:1000]
+                logger.fdebug('[CV-DEBUG] XML structure:\n%s...' % xml_str)
+            except:
+                pass
+            return None
+    except Exception as e:
+        logger.error('Error validating ComicVine response: %s' % e)
+        return None
+    
     #comicvine isn't as up-to-date with issue counts..
     #so this can get really buggered, really fast.
     try:
        tracks = dom.getElementsByTagName('issue')
-    except:
-       logger.error('Unable to add / refresh the series due to inablity to retrieve data from ComicVine. You might want to try abit later and/or make sure ComicVine is up.')
-       return
+    except Exception as e:
+       logger.error('Unable to get issues from ComicVine response: %s' % e)
+       return None
     try:
         cntit = dom.getElementsByTagName('count_of_issues')[0].firstChild.wholeText
     except:
@@ -334,14 +408,16 @@ def GetComicInfo(comicid, dom, safechk=None, series=False):
         names = len(dom.getElementsByTagName('name'))
         n = 0
         comic['ComicPublisher'] = 'Unknown'   #set this to a default value here so that it will carry through properly
+        comic_name_found = False
         while (n < names):
             if dom.getElementsByTagName('name')[n].parentNode.nodeName == 'results':
                 try:
                     comic['ComicName'] = dom.getElementsByTagName('name')[n].firstChild.wholeText
                     comic['ComicName'] = comic['ComicName'].strip()
+                    comic_name_found = True
                 except:
                     logger.error('There was a problem retrieving the given data from ComicVine. Ensure that www.comicvine.com is accessible AND that you have provided your OWN ComicVine API key.')
-                    return
+                    return None
 
             elif dom.getElementsByTagName('name')[n].parentNode.nodeName == 'publisher':
                 try:
@@ -350,11 +426,64 @@ def GetComicInfo(comicid, dom, safechk=None, series=False):
                     logger.error('error encountered: %s' % e)
                     comic['ComicPublisher'] = "Unknown"
             n += 1
+        
+        # If ComicName was not found, return None instead of incomplete dictionary
+        if not comic_name_found:
+            logger.error('ComicName not found in ComicVine response for comicid: %s. This usually indicates a rate limit or invalid response.' % comicid)
+            return None
     except:
         logger.warn('Something went wrong retrieving from ComicVine. Ensure your API is up-to-date and that comicvine is accessible')
-        return
+        return None
 
-    comic['FirstIssueID'] = dom.getElementsByTagName('id')[0].firstChild.wholeText
+    # Safely retrieve FirstIssueID - try multiple methods to find first_issue
+    try:
+        first_issue_id = None
+        
+        # Method 1: Try to find first_issue element directly
+        first_issue_elems = dom.getElementsByTagName('first_issue')
+        if len(first_issue_elems) > 0:
+            first_issue_elem = first_issue_elems[0]
+            issue_ids = first_issue_elem.getElementsByTagName('id')
+            if len(issue_ids) > 0:
+                first_issue_id = issue_ids[0].firstChild.wholeText
+                logger.fdebug('FirstIssueID found in first_issue element: %s' % first_issue_id)
+        
+        # Method 2: If not found, try the approach from mb.py - look through name elements
+        if first_issue_id is None:
+            totnames = len(dom.getElementsByTagName('name'))
+            n = 0
+            while (n < totnames):
+                name_elem = dom.getElementsByTagName('name')[n]
+                if name_elem.parentNode.nodeName == 'first_issue':
+                    # Find the id element within the same first_issue parent
+                    parent = name_elem.parentNode
+                    parent_ids = parent.getElementsByTagName('id')
+                    if len(parent_ids) > 0:
+                        first_issue_id = parent_ids[0].firstChild.wholeText
+                        logger.fdebug('FirstIssueID found via name element method: %s' % first_issue_id)
+                        break
+                n += 1
+        
+        # Method 3: Fallback - if first_issue not found, try to get first issue from issues list
+        if first_issue_id is None and trackcnt > 0:
+            try:
+                # Get the first issue from the issues list
+                first_issue_elem = tracks[0]
+                issue_ids = first_issue_elem.getElementsByTagName('id')
+                if len(issue_ids) > 0:
+                    first_issue_id = issue_ids[0].firstChild.wholeText
+                    logger.fdebug('FirstIssueID not found in first_issue element, using first issue from issues list: %s' % first_issue_id)
+            except Exception as e:
+                logger.warn('Unable to retrieve FirstIssueID from issues list: %s' % e)
+        
+        if first_issue_id is None:
+            logger.warn('Unable to retrieve FirstIssueID from ComicVine response. This may cause issues with series metadata.')
+            first_issue_id = 'None'
+        
+        comic['FirstIssueID'] = first_issue_id
+    except Exception as e:
+        logger.error('Error retrieving FirstIssueID: %s' % e)
+        comic['FirstIssueID'] = 'None'
 
     try:
         comic['ComicYear'] = dom.getElementsByTagName('start_year')[0].firstChild.wholeText
@@ -398,13 +527,40 @@ def GetComicInfo(comicid, dom, safechk=None, series=False):
         comic['incorrect_volume'] = givb['incorrect_volume']
 
     try:
-        comic['ComicURL'] = dom.getElementsByTagName('site_detail_url')[trackcnt].firstChild.wholeText
-    except:
-        #this should never be an exception. If it is, it's probably due to CV timing out - so let's sleep for abit then retry.
-        logger.warn('Unable to retrieve URL for volume. This is usually due to a timeout to CV, or going over the API. Retrying again in 10s.')
-        time.sleep(10)
-        safechk +=1
-        GetComicInfo(comicid, dom, safechk)
+        site_urls = dom.getElementsByTagName('site_detail_url')
+        if len(site_urls) > 0:
+            # Find site_detail_url at results (volume) level, not issue level
+            # XML response can contain multiple site_detail_url elements (one for volume, one for each issue)
+            volume_url = None
+            for url_elem in site_urls:
+                if url_elem.parentNode.nodeName == 'results':
+                    volume_url = url_elem.firstChild.wholeText
+                    break
+            
+            if volume_url:
+                comic['ComicURL'] = volume_url
+            else:
+                # Fallback: construct volume URL from comicid
+                # Ensure comicid has the correct prefix
+                vol_id = comicid
+                if not vol_id.startswith('4050-'):
+                    vol_id = '4050-' + str(vol_id)
+                comic['ComicURL'] = 'https://comicvine.gamespot.com/volume/' + str(vol_id) + '/'
+                logger.warn('Could not find volume-level site_detail_url for comicid: %s, constructed URL: %s' % (comicid, comic['ComicURL']))
+        else:
+            # Construct volume URL from comicid if not found
+            vol_id = comicid
+            if not vol_id.startswith('4050-'):
+                vol_id = '4050-' + str(vol_id)
+            comic['ComicURL'] = 'https://comicvine.gamespot.com/volume/' + str(vol_id) + '/'
+            logger.warn('No site_detail_url found in ComicVine response for comicid: %s, constructed URL: %s' % (comicid, comic['ComicURL']))
+    except Exception as e:
+        logger.warn('Unable to retrieve URL for volume: %s. This is usually due to a timeout to CV, or going over the API.' % e)
+        # Construct volume URL from comicid as fallback
+        vol_id = comicid
+        if not vol_id.startswith('4050-'):
+            vol_id = '4050-' + str(vol_id)
+        comic['ComicURL'] = 'https://comicvine.gamespot.com/volume/' + str(vol_id) + '/'
 
 
     try:
@@ -499,7 +655,16 @@ def GetComicInfo(comicid, dom, safechk=None, series=False):
     if vari == "yes":
         comic['ComicIssues'] = str(cntit)
     else:
-        comic['ComicIssues'] = dom.getElementsByTagName('count_of_issues')[0].firstChild.wholeText
+        try:
+            count_issues = dom.getElementsByTagName('count_of_issues')
+            if len(count_issues) > 0:
+                comic['ComicIssues'] = count_issues[0].firstChild.wholeText
+            else:
+                logger.warn('No count_of_issues found in ComicVine response, using trackcnt: %s' % trackcnt)
+                comic['ComicIssues'] = str(trackcnt)
+        except Exception as e:
+            logger.warn('Error retrieving count_of_issues: %s, using trackcnt: %s' % (e, trackcnt))
+            comic['ComicIssues'] = str(trackcnt)
 
     try:
         comic['ComicImage'] = dom.getElementsByTagName('super_url')[0].firstChild.wholeText
@@ -528,9 +693,38 @@ def GetComicInfo(comicid, dom, safechk=None, series=False):
     return comic
 
 def GetIssuesInfo(comicid, dom, arcid=None):
-    subtracks = dom.getElementsByTagName('issue')
+    logger.fdebug('[GetIssuesInfo] Starting - comicid: %s, arcid: %s' % (comicid, arcid))
+    
+    try:
+        subtracks = dom.getElementsByTagName('issue')
+        logger.fdebug('[GetIssuesInfo] Found %s issue elements in DOM' % len(subtracks))
+    except Exception as e:
+        logger.error('[GetIssuesInfo] Error getting issue elements: %s' % e)
+        logger.fdebug('[GetIssuesInfo] Traceback: %s' % traceback.format_exc())
+        return [], '2099-00-00'
+    
     if not mylar.CONFIG.CV_ONLY:
-        cntiss = dom.getElementsByTagName('count_of_issues')[0].firstChild.wholeText
+        try:
+            count_elem = dom.getElementsByTagName('count_of_issues')
+            logger.fdebug('[GetIssuesInfo] count_of_issues elements found: %s' % len(count_elem))
+            if count_elem and len(count_elem) > 0:
+                if count_elem[0].firstChild is not None:
+                    cntiss = count_elem[0].firstChild.wholeText
+                    logger.fdebug('[GetIssuesInfo] count_of_issues value from CV: %s' % cntiss)
+                else:
+                    cntiss = len(subtracks)
+                    logger.warn('[GetIssuesInfo] count_of_issues firstChild is None, using actual count: %s' % cntiss)
+            else:
+                cntiss = len(subtracks)
+                logger.warn('[GetIssuesInfo] count_of_issues element not found, using actual count: %s' % cntiss)
+        except (IndexError, AttributeError) as e:
+            cntiss = len(subtracks)
+            logger.warn('[GetIssuesInfo] Error accessing count_of_issues, using actual count: %s (error: %s)' % (cntiss, e))
+        except Exception as e:
+            cntiss = len(subtracks)
+            logger.error('[GetIssuesInfo] Unexpected error getting count_of_issues: %s, using actual count: %s' % (e, cntiss))
+            logger.fdebug('[GetIssuesInfo] Traceback: %s' % traceback.format_exc())
+        
         logger.fdebug("issues I've counted: " + str(len(subtracks)))
         logger.fdebug("issues CV says it has: " + str(int(cntiss)))
 
@@ -538,94 +732,148 @@ def GetIssuesInfo(comicid, dom, arcid=None):
             logger.fdebug("CV's count is wrong, I counted different...going with my count for physicals" + str(len(subtracks)))
             cntiss = len(subtracks) # assume count of issues is wrong, go with ACTUAL physical api count
         cntiss = int(cntiss)
-        n = cntiss -1
-    else:
-        n = int(len(subtracks))
+    
     tempissue = {}
     issuech = []
     firstdate = '2099-00-00'
-    for subtrack in subtracks:
-        if not mylar.CONFIG.CV_ONLY:
-            if (dom.getElementsByTagName('name')[n].firstChild) is not None:
-                issue['Issue_Name'] = dom.getElementsByTagName('name')[n].firstChild.wholeText
+    
+    logger.fdebug('[GetIssuesInfo] Starting to process %s issues' % len(subtracks))
+    
+    for idx, subtrack in enumerate(subtracks):
+        try:
+            logger.fdebug('[GetIssuesInfo] Processing issue %s/%s' % (idx + 1, len(subtracks)))
+            
+            if not mylar.CONFIG.CV_ONLY:
+                issue = {}
+                # Use the current subtrack element instead of dom.getElementsByTagName with fixed index
+                try:
+                    name_elem = subtrack.getElementsByTagName('name')
+                    if name_elem and len(name_elem) > 0 and name_elem[0].firstChild is not None:
+                        issue['Issue_Name'] = name_elem[0].firstChild.wholeText
+                    else:
+                        issue['Issue_Name'] = 'None'
+                except (IndexError, AttributeError) as e:
+                    logger.fdebug('[GetIssuesInfo] Error getting Issue_Name for issue %s: %s' % (idx, e))
+                    issue['Issue_Name'] = 'None'
+
+                try:
+                    id_elem = subtrack.getElementsByTagName('id')
+                    if id_elem and len(id_elem) > 0 and id_elem[0].firstChild is not None:
+                        issue['Issue_ID'] = id_elem[0].firstChild.wholeText
+                    else:
+                        issue['Issue_ID'] = 'None'
+                except (IndexError, AttributeError) as e:
+                    logger.fdebug('[GetIssuesInfo] Error getting Issue_ID for issue %s: %s' % (idx, e))
+                    issue['Issue_ID'] = 'None'
+
+                try:
+                    issue_num_elem = subtrack.getElementsByTagName('issue_number')
+                    if issue_num_elem and len(issue_num_elem) > 0 and issue_num_elem[0].firstChild is not None:
+                        issue['Issue_Number'] = issue_num_elem[0].firstChild.wholeText
+                    else:
+                        issue['Issue_Number'] = 'None'
+                except (IndexError, AttributeError) as e:
+                    logger.fdebug('[GetIssuesInfo] Error getting Issue_Number for issue %s: %s' % (idx, e))
+                    issue['Issue_Number'] = 'None'
+
+                logger.fdebug('[GetIssuesInfo] Issue %s: ID=%s, Number=%s, Name=%s' % (idx, issue.get('Issue_ID', 'N/A'), issue.get('Issue_Number', 'N/A'), issue.get('Issue_Name', 'N/A')[:50]))
+
+                issuech.append({
+                    'Issue_ID':                issue['Issue_ID'],
+                    'Issue_Number':            issue['Issue_Number'],
+                    'Issue_Name':              issue['Issue_Name']
+                    })
             else:
-                issue['Issue_Name'] = 'None'
+                try:
+                    totnames = len(subtrack.getElementsByTagName('name'))
+                    tot = 0
+                    while (tot < totnames):
+                        if subtrack.getElementsByTagName('name')[tot].parentNode.nodeName == 'volume':
+                            tempissue['ComicName'] = subtrack.getElementsByTagName('name')[tot].firstChild.wholeText
+                            tempissue['ComicName'] = tempissue['ComicName'].strip()
+                        elif subtrack.getElementsByTagName('name')[tot].parentNode.nodeName == 'issue':
+                            try:
+                                tempissue['Issue_Name'] = subtrack.getElementsByTagName('name')[tot].firstChild.wholeText
+                            except Exception as e:
+                                logger.fdebug('[GetIssuesInfo] Error getting Issue_Name from name element for issue %s: %s' % (idx, e))
+                                tempissue['Issue_Name'] = None
+                        tot += 1
+                except Exception as e:
+                    logger.fdebug('[GetIssuesInfo] Error processing names for issue %s: %s' % (idx, e))
+                    tempissue['ComicName'] = 'None'
 
-            issue['Issue_ID'] = dom.getElementsByTagName('id')[n].firstChild.wholeText
-            issue['Issue_Number'] = dom.getElementsByTagName('issue_number')[n].firstChild.wholeText
+                try:
+                    totids = len(subtrack.getElementsByTagName('id'))
+                    idt = 0
+                    while (idt < totids):
+                        if subtrack.getElementsByTagName('id')[idt].parentNode.nodeName == 'volume':
+                            tempissue['Comic_ID'] = subtrack.getElementsByTagName('id')[idt].firstChild.wholeText
+                        elif subtrack.getElementsByTagName('id')[idt].parentNode.nodeName == 'issue':
+                            tempissue['Issue_ID'] = subtrack.getElementsByTagName('id')[idt].firstChild.wholeText
+                        idt += 1
+                except Exception as e:
+                    logger.fdebug('[GetIssuesInfo] Error processing IDs for issue %s: %s' % (idx, e))
+                    tempissue['Issue_Name'] = 'None'
 
-            issuech.append({
-                'Issue_ID':                issue['Issue_ID'],
-                'Issue_Number':            issue['Issue_Number'],
-                'Issue_Name':              issue['Issue_Name']
-                })
-        else:
-            try:
-                totnames = len(subtrack.getElementsByTagName('name'))
-                tot = 0
-                while (tot < totnames):
-                    if subtrack.getElementsByTagName('name')[tot].parentNode.nodeName == 'volume':
-                        tempissue['ComicName'] = subtrack.getElementsByTagName('name')[tot].firstChild.wholeText
-                        tempissue['ComicName'] = tempissue['ComicName'].strip()
-                    elif subtrack.getElementsByTagName('name')[tot].parentNode.nodeName == 'issue':
-                        try:
-                            tempissue['Issue_Name'] = subtrack.getElementsByTagName('name')[tot].firstChild.wholeText
-                        except:
-                            tempissue['Issue_Name'] = None
-                    tot += 1
-            except:
-                tempissue['ComicName'] = 'None'
+                try:
+                    cover_date_elem = subtrack.getElementsByTagName('cover_date')
+                    if cover_date_elem and len(cover_date_elem) > 0 and cover_date_elem[0].firstChild is not None:
+                        tempissue['CoverDate'] = cover_date_elem[0].firstChild.wholeText
+                    else:
+                        tempissue['CoverDate'] = '0000-00-00'
+                except Exception as e:
+                    logger.fdebug('[GetIssuesInfo] Error getting CoverDate for issue %s: %s' % (idx, e))
+                    tempissue['CoverDate'] = '0000-00-00'
+                try:
+                    store_date_elem = subtrack.getElementsByTagName('store_date')
+                    if store_date_elem and len(store_date_elem) > 0 and store_date_elem[0].firstChild is not None:
+                        tempissue['StoreDate'] = store_date_elem[0].firstChild.wholeText
+                    else:
+                        tempissue['StoreDate'] = '0000-00-00'
+                except Exception as e:
+                    logger.fdebug('[GetIssuesInfo] Error getting StoreDate for issue %s: %s' % (idx, e))
+                    tempissue['StoreDate'] = '0000-00-00'
+                try:
+                    desc_elem = subtrack.getElementsByTagName('description')
+                    if desc_elem and len(desc_elem) > 0 and desc_elem[0].firstChild is not None:
+                        digital_desc = desc_elem[0].firstChild.wholeText
+                    else:
+                        digital_desc = None
+                except Exception as e:
+                    logger.fdebug('[GetIssuesInfo] Error getting description for issue %s: %s' % (idx, e))
+                    digital_desc = None
+                
+                if digital_desc:
+                    tempissue['DigitalDate'] = '0000-00-00'
+                    if all(['digital' in digital_desc.lower()[-90:], 'print' in digital_desc.lower()[-90:]]):
+                        #get the digital date of issue here...
+                        mff = mylar.filechecker.FileChecker()
+                        vlddate = mff.checkthedate(digital_desc[-90:], fulldate=True)
+                        #logger.fdebug('vlddate: %s' % vlddate)
+                        if vlddate:
+                            tempissue['DigitalDate'] = vlddate
+                else:
+                    tempissue['DigitalDate'] = '0000-00-00'
+                try:
+                    tempissue['Issue_Number'] = subtrack.getElementsByTagName('issue_number')[0].firstChild.wholeText
+                except Exception as e:
+                    logger.fdebug('[GetIssuesInfo] No Issue Number available for issue %s: %s' % (idx, e))
+                    logger.fdebug('No Issue Number available - Trade Paperbacks, Graphic Novels and Compendiums are not supported as of yet.')
+                else:
+                    tempissue['Issue_Number'] = tempissue['Issue_Number'].strip()
+                    if 'Issue #' in tempissue['Issue_Number']:
+                        tempissue['Issue_Number'] = re.sub('Issue #', '', tempissue['Issue_Number']).strip()
+                try:
+                    tempissue['ComicImage'] = subtrack.getElementsByTagName('small_url')[0].firstChild.wholeText
+                except Exception as e:
+                    logger.fdebug('[GetIssuesInfo] Error getting ComicImage for issue %s: %s' % (idx, e))
+                    tempissue['ComicImage'] = 'None'
 
-            try:
-                totids = len(subtrack.getElementsByTagName('id'))
-                idt = 0
-                while (idt < totids):
-                    if subtrack.getElementsByTagName('id')[idt].parentNode.nodeName == 'volume':
-                        tempissue['Comic_ID'] = subtrack.getElementsByTagName('id')[idt].firstChild.wholeText
-                    elif subtrack.getElementsByTagName('id')[idt].parentNode.nodeName == 'issue':
-                        tempissue['Issue_ID'] = subtrack.getElementsByTagName('id')[idt].firstChild.wholeText
-                    idt += 1
-            except:
-                tempissue['Issue_Name'] = 'None'
-
-            try:
-                tempissue['CoverDate'] = subtrack.getElementsByTagName('cover_date')[0].firstChild.wholeText
-            except:
-                tempissue['CoverDate'] = '0000-00-00'
-            try:
-                tempissue['StoreDate'] = subtrack.getElementsByTagName('store_date')[0].firstChild.wholeText
-            except:
-                tempissue['StoreDate'] = '0000-00-00'
-            try:
-                digital_desc = subtrack.getElementsByTagName('description')[0].firstChild.wholeText
-            except:
-                tempissue['DigitalDate'] = '0000-00-00'
-            else:
-                tempissue['DigitalDate'] = '0000-00-00'
-                if all(['digital' in digital_desc.lower()[-90:], 'print' in digital_desc.lower()[-90:]]):
-                    #get the digital date of issue here...
-                    mff = mylar.filechecker.FileChecker()
-                    vlddate = mff.checkthedate(digital_desc[-90:], fulldate=True)
-                    #logger.fdebug('vlddate: %s' % vlddate)
-                    if vlddate:
-                        tempissue['DigitalDate'] = vlddate
-            try:
-                tempissue['Issue_Number'] = subtrack.getElementsByTagName('issue_number')[0].firstChild.wholeText
-            except:
-                logger.fdebug('No Issue Number available - Trade Paperbacks, Graphic Novels and Compendiums are not supported as of yet.')
-            else:
-                tempissue['Issue_Number'] = tempissue['Issue_Number'].strip()
-                if 'Issue #' in tempissue['Issue_Number']:
-                    tempissue['Issue_Number'] = re.sub('Issue #', '', tempissue['Issue_Number']).strip()
-            try:
-                tempissue['ComicImage'] = subtrack.getElementsByTagName('small_url')[0].firstChild.wholeText
-            except:
-                tempissue['ComicImage'] = 'None'
-
-            try:
-                tempissue['ComicImageALT'] = subtrack.getElementsByTagName('medium_url')[0].firstChild.wholeText
-            except:
-                tempissue['ComicImageALT'] = 'None'
+                try:
+                    tempissue['ComicImageALT'] = subtrack.getElementsByTagName('medium_url')[0].firstChild.wholeText
+                except Exception as e:
+                    logger.fdebug('[GetIssuesInfo] Error getting ComicImageALT for issue %s: %s' % (idx, e))
+                    tempissue['ComicImageALT'] = 'None'
 
             if arcid is None:
                 issuech.append({
@@ -653,10 +901,15 @@ def GetIssuesInfo(comicid, dom, arcid=None):
                     'Issue_Name':              tempissue['Issue_Name']
                     })
 
-            if tempissue['CoverDate'] < firstdate and tempissue['CoverDate'] != '0000-00-00':
-                firstdate = tempissue['CoverDate']
-        n-= 1
+                if tempissue['CoverDate'] < firstdate and tempissue['CoverDate'] != '0000-00-00':
+                    firstdate = tempissue['CoverDate']
+        
+        except Exception as e:
+            logger.error('[GetIssuesInfo] Error processing issue %s: %s' % (idx, e))
+            logger.fdebug('[GetIssuesInfo] Traceback: %s' % traceback.format_exc())
+            continue
 
+    logger.fdebug('[GetIssuesInfo] Completed - returning %s issues, firstdate: %s' % (len(issuech), firstdate))
     #logger.fdebug('issue_info: %s' % issuech)
     #issue['firstdate'] = firstdate
     return issuech, firstdate
@@ -1137,109 +1390,117 @@ def get_imprint_volume_and_booktype(series, comicyear, publisher, firstissueid, 
     if series is True:
         # this is a really crappy way to do it - it works, but meh.
         try:
-            for k,v in mylar.PUBLISHER_IMPRINTS.items():
-                if k == 'publishers':
-                    for b in v:
-                        for d,e in b.items():
-                            for g in e:
-                                chkyear = False
-                                for f,h in g.items():
-                                    if f == 'name':
-                                        pubname = h
-                                    if f == 'publication_run' and chkyear is True:
-                                        pubrun = h
-                                        y = pubrun.find('-')
-                                        pub_start = pubrun[:y][:4].strip()
-                                        pub_start_month = pubrun[:y][pubrun.find('.')+1:].strip()
-                                        pub_end = pubrun[y+2:][:4].strip()
-                                        if len(pub_end) == 0 and len(pub_start) == 0:
-                                            chkyear = False
-                                            found = False
-                                            continue
-                                        elif len(pub_end) == 0:
-                                            pub_end = None
-                                            if int(comic['ComicYear']) <= int(pub_start[:4]):
-                                                logger.info('comic year of %s is prior to imprint publication date of %s' % (comic['ComicYear'], pub_start[:4]))
-                                                comic['ComicPublisher'] = None
-                                                comic['PublisherImprint'] = None
+            if mylar.PUBLISHER_IMPRINTS is None:
+                logger.warn('[get_imprint_volume_and_booktype] PUBLISHER_IMPRINTS is None, skipping imprint lookup')
+            else:
+                for k,v in mylar.PUBLISHER_IMPRINTS.items():
+                    if k == 'publishers':
+                        for b in v:
+                            for d,e in b.items():
+                                for g in e:
+                                    chkyear = False
+                                    for f,h in g.items():
+                                        if f == 'name':
+                                            pubname = h
+                                        if f == 'publication_run' and chkyear is True:
+                                            pubrun = h
+                                            y = pubrun.find('-')
+                                            pub_start = pubrun[:y][:4].strip()
+                                            pub_start_month = pubrun[:y][pubrun.find('.')+1:].strip()
+                                            pub_end = pubrun[y+2:][:4].strip()
+                                            if len(pub_end) == 0 and len(pub_start) == 0:
+                                                chkyear = False
                                                 found = False
-                                            else:
-                                                found = True
-                                        else:
-                                            if int(pub_end[:4]) > int(comic['ComicYear'])  > int(pub_start[:4]):
-                                                found = True
-                                            else:
-                                                pub_end_month = pubrun[y+2:][pubrun.find('.',y+2)+1:].strip()
-                                                if any([ int(pub_end[:4]) == int(comic['ComicYear']), int(pub_start[:4]) == int(comic['ComicYear']) ]):
-                                                    quick_chk = getComic(comicid=None, rtype='imprints_first', issueid=firstissueid)
-                                                    if quick_chk:
-                                                        cdate = None
-                                                        sdate = None
-                                                        #quick_chk['store_date'], quick_chk['cover_date']
-                                                        if quick_chk['cover_date'] and quick_chk['cover_date'] != '0000':
-                                                            cdate = quick_chk['cover_date'][5:7]
-                                                        if quick_chk['store_date'] and quick_chk['store_date'] != '0000':
-                                                            sdate = quick_chk['store_date'][5:7]
-
-                                                        if int(pub_end[:4]) == int(comic['ComicYear']):
-                                                            if cdate != None:
-                                                                end_month = cdate
-                                                            else:
-                                                                end_month = sdate
-                                                            if int(pub_end_month) <= int(end_month):
-                                                                logger.fdebug('[Year;%s] publication month of %s is before the end imprint date of %s' % (comic['ComicYear'], end_month, pub_end_month))
-                                                                found = True
-                                                            else:
-                                                                found = False
-
-                                                        elif int(pub_start[:4]) == int(comic['ComicYear']):
-                                                            if cdate != None:
-                                                                start_month = cdate
-                                                            else:
-                                                                start_month = sdate
-                                                            if int(pub_start_month) <= int(start_month):
-                                                                logger.fdebug('[Year:%s] issue publication month of %s is after the start imprint date of %s' % (comic['ComicYear'], start_month, pub_start_month))
-                                                                found = True
-                                                            else:
-                                                                found = False
-
-                                                else:
-                                                    logger.info('comic year of %s is not within the imprint publication date range of %s - %s' % (comic['ComicYear'], pub_start[:4], pub_end[:4]))
-                                                    comicPublisher = None
-                                                    publisherImprint = None
+                                                continue
+                                            elif len(pub_end) == 0:
+                                                pub_end = None
+                                                if int(comic['ComicYear']) <= int(pub_start[:4]):
+                                                    logger.info('comic year of %s is prior to imprint publication date of %s' % (comic['ComicYear'], pub_start[:4]))
+                                                    comic['ComicPublisher'] = None
+                                                    comic['PublisherImprint'] = None
                                                     found = False
-                                        chkyear = False
-
-                                    elif f == 'imprints' and h is not None:
-                                        # if we get here, it's an imprint of an imprint
-                                        for i in h:
-                                            if i['name'].lower() == comic['ComicPublisher'].lower():
-                                                logger.info('imprint matched: %s ---> %s' % (i['name'],h))
-                                                comicPublisher = pubname
-                                                publisherImprint = i['name']
-                                                found = True
-                                                break
-                                    elif all([f != 'imprints', f != 'publication_run']) and h is not None and found is not True:
-                                        imprint_match = False
-                                        for x, y in mylar.IMPRINT_MAPPING.items():
-                                            if all([
-                                                y.lower() == h.lower(),
-                                                x.lower() == comic['ComicPublisher'].lower()
-                                            ]):
-                                                imprint_match = True
-                                                break
-
-                                        if h.lower() == comic['ComicPublisher'].lower() or imprint_match is True:
-                                            if mylar.CONFIG.IMPRINT_MAPPING_TYPE == 'CV':
-                                                comicPublisher = d
-                                                publisherImprint = comic['ComicPublisher']
+                                                else:
+                                                    found = True
                                             else:
-                                                comicPublisher = d
-                                                publisherImprint = h
-                                            logger.fdebug('imprint matching: [PRIORITY:%s] %s ---> %s' % (mylar.CONFIG.IMPRINT_MAPPING_TYPE, comicPublisher, publisherImprint))
-                                            chkyear = True
-                                            found = True
+                                                if int(pub_end[:4]) > int(comic['ComicYear'])  > int(pub_start[:4]):
+                                                    found = True
+                                                else:
+                                                    pub_end_month = pubrun[y+2:][pubrun.find('.',y+2)+1:].strip()
+                                                    if any([ int(pub_end[:4]) == int(comic['ComicYear']), int(pub_start[:4]) == int(comic['ComicYear']) ]):
+                                                        quick_chk = getComic(comicid=None, rtype='imprints_first', issueid=firstissueid)
+                                                        if quick_chk:
+                                                            cdate = None
+                                                            sdate = None
+                                                            #quick_chk['store_date'], quick_chk['cover_date']
+                                                            if quick_chk['cover_date'] and quick_chk['cover_date'] != '0000':
+                                                                cdate = quick_chk['cover_date'][5:7]
+                                                            if quick_chk['store_date'] and quick_chk['store_date'] != '0000':
+                                                                sdate = quick_chk['store_date'][5:7]
 
+                                                            if int(pub_end[:4]) == int(comic['ComicYear']):
+                                                                if cdate != None:
+                                                                    end_month = cdate
+                                                                else:
+                                                                    end_month = sdate
+                                                                if int(pub_end_month) <= int(end_month):
+                                                                    logger.fdebug('[Year;%s] publication month of %s is before the end imprint date of %s' % (comic['ComicYear'], end_month, pub_end_month))
+                                                                    found = True
+                                                                else:
+                                                                    found = False
+
+                                                            elif int(pub_start[:4]) == int(comic['ComicYear']):
+                                                                if cdate != None:
+                                                                    start_month = cdate
+                                                                else:
+                                                                    start_month = sdate
+                                                                if int(pub_start_month) <= int(start_month):
+                                                                    logger.fdebug('[Year:%s] issue publication month of %s is after the start imprint date of %s' % (comic['ComicYear'], start_month, pub_start_month))
+                                                                    found = True
+                                                                else:
+                                                                    found = False
+
+                                                    else:
+                                                        logger.info('comic year of %s is not within the imprint publication date range of %s - %s' % (comic['ComicYear'], pub_start[:4], pub_end[:4]))
+                                                        comicPublisher = None
+                                                        publisherImprint = None
+                                                        found = False
+                                            chkyear = False
+
+                                        elif f == 'imprints' and h is not None:
+                                            # if we get here, it's an imprint of an imprint
+                                            for i in h:
+                                                if i['name'].lower() == comic['ComicPublisher'].lower():
+                                                    logger.info('imprint matched: %s ---> %s' % (i['name'],h))
+                                                    comicPublisher = pubname
+                                                    publisherImprint = i['name']
+                                                    found = True
+                                                    break
+                                        elif all([f != 'imprints', f != 'publication_run']) and h is not None and found is not True:
+                                            imprint_match = False
+                                            if mylar.IMPRINT_MAPPING is not None:
+                                                for x, y in mylar.IMPRINT_MAPPING.items():
+                                                    if all([
+                                                        y.lower() == h.lower(),
+                                                        x.lower() == comic['ComicPublisher'].lower()
+                                                    ]):
+                                                        imprint_match = True
+                                                        break
+                                            else:
+                                                logger.fdebug('[get_imprint_volume_and_booktype] IMPRINT_MAPPING is None, skipping imprint mapping check')
+
+                                            if h.lower() == comic['ComicPublisher'].lower() or imprint_match is True:
+                                                if mylar.CONFIG.IMPRINT_MAPPING_TYPE == 'CV':
+                                                    comicPublisher = d
+                                                    publisherImprint = comic['ComicPublisher']
+                                                else:
+                                                    comicPublisher = d
+                                                    publisherImprint = h
+                                                logger.fdebug('imprint matching: [PRIORITY:%s] %s ---> %s' % (mylar.CONFIG.IMPRINT_MAPPING_TYPE, comicPublisher, publisherImprint))
+                                                chkyear = True
+                                                found = True
+
+                                    if found is True:
+                                        break
                                 if found is True:
                                     break
                             if found is True:
@@ -1247,7 +1508,8 @@ def get_imprint_volume_and_booktype(series, comicyear, publisher, firstissueid, 
                         if found is True:
                             break
         except Exception as e:
-            logger.error('error: %s' % e)
+            logger.error('[get_imprint_volume_and_booktype] error: %s' % e)
+            logger.fdebug('[get_imprint_volume_and_booktype] Traceback: %s' % traceback.format_exc())
 
     if comicPublisher is not None:
         comic['ComicPublisher'] = comicPublisher

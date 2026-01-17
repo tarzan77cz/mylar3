@@ -40,16 +40,19 @@ def addvialist(queue):
                 r_mode = None
 
             if r_mode == 'updateissuedata':
-                logger.info('[MASS-REFRESH][WEEKLY-UPDATER] Now updating series data for %s (%s) [%s] ' % (item['comicname'], item['seriesyear'], item['comicid']))
-                mylar.GLOBAL_MESSAGES = {'status': 'success', 'comicname': item['comicname'], 'seriesyear': item['seriesyear'], 'comicid': item['comicid'], 'tables': 'both', 'message': 'Now refreshing %s (%s)' % (item['comicname'], item['seriesyear'])}
+                seriesyear = item.get('seriesyear', 'Unknown')
+                logger.info('[MASS-REFRESH][WEEKLY-UPDATER] Now updating series data for %s (%s) [%s] ' % (item['comicname'], seriesyear, item['comicid']))
+                mylar.GLOBAL_MESSAGES = {'status': 'success', 'comicname': item['comicname'], 'seriesyear': seriesyear, 'comicid': item['comicid'], 'tables': 'both', 'message': 'Now refreshing %s (%s)' % (item['comicname'], seriesyear)}
                 mylar.importer.updateissuedata(item['comicid'], item['comicname'], calledfrom=item['calledfrom'], serieslast_updated=item['serieslast_updated'])
             elif r_mode == 'manualannual':
-                logger.info('[MASS-REFRESH][WEEKLY-UPDATER][AnnualID:%s] Now updating series data for %s (%s) [%s] ' % (item['manual_comicid'], item['comicname'], item['seriesyear'], item['comicid']))
-                mylar.GLOBAL_MESSAGES = {'status': 'success', 'comicname': item['comicname'], 'seriesyear': item['seriesyear'], 'comicid': item['comicid'], 'tables': 'both', 'message': 'Now refreshing %s (%s)' % (item['comicname'], item['seriesyear'])}
-                mylar.importer.manualAnnual(item['manual_comicid'], item['comicname'], comicyear=item['seriesyear'], comicid=item['comicid'], forceadd=True, serieslast_updated=item['serieslast_updated'])
+                seriesyear = item.get('seriesyear', 'Unknown')
+                logger.info('[MASS-REFRESH][WEEKLY-UPDATER][AnnualID:%s] Now updating series data for %s (%s) [%s] ' % (item['manual_comicid'], item['comicname'], seriesyear, item['comicid']))
+                mylar.GLOBAL_MESSAGES = {'status': 'success', 'comicname': item['comicname'], 'seriesyear': seriesyear, 'comicid': item['comicid'], 'tables': 'both', 'message': 'Now refreshing %s (%s)' % (item['comicname'], seriesyear)}
+                mylar.importer.manualAnnual(item['manual_comicid'], item['comicname'], comicyear=seriesyear, comicid=item['comicid'], forceadd=True, serieslast_updated=item['serieslast_updated'])
             else:
-                logger.info('[MASS-REFRESH][1/%s] Now refreshing %s (%s) [%s] ' % (queue.qsize()+1, item['comicname'], item['seriesyear'], item['comicid']))
-                mylar.GLOBAL_MESSAGES = {'status': 'success', 'comicname': item['comicname'], 'seriesyear': item['seriesyear'], 'comicid': item['comicid'], 'tables': 'both', 'message': 'Now refreshing %s (%s)' % (item['comicname'], item['seriesyear'])}
+                seriesyear = item.get('seriesyear', 'Unknown')
+                logger.info('[MASS-REFRESH][1/%s] Now refreshing %s (%s) [%s] ' % (queue.qsize()+1, item['comicname'], seriesyear, item['comicid']))
+                mylar.GLOBAL_MESSAGES = {'status': 'success', 'comicname': item['comicname'], 'seriesyear': seriesyear, 'comicid': item['comicid'], 'tables': 'both', 'message': 'Now refreshing %s (%s)' % (item['comicname'], seriesyear)}
                 dbUpdate([item['comicid']], calledfrom='refresh')
         else:
             mylar.REFRESH_QUEUE.put('exit')
@@ -64,7 +67,7 @@ def dbUpdate(ComicIDList=None, calledfrom=None, sched=False):
         if mylar.CONFIG.UPDATE_ENDED:
             logger.info('Updating only Continuing Series (option enabled) - this might cause problems with the pull-list matching for rebooted series')
             comiclist = []
-            completelist = myDB.select('SELECT LatestDate, ComicPublished, ForceContinuing, NewPublish, LastUpdated, ComicID, ComicName, Corrected_SeriesYear, Corrected_Type, ComicYear, Status from comics WHERE Status="Active" or Status="Loading" order by LastUpdated DESC, LatestDate ASC')
+            completelist = myDB.select("SELECT LatestDate, ComicPublished, ForceContinuing, NewPublish, LastUpdated, ComicID, ComicName, Corrected_SeriesYear, Corrected_Type, ComicYear, Status from comics WHERE Status='Active' or Status='Loading' order by LastUpdated DESC, LatestDate ASC")
             for comlist in completelist:
                 if comlist['LatestDate'] is None:
                     recentstatus = 'Loading'
@@ -98,7 +101,7 @@ def dbUpdate(ComicIDList=None, calledfrom=None, sched=False):
                                       "Corrected_Type":        comlist['Corrected_Type']})
 
         else:
-            comiclist = myDB.select('SELECT LatestDate, LastUpdated, ComicID, ComicName, ComicYear, Corrected_SeriesYear, Corrected_Type, Status from comics WHERE Status="Active" or Status="Loading" order by LastUpdated DESC, latestDate ASC')
+            comiclist = myDB.select("SELECT LatestDate, LastUpdated, ComicID, ComicName, ComicYear, Corrected_SeriesYear, Corrected_Type, Status from comics WHERE Status='Active' or Status='Loading' order by LastUpdated DESC, latestDate ASC")
     else:
         comiclist = []
         comiclisting = ComicIDList
@@ -505,7 +508,7 @@ def latest_update(ComicID, LatestIssue, LatestDate, ReleaseComicID=None):
 
     latestCTRLValueDict = {"ComicID":      cid}
     newlatestDict = {"LatestIssue":      str(LatestIssue),
-                     "intLatestIssue":   helpers.issuedigits(LatestIssue),
+                     "intLatestIssue":   helpers.issue_number_parser(LatestIssue).asInt,
                      "LatestDate":       str(LatestDate)}
     myDB.upsert("comics", newlatestDict, latestCTRLValueDict)
 
@@ -573,7 +576,7 @@ def upcoming_update(ComicID, ComicName, IssueNumber, IssueDate, forcecheck=None,
         issuechk = myDB.selectone("SELECT * FROM issues WHERE ComicID=? AND Issue_Number=?", [ComicID, IssueNumber]).fetchone()
     if issuechk is None and altissuenumber is not None:
         logger.info('altissuenumber is : ' + str(altissuenumber))
-        issuechk = myDB.selectone("SELECT * FROM issues WHERE ComicID=? AND Int_IssueNumber=?", [ComicID, helpers.issuedigits(altissuenumber)]).fetchone()
+        issuechk = myDB.selectone("SELECT * FROM issues WHERE ComicID=? AND Int_IssueNumber=?", [ComicID, helpers.issue_number_parser(altissuenumber).asInt]).fetchone()
 
     if issuechk is not None:
         if issuechk['Issue_Number'] == IssueNumber or issuechk['Issue_Number'] == altissuenumber:
@@ -620,7 +623,7 @@ def upcoming_update(ComicID, ComicName, IssueNumber, IssueDate, forcecheck=None,
                         logger.fdebug('Forcibly maintaining status of : ' + og_status + ' for #' + issuechk['Issue_Number'] + ' to ensure integrity.')
                     logger.fdebug('Comic series has an incorrect total count. Forcily refreshing series to ensure data is current.')
                     dbUpdate([ComicID])
-                    issuechk = myDB.selectone("SELECT * FROM issues WHERE ComicID=? AND Int_IssueNumber=?", [ComicID, helpers.issuedigits(IssueNumber)]).fetchone()
+                    issuechk = myDB.selectone("SELECT * FROM issues WHERE ComicID=? AND Int_IssueNumber=?", [ComicID, helpers.issue_number_parser(IssueNumber).asInt]).fetchone()
                     if issuechk['Status'] != og_status and (issuechk['Status'] != 'Downloaded' or issuechk['Status'] != 'Archived' or issuechk['Status'] != 'Snatched'):
                         logger.fdebug('Forcibly changing status of %s back to %s for #%s to stop repeated downloads.' % (issuechk['Status'], og_status, issuechk['Issue_Number']))
                     else:
@@ -1333,6 +1336,11 @@ def forceRescan(ComicID, archive=None, module=None, recheck=False):
             p = shlex.quote(fcnew_af[0])
             fcnew = shlex.split(p)
 
+            if temploc is not None:
+                fcdigit = helpers.issue_number_parser(temploc).asInt
+            elif any([booktype == 'TPB', booktype == 'GN', booktype == 'HC', booktype == 'One-Shot']) and temploc is None:
+                fcdigit = helpers.issue_number_parser('1').asInt
+
             fcn = len(fcnew)
             n = 0
             while True:
@@ -1341,7 +1349,7 @@ def forceRescan(ComicID, archive=None, module=None, recheck=False):
                     int_iss = None
                 except IndexError:
                     break
-                int_iss = helpers.issuedigits(reiss['Issue_Number'])
+                int_iss = helpers.issue_number_parser(reiss['Issue_Number']).asInt
                 issyear = reiss['IssueDate'][:4]
                 old_status = reiss['Status']
                 issname = reiss['IssueName']
@@ -1365,11 +1373,7 @@ def forceRescan(ComicID, archive=None, module=None, recheck=False):
 
                 fnd_iss_except = 'None'
 
-                if temploc is not None:
-                    fcdigit = helpers.issuedigits(temploc)
-                elif any([booktype == 'TPB', booktype == 'GN', booktype == 'HC', booktype == 'One-Shot']) and temploc is None:
-                    fcdigit = helpers.issuedigits('1')
-
+                # Try integer-based matching first
                 if int(fcdigit) == int_iss:
                     logger.fdebug(module + ' [' + str(reiss['IssueID']) + '] Issue match - fcdigit: ' + str(fcdigit) + ' ... int_iss: ' + str(int_iss))
 
@@ -1484,6 +1488,25 @@ def forceRescan(ComicID, archive=None, module=None, recheck=False):
                     logger.fdebug(module + ' I should break out here because of a dupe.')
                     break
 
+                # If integer matching failed, try string-based matching for exception matches (like "Alpha", "Omega")
+                if haveissue != "yes" and issuedupe != "yes" and temploc is not None:
+                    # Compare temploc (issue number from filename) with Issue_Number from database
+                    # This handles pure string issue numbers like "Alpha" or "Omega"
+                    if temploc.lower().strip() == reiss['Issue_Number'].lower().strip():
+                        logger.fdebug(module + ' [' + str(reiss['IssueID']) + '] String-based issue match - temploc: ' + temploc + ' ... Issue_Number: ' + reiss['Issue_Number'])
+                        havefiles+=1
+                        haveissue = "yes"
+                        isslocation = tmpfc['ComicFilename']
+                        issSize = str(tmpfc['ComicSize'])
+                        logger.fdebug(module + ' .......filename: ' + isslocation)
+                        logger.fdebug(module + ' .......filesize: ' + str(tmpfc['ComicSize']))
+                        issuedupechk.append({'fcdigit':   helpers.issue_number_parser(temploc).asInt,
+                                             'filename':  tmpfc['ComicFilename'],
+                                             'filesize':  tmpfc['ComicSize'],
+                                             'issueyear': issyear,
+                                             'issueid':   reiss['IssueID']})
+                        break
+
                 if haveissue == "yes" or issuedupe == "yes": break
                 n+=1
         else:
@@ -1508,25 +1531,27 @@ def forceRescan(ComicID, archive=None, module=None, recheck=False):
             fcn = len(fcnew)
             n = 0
             reann = None
+
+            year_check = re.findall(r'(\d{4})(?=[\s]|annual\b|$)', temploc, flags=re.I)
+            if year_check:
+                ann_line = '%s annual' % year_check[0]
+                logger.fdebug('ann_line: %s' % ann_line)
+                fcdigit = helpers.issue_number_parser('1').asInt
+            else:
+                fcdigit = helpers.issue_number_parser(re.sub('annual', '', temploc.lower()).strip()).asInt
+            # TODO: Another special case harcoded int_issue to look at
+            if fcdigit == 999999999999999:
+                fcdigit = helpers.issue_number_parser(re.sub('special', '', temploc.lower()).strip()).asInt
+
             while True:
                 try:
                     reann = reannuals[n]
                 except IndexError:
                     break
-                int_iss = helpers.issuedigits(reann['Issue_Number'])
+                int_iss = helpers.issue_number_parser(reann['Issue_Number']).asInt
                 #logger.fdebug(module + ' int_iss:' + str(int_iss))
                 issyear = reann['IssueDate'][:4]
                 old_status = reann['Status']
-
-                year_check = re.findall(r'(\d{4})(?=[\s]|annual\b|$)', temploc, flags=re.I)
-                if year_check:
-                    ann_line = '%s annual' % year_check[0]
-                    logger.fdebug('ann_line: %s' % ann_line)
-                    fcdigit = helpers.issuedigits('1')
-                else:
-                    fcdigit = helpers.issuedigits(re.sub('annual', '', temploc.lower()).strip())
-                if fcdigit == 999999999999999:
-                    fcdigit = helpers.issuedigits(re.sub('special', '', temploc.lower()).strip())
 
                 if int(fcdigit) == int_iss and ANNComicID is not None:
                     logger.fdebug(module + ' [' + str(ANNComicID) + '] Annual match - issue : ' + str(int_iss))

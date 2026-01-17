@@ -153,6 +153,7 @@ MASS_REFRESH = None
 REFRESH_QUEUE = queue.Queue()
 DDL_QUEUED = []
 PACK_ISSUEIDS_DONT_QUEUE = {}
+REJECTED_MATCHES = {}  # Cache for rejected search matches: {IssueID: [match_objects]}
 EXT_SERVER = False
 SEARCH_TIER_DATE = None
 COMICSORT = None
@@ -173,37 +174,43 @@ DOWNLOAD_APIKEY = None
 APILOCK = False
 SEARCHLOCK = False
 DDL_LOCK = False
+DDL_STARTUP_LOADED = False
 CMTAGGER_PATH = None
 STATIC_COMICRN_VERSION = "1.01"
 STATIC_APC_VERSION = "2.04"
-ISSUE_EXCEPTIONS = [
-    'DEATHS',
-    'ALPHA',
-    'OMEGA',
-    'BLACK',
-    'DARK',
-    'LIGHT',
-    'AU',
-    'AI',
-    'INH',
-    'NOW',
-    'BEY',
-    'MU',
-    'HU',
-    'LR',
-    'A',
-    'B',
-    'C',
-    'X',
-    'O',
-    'WHITE',
-    'SUMMER',
-    'SPRING',
-    'FALL',
-    'WINTER',
-    'PREVIEW',
-    "DIRECTOR'S CUT",
-    "(DC)"]
+# Exceptions for issue number matching.  Can include regex, and will be treated as case insensitive.
+INBUILT_ISSUE_EXCEPTIONS = [
+    ["Deaths", "Exact"],
+    ["Alpha", "Exact"],
+    ["Omega", "Exact"],
+    ["Black", "Exact"],
+    ["Dark", "Exact"],
+    ["Light", "Exact"],
+    ["AU", "Exact"],
+    ["AI", "Exact"],
+    ["INH", "Exact"],
+    ["BEY", "Exact"],
+    ["MU", "Exact"],
+    ["HU", "Exact"],
+    ["LR", "Exact"],
+    ["HS", "Exact"],
+    ["A", "Exact"],
+    ["B", "Exact"],
+    ["C", "Exact"],
+    # X-O Manowar (1992) and Shadowman (2012)
+    ["-?X", "Pattern"],
+    ["-?O", "Pattern"],
+    ["White", "Exact"],
+    ["Summer", "Exact"],
+    ["Spring", "Exact"],
+    ["Fall", "Exact"],
+    ["Winter", "Exact"],
+    ["Preview", "Exact"],
+    ["Director's Cut", "Exact"],
+    ["(DC)", "Exact"],
+    # Super DC Giant (1970) and Weapon Zero (1995)
+    [r"[ST]-\d+", "Pattern"]
+]
 SAB_PARAMS = None
 EXT_IP = None
 PROVIDER_START_ID=0
@@ -250,7 +257,7 @@ def initialize(config_file):
                MONITOR_STATUS, SEARCH_STATUS, RSS_STATUS, WEEKLY_STATUS, VERSION_STATUS, UPDATER_STATUS, FORCE_STATUS, DBUPDATE_INTERVAL, DB_BACKFILL, LOG_LANG, LOG_CHARSET, APILOCK, SEARCHLOCK, DDL_LOCK, LOG_LEVEL, \
                MONITOR_SCHEDULER, SEARCH_SCHEDULER, RSS_SCHEDULER, WEEKLY_SCHEDULER, VERSION_SCHEDULER, UPDATER_SCHEDULER, START_UP, \
                SCHED_RSS_LAST, SCHED_WEEKLY_LAST, SCHED_MONITOR_LAST, SCHED_SEARCH_LAST, SCHED_VERSION_LAST, SCHED_DBUPDATE_LAST, COMICINFO, SEARCH_TIER_DATE, \
-               BACKENDSTATUS_CV, BACKENDSTATUS_WS, PROVIDER_STATUS, EXT_IP, ISSUE_EXCEPTIONS, PROVIDER_START_ID, GLOBAL_MESSAGES, CHECK_FOLDER_CACHE, FOLDER_CACHE, SESSION_ID, \
+               BACKENDSTATUS_CV, BACKENDSTATUS_WS, PROVIDER_STATUS, EXT_IP, INBUILT_ISSUE_EXCEPTIONS, PROVIDER_START_ID, GLOBAL_MESSAGES, CHECK_FOLDER_CACHE, FOLDER_CACHE, SESSION_ID, \
                MAINTENANCE_UPDATE, MAINTENANCE_DB_COUNT, MAINTENANCE_DB_TOTAL, UPDATE_VALUE, REQS, IMPRINT_MAPPING, GC_URL, PACK_ISSUEIDS_DONT_QUEUE, DDL_QUEUED, EXT_SERVER
 
         cc = mylar.config.Config(config_file)
@@ -339,7 +346,18 @@ def initialize(config_file):
 
         SESSION_ID = random.randint(10000,999999)
 
-        CV_HEADERS = {'User-Agent': mylar.CONFIG.CV_USER_AGENT}
+        # Enhanced headers for CloudFlare compatibility when downloading images
+        CV_HEADERS = {
+            'User-Agent': mylar.CONFIG.CV_USER_AGENT,
+            'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate',  # Removed 'br' - requests doesn't auto-decompress Brotli
+            'Referer': 'https://comicvine.gamespot.com/',
+            'Sec-Fetch-Dest': 'image',
+            'Sec-Fetch-Mode': 'no-cors',
+            'Sec-Fetch-Site': 'cross-site',
+            'DNT': '1',
+        }
 
         # set the current week for the pull-list
         todaydate = datetime.datetime.today()
@@ -369,33 +387,41 @@ def initialize(config_file):
             pub_path = os.path.join(mylar.CONFIG.CACHE_DIR, 'imprints.json')
             update_imprints = True
             if os.path.exists(pub_path):
-                filetime = max(os.path.getctime(pub_path), os.path.getmtime(pub_path))
-                pub_diff = ((time.time() - filetime) / 3600)
-                if pub_diff > 24:
-                    logger.info('[IMPRINT_LOADS] Publisher imprint listing found, but possibly stale ( > 24hrs). Retrieving up-to-date listing')
+                if os.path.getsize(pub_path) > 0:
+                    filetime = max(os.path.getctime(pub_path), os.path.getmtime(pub_path))
+                    pub_diff = ((time.time() - filetime) / 3600)
+                    if pub_diff > 24:
+                        logger.info('[IMPRINT_LOADS] Publisher imprint listing found, but possibly stale ( > 24hrs). Retrieving up-to-date listing')
+                    else:
+                        logger.info('[IMPRINT_LOADS] Loading Publisher imprints data from local file.')
+                        try:
+                            with open(pub_path) as json_file:
+                                PUBLISHER_IMPRINTS = json.load(json_file)
+                        except (OSError, json.JSONDecodeError) as e:
+                            logger.error('Error reading publisher imprint file - %s. Going to retrieve a new listing...' % e)
+                        except Exception as e:
+                            logger.error('General error attempting to read file - %s. Going to retrieve a new listing...' % e)
+                        else:
+                            update_imprints = False
                 else:
-                    update_imprints = False
-                    logger.info('[IMPRINT_LOADS] Loading Publisher imprints data from local file.')
-                    with open(pub_path) as json_file:
-                        PUBLISHER_IMPRINTS = json.load(json_file)
+                    logger.error('Error reading publisher imprint file - invalid filesize. Going to retrieve a new listing...')
             else:
                 logger.info('[IMPRINT_LOADS] No data for publisher imprints locally. Retrieving up-to-date listing')
 
             if update_imprints is True:
+                PUBLISHER_IMPRINTS = None
                 req_pub = requests.get('https://mylar3.github.io/publisher_imprints/imprints.json', verify=True)
                 try:
                     json_pub = req_pub.json()
                     with open(pub_path, 'w', encoding='utf-8') as outfile:
                         json.dump(json_pub, outfile, indent=4, ensure_ascii=False)
+                except (OSError, json.JSONDecodeError, requests.exceptions.RequestException) as e:
+                    logger.warn('[IMPRINT_LOADS] Unable to retrieve publisher imprints listing at this time. Error: %s' % e)
                 except Exception as e:
                     logger.error('Unable to write imprints.json to %s. Error returned: %s' % (pub_path, e))
                 else:
                     logger.fdebug('Successfully written imprints.json file to %s' % pub_path)
-                    PUBLISHER_IMPRINTS = json_pub
 
-        except requests.exceptions.RequestException as e:
-            logger.warn('[IMPRINT_LOADS] Unable to retrieve publisher imprints listing at this time. Error: %s' % e)
-            PUBLISHER_IMPRINTS = None
         except Exception as e:
             logger.warn('[IMPRINT_LOADS] Unable to load publisher -> imprint file. Error: %s' % e)
             PUBLISHER_IMPRINTS = None
@@ -403,8 +429,8 @@ def initialize(config_file):
             if PUBLISHER_IMPRINTS is not None:
                 logger.info('[IMPRINT_LOADS] Successfully loaded imprints for %s publishers' % (len(PUBLISHER_IMPRINTS['publishers'])))
 
-            logger.info('Remapping the sorting to allow for new additions.')
-            COMICSORT = helpers.ComicSort(sequence='startup')
+        logger.info('Remapping the sorting to allow for new additions.')
+        COMICSORT = helpers.ComicSort(sequence='startup')
 
         if CONFIG.LOCMOVE:
             helpers.updateComicLocation()
@@ -552,6 +578,9 @@ def start():
                     updater_diff = datetime.datetime.utcfromtimestamp(helpers.utctimestamp() + ((int(DBUPDATE_INTERVAL) * 60)  - (updater_diff*60)))
                     logger.fdebug('[DB UPDATER] Scheduling next run @ %s (every %s minutes)' % (helpers.utc_date_to_local(updater_diff), DBUPDATE_INTERVAL))
                     UPDATER_SCHEDULER.modify(next_run_time=updater_diff)
+                
+                # Resume the scheduler so it can actually run
+                UPDATER_SCHEDULER.resume()
 
             #let's do a run at the Wanted issues here (on startup) if enabled.
             if SEARCH_STATUS != 'Paused':
@@ -573,6 +602,9 @@ def start():
                         search_diff = datetime.datetime.utcfromtimestamp(helpers.utctimestamp() + ((int(CONFIG.SEARCH_INTERVAL) * 60)  - (duration_diff*60)))
                         logger.fdebug('[AUTO-SEARCH] Scheduling next run @ %s (every %s minutes)' % (helpers.utc_date_to_local(search_diff), CONFIG.SEARCH_INTERVAL))
                         SEARCH_SCHEDULER.modify(next_run_time=search_diff)
+                
+                # Resume the scheduler so it can actually run
+                SEARCH_SCHEDULER.resume()
 
             #thread queue control..
             queue_schedule('search_queue', 'start')
@@ -588,7 +620,16 @@ def start():
                 queue_schedule('pp_queue', 'start')
 
             if CONFIG.ENABLE_DDL is True:
+                # Load queued items from ddl_info table on startup FIRST
+                # This must happen before starting the ddl_downloader thread to prevent race conditions
+                helpers.ddl_load_queued_items()
+                
+                # Now start the DDL queue and downloader thread
                 queue_schedule('ddl_queue', 'start')
+                # Start DDL watchdog thread to detect stuck downloads
+                watchdog_thread = threading.Thread(target=helpers.ddl_watchdog, name="ddl-watchdog", daemon=True)
+                watchdog_thread.start()
+                logger.info('[DDL-WATCHDOG] DDL Watchdog thread started - will monitor for stuck downloads')
 
             helpers.latestdate_fix()
 
@@ -624,6 +665,9 @@ def start():
                     weekly_diff = datetime.datetime.utcfromtimestamp(weektimestamp + (weekly_interval - (duration_diff * 60)))
                     logger.fdebug('[WEEKLY] Scheduling next run for @ %s every %s hours' % (helpers.utc_date_to_local(weekly_diff), weektimer))
                     WEEKLY_SCHEDULER.modify(next_run_time=weekly_diff)
+                
+                # Resume the scheduler so it can actually run
+                WEEKLY_SCHEDULER.resume()
 
             #initiate startup rss feeds for torrents/nzbs here...
             if RSS_STATUS != 'Paused':
@@ -640,21 +684,28 @@ def start():
                     rss_diff = datetime.datetime.utcfromtimestamp(helpers.utctimestamp() + (int(CONFIG.RSS_CHECKINTERVAL) * 60) - (duration_diff * 60))
                     logger.fdebug('[RSS-FEEDS] Scheduling next run for @ %s every %s minutes' % (helpers.utc_date_to_local(rss_diff), CONFIG.RSS_CHECKINTERVAL))
                     RSS_SCHEDULER.modify(next_run_time=rss_diff)
+                
+                # Resume the scheduler so it can actually run
+                RSS_SCHEDULER.resume()
 
             if VERSION_STATUS != 'Paused':
                 VERSION_SCHEDULER.resume()
 
             ##run checkFolder every X minutes (basically Manual Run Post-Processing)
             if MONITOR_STATUS != 'Paused':
-                if CONFIG.CHECK_FOLDER is not None:
-                    if CONFIG.DOWNLOAD_SCAN_INTERVAL >0:
-                        logger.info('[FOLDER MONITOR] Enabling folder monitor for : ' + str(CONFIG.CHECK_FOLDER) + ' every ' + str(CONFIG.DOWNLOAD_SCAN_INTERVAL) + ' minutes.')
-                        MONITOR_SCHEDULER.resume()
+                if CONFIG.ENABLE_CHECK_FOLDER:
+                    if CONFIG.CHECK_FOLDER is not None:
+                        if CONFIG.DOWNLOAD_SCAN_INTERVAL >0:
+                            logger.info('[FOLDER MONITOR] Enabling folder monitor for : ' + str(CONFIG.CHECK_FOLDER) + ' every ' + str(CONFIG.DOWNLOAD_SCAN_INTERVAL) + ' minutes.')
+                            MONITOR_SCHEDULER.resume()
+                        else:
+                            logger.error('[FOLDER MONITOR] You need to specify a monitoring time for the check folder option to work')
+                            MONITOR_SCHEDULER.pause()
                     else:
-                        logger.error('[FOLDER MONITOR] You need to specify a monitoring time for the check folder option to work')
+                        logger.error('[FOLDER MONITOR] You need to specify a location in order to use the Folder Monitor. Disabling Folder Monitor')
                         MONITOR_SCHEDULER.pause()
                 else:
-                    logger.error('[FOLDER MONITOR] You need to specify a location in order to use the Folder Monitor. Disabling Folder Monitor')
+                    logger.info('[FOLDER MONITOR] Folder monitoring is not enabled.')
                     MONITOR_SCHEDULER.pause()
 
             logger.info('Firing up the Background Schedulers now....')

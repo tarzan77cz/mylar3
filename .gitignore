@@ -15,5 +15,42 @@ settings.json
 .DS_Store
 version.py
 env/
+venv/
+.venv/
 .nova/
 *.swp
+# git mergetool backup files
+*.orig
+
+# Docker build artefacts
+sha256:*
+\[internal\]
+extracting
+resolve
+transferring
+ERROR
+=
+
+# Python cache and build files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Cursor rules
+.cursorrules

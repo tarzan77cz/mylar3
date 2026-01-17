@@ -4,6 +4,15 @@
 %>
 
 <%def name="headerIncludes()">
+	<style>
+		#rejected_matches_table tbody tr:hover {
+			background-color: #4a4a4a;
+			cursor: pointer;
+		}
+		#rejected_matches_table tbody tr {
+			transition: background-color 0.2s ease;
+		}
+	</style>
 	<div id="subhead_container">
 		<div id="subhead_menu">
 			<a href="#" id="menu_link_scan" onclick="doAjaxCall('forceSearch',$(this))" data-success="Checking for wanted issues successful" data-error="Error checking wanted issues">Force Check Tier-1</a>
@@ -65,6 +74,35 @@
         </div>
         </br>
 
+        <!-- Rejected Matches Dialog -->
+        <div id="rejected_matches_dialog" title="Rejected Search Matches" style="display:none;">
+            <div id="rejected_matches_loading" style="text-align: center; padding: 20px;">
+                <p>Loading rejected matches...</p>
+            </div>
+            <div id="rejected_matches_content" style="display:none;">
+                <p id="rejected_matches_empty" style="display:none; text-align: center; padding: 20px;">
+                    No rejected matches found for this issue.
+                </p>
+                <div style="max-height: 500px; overflow-y: auto; overflow-x: auto;">
+                    <table id="rejected_matches_table" style="width: 100%;">
+                        <thead style="position: sticky; top: 0; background-color: #fff; z-index: 10;">
+                            <tr>
+                                <th>Title</th>
+                                <th>Provider</th>
+                                <th>Size</th>
+                                <th>Kind</th>
+                                <th>Date</th>
+                                <th>Reason</th>
+                                <th>Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="rejected_matches_table_body">
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
         <div class="title">
                 <h1 class="clearfix"><img src="${icons['icon_upcoming']}" alt="Upcoming Issues"/>Upcoming Issues</h1>
         </div>
@@ -124,7 +162,11 @@
                     %for f_nodata in future_nodata_upcoming:
                             <tr class="gradeZ">
                                     <td id="delcolumn">
-                                    <a href="upcoming#tabs-2" title="Delete series from auto-Want list" onclick="doAjaxCall('removeautowant?comicname=${f_nodata['ComicName'] |u}&release=${f_nodata['IssueDate']}',$(this),'table')" data-success="${f_nodata['ComicName']} has been removed from the auto-want list"><img src="images/skipped_icon.png" height="25" width="25" class="highqual" /></a>
+                                    <%
+                                        comic_name_escaped = f_nodata['ComicName'].replace("'", "\\'").replace('"', '\\"')
+                                        issue_date_escaped = f_nodata['IssueDate'].replace("'", "\\'").replace('"', '\\"') if f_nodata['IssueDate'] else ''
+                                    %>
+                                    <a href="upcoming#tabs-2" title="Delete series from auto-Want list" onclick="doAjaxCall('removeautowant?comicname=${comic_name_escaped |u}&release=${issue_date_escaped |u}',$(this),'table')" data-success="${comic_name_escaped} has been removed from the auto-want list"><img src="images/skipped_icon.png" height="25" width="25" class="highqual" /></a>
                                     </td>
                                     %if f_nodata['ComicID'] is not None:
                                         <td id="comicname"><a href="comicDetails?ComicID=${f_nodata['ComicID']}">${f_nodata['ComicName']}</a></td>
@@ -423,7 +465,14 @@
                         "targets": [ 4 ],
                         "visible": true,
                         "render":function (data,type,full) {
-                            return full[6];
+                            var status = full[6];
+                            var has_ddl_info = full[13] !== undefined ? full[13] : true; // Default to true if not set (for backwards compatibility)
+                            
+                            // If status is Snatched and no ddl_info exists, add warning icon
+                            if (status === 'Snatched' && !has_ddl_info) {
+                                return status + ' <img src="images/cross.png" height="16" width="16" style="margin-left: 5px; vertical-align: middle;" title="Download failed - no download information available. Please mark as Wanted and search again." />';
+                            }
+                            return status;
                         }
                     },
                     {
@@ -431,7 +480,27 @@
                         "targets": [ 5 ],
                         "visible": true,
                         "render":function (data,type,full){
-                            return full[4];
+                            // Add magnifying glass icon for Wanted issues or Snatched issues without ddl_info
+                            var tierText = full[4];
+                            var issueId = full[3];
+                            var rejectedCount = full[12] || 0; // Get rejected matches count (default to 0 if undefined)
+                            var has_ddl_info = full[13] !== undefined ? full[13] : true; // Default to true if not set (for backwards compatibility)
+                            var status = full[6];
+                            
+                            // Show rejected matches link for Wanted issues, or Snatched issues without ddl_info
+                            if (issueId && (status === "Wanted" || (status === "Snatched" && !has_ddl_info))) {
+                                var iconHtml = '<img src="images/search.png" height="16" width="16" style="margin-left: 5px; vertical-align: middle;" />';
+                                if (rejectedCount > 0) {
+                                    // Add count badge
+                                    iconHtml += '<span style="background-color: #ff6b6b; color: white; border-radius: 50%; padding: 1px 5px; font-size: 10px; font-weight: bold; margin-left: 2px; vertical-align: super;">' + rejectedCount + '</span>';
+                                }
+                                var titleText = rejectedCount > 0 ? 'View rejected search matches (' + rejectedCount + ' available)' : 'View rejected search matches';
+                                if (status === "Snatched" && !has_ddl_info) {
+                                    titleText = 'Download failed - try alternative download from rejected matches' + (rejectedCount > 0 ? ' (' + rejectedCount + ' available)' : '');
+                                }
+                                tierText += ' <a href="#" class="rejected-matches-link" data-issueid="' + $('<div/>').text(issueId).html() + '" title="' + titleText + '">' + iconHtml + '</a>';
+                            }
+                            return tierText;
                         }
                     },
                     ],
@@ -566,6 +635,111 @@
                      }
                   }
                });
+            });
+
+            // Initialize rejected matches dialog
+            $("#rejected_matches_dialog").dialog({
+                autoOpen: false,
+                width: "80%",
+                height: 650,
+                maxHeight: 650,
+                modal: true,
+                resizable: true
+            });
+
+            // Handle click on magnifying glass icon
+            $(document).on('click', '.rejected-matches-link', function(e) {
+                e.preventDefault();
+                var issueId = $(this).data('issueid');
+                if (!issueId) {
+                    alert('Error: Issue ID not found');
+                    return false;
+                }
+                
+                // Show loading
+                $('#rejected_matches_loading').show();
+                $('#rejected_matches_content').hide();
+                $('#rejected_matches_empty').hide();
+                
+                // Open dialog
+                $("#rejected_matches_dialog").dialog("open");
+                
+                // Fetch rejected matches
+                $.getJSON('get_rejected_matches', {IssueID: issueId}, function(data) {
+                    $('#rejected_matches_loading').hide();
+                    
+                    if (data.status === 'success' && data.matches && data.matches.length > 0) {
+                        // Populate table
+                        var tbody = $('#rejected_matches_table_body');
+                        tbody.empty();
+                        
+                        $.each(data.matches, function(index, match) {
+                            // Use unique identifier (nzbid + link) instead of index
+                            var matchNzbId = match.nzbid || '';
+                            var matchLink = match.link || '';
+                            var matchNzbIdEscaped = $('<div/>').text(matchNzbId).html();
+                            var matchLinkEscaped = $('<div/>').text(matchLink).html();
+                            
+                            var row = '<tr>' +
+                                '<td>' + $('<div/>').text(match.title || 'Unknown').html() + '</td>' +
+                                '<td>' + $('<div/>').text(match.provider || 'Unknown').html() + '</td>' +
+                                '<td>' + $('<div/>').text(match.size || 'Unknown').html() + '</td>' +
+                                '<td>' + $('<div/>').text(match.kind || 'Unknown').html() + '</td>' +
+                                '<td>' + $('<div/>').text(match.pubdate || '').html() + '</td>' +
+                                '<td>' + $('<div/>').text(match.reason || 'Unknown reason').html() + '</td>' +
+                                '<td><button class="download-rejected-btn" data-issueid="' + $('<div/>').text(issueId).html() + '" data-nzbid="' + matchNzbIdEscaped + '" data-link="' + matchLinkEscaped + '">Download</button></td>' +
+                                '</tr>';
+                            tbody.append(row);
+                        });
+                        
+                        $('#rejected_matches_content').show();
+                    } else {
+                        // No matches found
+                        $('#rejected_matches_empty').show();
+                    }
+                }).fail(function(jqXHR, textStatus, errorThrown) {
+                    $('#rejected_matches_loading').hide();
+                    alert('Error loading rejected matches: ' + textStatus);
+                });
+                
+                return false;
+            });
+
+            // Handle download button click
+            $(document).on('click', '.download-rejected-btn', function(e) {
+                e.preventDefault();
+                var issueId = $(this).data('issueid');
+                var matchNzbId = $(this).data('nzbid');
+                var matchLink = $(this).data('link');
+                var btn = $(this);
+                
+                // Disable button and show loading
+                btn.prop('disabled', true).text('Adding...');
+                
+                $.getJSON('select_rejected_match', {
+                    IssueID: issueId,
+                    nzbid: matchNzbId,
+                    link: matchLink
+                }, function(data) {
+                    if (data.status === 'success') {
+                        // Success - close dialog silently
+                        $("#rejected_matches_dialog").dialog("close");
+                        
+                        // Reload the table to reflect changes
+                        if ($.fn.dataTable.isDataTable('#wanted_table')) {
+                            $('#wanted_table').DataTable().ajax.reload(null, false);
+                        }
+                    } else {
+                        // Error - show alert and allow retry
+                        alert('Error: ' + (data.message || 'Failed to add to download queue'));
+                        btn.prop('disabled', false).text('Download');
+                    }
+                }).fail(function(jqXHR, textStatus, errorThrown) {
+                    alert('Error: ' + textStatus);
+                    btn.prop('disabled', false).text('Download');
+                });
+                
+                return false;
             });
 	});
 	</script>

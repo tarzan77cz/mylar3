@@ -11,7 +11,7 @@
 	<meta charset="UTF-8" />
 	<meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1" />
 	
-	<title>Mylar - ${title}</title>
+	<title>Mylar ${f'- {mylar.CONFIG.INSTANCE_NAME} ' if mylar.CONFIG.INSTANCE_NAME else ''}- ${title}</title>
 	<meta name="description" content="Mylar 'default' interface - made by Elmar Kouwenhoven" />
 	<meta name="author" content="Elmar Kouwenhoven" />
 	
@@ -429,13 +429,17 @@
         }
 
         function reload_table() {
-            var tables = $('table.display').DataTable();
             var tt = document.getElementById("page_name");
             if(typeof(tt) != 'undefined' && tt != null){
                 if (tt.value != "weekly" && tt.value != "import_results" && tt.value != "manage_comics" && tt.value != "manage_issues" && tt.value != "manage_failed" && tt.value != "reading_list" && tt.value != "storyarcs_index" && tt.value != "storyarc_detail" && tt.value != "config") {
                     // this is required so it doesn't error if on the weekly page
                     // once weekly & other pages are converted to dynamic loading, this if can be removed
-                    tables.ajax.reload(null,false);
+                    // Reload each DataTable individually with proper checks
+                    $('table.display').each(function() {
+                        if ($.fn.dataTable.isDataTable(this)) {
+                            $(this).DataTable().ajax.reload(null, false);
+                        }
+                    });
                 }
             }
 

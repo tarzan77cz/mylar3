@@ -20,6 +20,12 @@ import datetime
 from datetime import timedelta, date
 import subprocess
 import requests
+import cfscrape
+try:
+    from curl_cffi import requests as curl_requests
+    CURL_CFFI_AVAILABLE = True
+except ImportError:
+    CURL_CFFI_AVAILABLE = False
 import shlex
 import queue
 import json
@@ -29,6 +35,8 @@ import ctypes
 import platform
 import calendar
 import itertools
+import traceback
+import unicodedata
 import shutil
 import hashlib
 import gzip
@@ -48,6 +56,7 @@ import mylar
 from . import logger
 from mylar import db, sabnzbd, nzbget, process, getcomics, getimage
 from mylar.downloaders import mega, pixeldrain, mediafire
+
 
 def multikeysort(items, columns):
 
@@ -328,11 +337,11 @@ def rename_param(comicid, comicname, issue, ofilename, comicyear=None, issueid=N
                 if chkissue is None:
                     #rechk chkissue against int value of issue #
                     if arc:
-                        chkissue = myDB.selectone("SELECT * from storyarcs WHERE ComicID=? AND Int_IssueNumber=?", [comicid, issuedigits(issue)]).fetchone()
+                        chkissue = myDB.selectone("SELECT * from storyarcs WHERE ComicID=? AND Int_IssueNumber=?", [comicid, issue_number_parser(issue).asInt]).fetchone()
                     else:
-                        chkissue = myDB.selectone("SELECT * from issues WHERE ComicID=? AND Int_IssueNumber=?", [comicid, issuedigits(issue)]).fetchone()
+                        chkissue = myDB.selectone("SELECT * from issues WHERE ComicID=? AND Int_IssueNumber=?", [comicid, issue_number_parser(issue).asInt]).fetchone()
                         if all([chkissue is None, annualize == 'yes', mylar.CONFIG.ANNUALS_ON]):
-                            chkissue = myDB.selectone("SELECT * from annuals WHERE ComicID=? AND Int_IssueNumber=? AND NOT Deleted", [comicid, issuedigits(issue)]).fetchone()
+                            chkissue = myDB.selectone("SELECT * from annuals WHERE ComicID=? AND Int_IssueNumber=? AND NOT Deleted", [comicid, issue_number_parser(issue).asInt]).fetchone()
 
                     if chkissue is None:
                         logger.error('Invalid Issue_Number - please validate.')
@@ -412,161 +421,9 @@ def rename_param(comicid, comicname, issue, ofilename, comicyear=None, issueid=N
                 comversion = comicnzb['ComicVersion']
 
             unicodeissue = issuenum
-
-            if type(issuenum) == str:
-               vals = {'\xbd':'.5','\xbc':'.25','\xbe':'.75','\u221e':'9999999999','\xe2':'9999999999'}
-            else:
-               vals = {'\xbd':'.5','\xbc':'.25','\xbe':'.75','\\u221e':'9999999999','\xe2':'9999999999'}
-            x = [vals[key] for key in vals if key in issuenum]
-            if x:
-                issuenum = x[0]
-                logger.fdebug('issue number formatted: %s' % issuenum)
-
-            #comicid = issuenzb['ComicID']
-            #issueno = str(issuenum).split('.')[0]
-            issue_except = 'None'
-            valid_spaces = ('.', '-')
-            for issexcept in mylar.ISSUE_EXCEPTIONS:
-                if issexcept.lower() in issuenum.lower():
-                    logger.fdebug('ALPHANUMERIC EXCEPTION : [' + issexcept + ']')
-                    v_chk = [v for v in valid_spaces if v in issuenum]
-                    if v_chk:
-                        iss_space = v_chk[0]
-                        logger.fdebug('character space denoted as : ' + iss_space)
-                    else:
-                        logger.fdebug('character space not denoted.')
-                        iss_space = ''
-#                    if issexcept == 'INH':
-#                       issue_except = '.INH'
-                    if issexcept == 'NOW':
-                       if '!' in issuenum: issuenum = re.sub('\!', '', issuenum)
-#                       issue_except = '.NOW'
-
-                    issue_except = iss_space + issexcept
-                    logger.fdebug('issue_except denoted as : %s' % issue_except)
-                    if issuenum.lower() != issue_except.lower():
-                        issuenum = re.sub("[^0-9]", "", issuenum)
-                        if any([issuenum == '', issuenum is None]):
-                            issuenum = issue_except
-                    break
-
-#            if 'au' in issuenum.lower() and issuenum[:1].isdigit():
-#                issue_except = ' AU'
-#            elif 'ai' in issuenum.lower() and issuenum[:1].isdigit():
-#                issuenum = re.sub("[^0-9]", "", issuenum)
-#                issue_except = ' AI'
-#            elif 'inh' in issuenum.lower() and issuenum[:1].isdigit():
-#                issuenum = re.sub("[^0-9]", "", issuenum)
-#                issue_except = '.INH'
-#            elif 'now' in issuenum.lower() and issuenum[:1].isdigit():
-#                if '!' in issuenum: issuenum = re.sub('\!', '', issuenum)
-#                issuenum = re.sub("[^0-9]", "", issuenum)
-#                issue_except = '.NOW'
-            if '.' in issuenum:
-                iss_find = issuenum.find('.')
-                iss_b4dec = issuenum[:iss_find]
-                if iss_find == 0:
-                    iss_b4dec = '0'
-                iss_decval = issuenum[iss_find +1:]
-                if iss_decval.endswith('.'):
-                    iss_decval = iss_decval[:-1]
-                if int(iss_decval) == 0:
-                    iss = iss_b4dec
-                    issdec = int(iss_decval)
-                    issueno = iss
-                else:
-                    if len(iss_decval) == 1:
-                        iss = iss_b4dec + "." + iss_decval
-                        issdec = int(iss_decval) * 10
-                    else:
-                        iss = iss_b4dec + "." + iss_decval.rstrip('0')
-                        issdec = int(iss_decval.rstrip('0')) * 10
-                    issueno = iss_b4dec
-            else:
-                iss = issuenum
-                issueno = iss
-            # issue zero-suppression here
-            if mylar.CONFIG.ZERO_LEVEL is False:
-                zeroadd = ""
-            else:
-                if any([mylar.CONFIG.ZERO_LEVEL_N  == "none", mylar.CONFIG.ZERO_LEVEL_N is None]): zeroadd = ""
-                elif mylar.CONFIG.ZERO_LEVEL_N == "0x": zeroadd = "0"
-                elif mylar.CONFIG.ZERO_LEVEL_N == "00x": zeroadd = "00"
-
-            logger.fdebug('Zero Suppression set to : ' + str(mylar.CONFIG.ZERO_LEVEL_N))
-            prettycomiss = None
-
-            if issueno.isalpha():
-                logger.fdebug('issue detected as an alpha.')
-                prettycomiss = str(issueno)
-            else:
-                try:
-                    x = float(issuenum)
-                    #validity check
-                    if x < 0:
-                        logger.info('I\'ve encountered a negative issue #: %s. Trying to accomodate.' % issueno)
-                        prettycomiss = '-' + str(zeroadd) + str(issueno[1:])
-                    elif x == 9999999999:
-                        logger.fdebug('Infinity issue found.')
-                        issuenum = 'infinity'
-                    elif x >= 0:
-                        pass
-                    else:
-                        raise ValueError
-                except ValueError as e:
-                    logger.warn('Unable to properly determine issue number [ %s] - you should probably log this on github for help.' % issueno)
-                    return
-
-            if all([prettycomiss is None, len(str(issueno)) > 0]):
-                #if int(issueno) < 0:
-                #    self._log("issue detected is a negative")
-                #    prettycomiss = '-' + str(zeroadd) + str(abs(issueno))
-                if int(issueno) < 10:
-                    logger.fdebug('issue detected less than 10')
-                    if '.' in iss:
-                        if int(iss_decval) > 0:
-                            issueno = str(iss)
-                            prettycomiss = str(zeroadd) + str(iss)
-                        else:
-                            prettycomiss = str(zeroadd) + str(int(issueno))
-                    else:
-                        prettycomiss = str(zeroadd) + str(iss)
-                    if issue_except != 'None':
-                        prettycomiss = str(prettycomiss) + issue_except
-                    logger.fdebug('Zero level supplement set to ' + str(mylar.CONFIG.ZERO_LEVEL_N) + '. Issue will be set as : ' + str(prettycomiss))
-                elif int(issueno) >= 10 and int(issueno) < 100:
-                    logger.fdebug('issue detected greater than 10, but less than 100')
-                    if any([mylar.CONFIG.ZERO_LEVEL_N == "none", mylar.CONFIG.ZERO_LEVEL_N is None, mylar.CONFIG.ZERO_LEVEL is False]):
-                        zeroadd = ""
-                    else:
-                        zeroadd = "0"
-                    if '.' in iss:
-                        if int(iss_decval) > 0:
-                            issueno = str(iss)
-                            prettycomiss = str(zeroadd) + str(iss)
-                        else:
-                           prettycomiss = str(zeroadd) + str(int(issueno))
-                    else:
-                        prettycomiss = str(zeroadd) + str(iss)
-                    if issue_except != 'None':
-                        prettycomiss = str(prettycomiss) + issue_except
-                    logger.fdebug('Zero level supplement set to ' + str(mylar.CONFIG.ZERO_LEVEL_N) + '.Issue will be set as : ' + str(prettycomiss))
-                else:
-                    logger.fdebug('issue detected greater than 100')
-                    if issuenum == 'infinity':
-                        prettycomiss = 'infinity'
-                    else:
-                        if '.' in iss:
-                            if int(iss_decval) > 0:
-                                issueno = str(iss)
-                        prettycomiss = str(issueno)
-                    if issue_except != 'None':
-                        prettycomiss = str(prettycomiss) + issue_except
-                    logger.fdebug('Zero level supplement set to ' + str(mylar.CONFIG.ZERO_LEVEL_N) + '. Issue will be set as : ' + str(prettycomiss))
-            elif len(str(issueno)) == 0:
-                prettycomiss = str(issueno)
-                logger.fdebug('issue length error - cannot determine length. Defaulting to None:  ' + str(prettycomiss))
-
+            
+            prettycomiss = issue_number_parser(issuenum, issue_id=issueid, pretty_string = True).asString
+            
             logger.fdebug('Pretty Comic Issue is : ' + str(prettycomiss))
             if mylar.CONFIG.UNICODE_ISSUENUMBER:
                 logger.fdebug('Setting this to Unicode format as requested: %s' % prettycomiss)
@@ -979,267 +836,6 @@ def cleanhtml(raw_html):
     return flipflop
 
 
-def issuedigits(issnum):
-    #import db
-
-    int_issnum = None
-
-    try:
-        tst = issnum.isdigit()
-    except:
-        try:
-            isstest = str(issnum)
-            tst = isstest.isdigit()
-        except:
-            return 9999999999
-        else:
-            issnum = str(issnum)
-
-    if issnum.isdigit():
-        int_issnum = int(issnum) * 1000
-    else:
-        #count = 0
-        #for char in issnum:
-        #    if char.isalpha():
-        #        count += 1
-        #if count > 5:
-        #    logger.error('This is not an issue number - not enough numerics to parse')
-        #    int_issnum = 999999999999999
-        #    return int_issnum
-        try:
-            if 'au' in issnum.lower() and issnum[:1].isdigit():
-                int_issnum = (int(issnum[:-2]) * 1000) + ord('a') + ord('u')
-            elif 'ai' in issnum.lower() and issnum[:1].isdigit():
-                int_issnum = (int(issnum[:-2]) * 1000) + ord('a') + ord('i')
-            elif 'inh' in issnum.lower():
-                remdec = issnum.find('.')  #find the decimal position.
-                if remdec == -1:
-                #if no decimal, it's all one string
-                #remove the last 3 characters from the issue # (INH)
-                    int_issnum = (int(issnum[:-3]) * 1000) + ord('i') + ord('n') + ord('h')
-                else:
-                    int_issnum = (int(issnum[:-4]) * 1000) + ord('i') + ord('n') + ord('h')
-            elif 'now' in issnum.lower():
-                if '!' in issnum: issnum = re.sub('\!', '', issnum)
-                remdec = issnum.find('.')  #find the decimal position.
-                if remdec == -1:
-                #if no decimal, it's all one string
-                #remove the last 3 characters from the issue # (NOW)
-                    int_issnum = (int(issnum[:-3]) * 1000) + ord('n') + ord('o') + ord('w')
-                else:
-                    int_issnum = (int(issnum[:-4]) * 1000) + ord('n') + ord('o') + ord('w')
-            elif 'bey' in issnum.lower():
-                remdec = issnum.find('.')  #find the decimal position.
-                if remdec == -1:
-                #if no decimal, it's all one string
-                #remove the last 3 characters from the issue # (BEY)
-                    int_issnum = (int(issnum[:-3]) * 1000) + ord('b') + ord('e') + ord('y')
-                else:
-                    int_issnum = (int(issnum[:-4]) * 1000) + ord('b') + ord('e') + ord('y')
-            elif 'mu' in issnum.lower():
-                remdec = issnum.find('.')
-                if remdec == -1:
-                    int_issnum = (int(issnum[:-2]) * 1000) + ord('m') + ord('u')
-                else:
-                    int_issnum = (int(issnum[:-3]) * 1000) + ord('m') + ord('u')
-            elif 'lr' in issnum.lower():
-                remdec = issnum.find('.')
-                if remdec == -1:
-                    int_issnum = (int(issnum[:-2]) * 1000) + ord('l') + ord('r')
-                else:
-                    int_issnum = (int(issnum[:-3]) * 1000) + ord('l') + ord('r')
-            elif 'hu' in issnum.lower():
-                remdec = issnum.find('.')  #find the decimal position.
-                if remdec == -1:
-                    int_issnum = (int(issnum[:-2]) * 1000) + ord('h') + ord('u')
-                else:
-                    int_issnum = (int(issnum[:-3]) * 1000) + ord('h') + ord('u')
-            elif 'black' in issnum.lower():
-                remdec = issnum.find('.')  #find the decimal position.
-                if remdec != -1:
-                    issnum = '%s %s' % (issnum[:remdec], issnum[remdec+1:])
-                    #int_issnum = (int(issnum[:-2]) * 1000) + ord('b') + ord('l')
-                #else:
-                #    int_issnum = (int(issnum[:-3]) * 1000) + ord('h') + ord('u')
-            elif 'deaths' in issnum.lower():
-                remdec = issnum.find('.')  #find the decimal position.
-                if remdec == -1:
-                    int_issnum = (int(issnum[:-6]) * 1000) + ord('d') + ord('e') + ord('a') + ord('t') + ord('h') + ord('s')
-                else:
-                    int_issnum = (int(issnum[:-7]) * 1000) + ord('d') + ord('e') + ord('a') + ord('t') + ord('h') + ord('s')
-
-        except ValueError as e:
-            logger.error('[' + issnum + '] Unable to properly determine the issue number. Error: %s', e)
-            return 9999999999
-
-        if int_issnum is not None:
-            return int_issnum
-
-        #try:
-        #    issnum.decode('ascii')
-        #    logger.fdebug('ascii character.')
-        #except:
-        #    logger.fdebug('Unicode character detected: ' + issnum)
-        #else: issnum.decode(mylar.SYS_ENCODING).decode('utf-8')
-        #if type(issnum) == str:
-        #    try:
-        #        issnum = issnum.decode('utf-8')
-        #    except:
-        #        issnum = issnum.decode('windows-1252')
-
-        if type(issnum) == str:
-            vals = {'\xbd':.5,'\xbc':.25,'\xbe':.75,'\u221e':9999999999,'\xe2':9999999999}
-        else:
-            vals = {'\xbd':.5,'\xbc':.25,'\xbe':.75,'\\u221e':9999999999,'\xe2':9999999999}
-
-        x = [vals[key] for key in vals if key in issnum]
-
-        if x:
-            chk = re.sub('[^0-9]', '', issnum).strip()
-            if len(chk) == 0:
-                int_issnum = x[0] * 1000
-            else:
-                int_issnum = (int(re.sub('[^0-9]', '', issnum).strip()) + x[0]) * 1000
-            #logger.fdebug('int_issnum: ' + str(int_issnum))
-        else:
-            if any(['.' in issnum, ',' in issnum]):
-                #logger.fdebug('decimal detected.')
-                if ',' in issnum: issnum = re.sub(',', '.', issnum)
-                issst = str(issnum).find('.')
-                if issst == 0:
-                    issb4dec = 0
-                else:
-                    issb4dec = str(issnum)[:issst]
-                decis = str(issnum)[issst +1:]
-                if len(decis) == 1:
-                    decisval = int(decis) * 10
-                    issaftdec = str(decisval)
-                elif len(decis) == 2:
-                    decisval = int(decis)
-                    issaftdec = str(decisval)
-                else:
-                    decisval = decis
-                    issaftdec = str(decisval)
-                #if there's a trailing decimal (ie. 1.50.) and it's either intentional or not, blow it away.
-                if issaftdec[-1:] == '.':
-                    issaftdec = issaftdec[:-1]
-                try:
-                    int_issnum = (int(issb4dec) * 1000) + (int(issaftdec) * 10)
-                except ValueError:
-                    try:
-                        ordtot = 0
-                        if any(ext == issaftdec.upper() for ext in mylar.ISSUE_EXCEPTIONS):
-                            inu = 0
-                            while (inu < len(issaftdec)):
-                                ordtot += ord(issaftdec[inu].lower())  #lower-case the letters for simplicty
-                                inu+=1
-                            int_issnum = (int(issb4dec) * 1000) + ordtot
-                    except Exception as e:
-                            logger.warn('error: %s' % e)
-                            ordtot = 0
-                    if ordtot == 0:
-                        #logger.error('This has no issue # for me to get - Either a Graphic Novel or one-shot.')
-                        int_issnum = 999999999999999
-            elif all([ '[' in issnum, ']' in issnum ]):
-                issnum_tmp = issnum.find('[')
-                int_issnum = int(issnum[:issnum_tmp].strip()) * 1000
-                legacy_num = issnum[issnum_tmp+1:issnum.find(']')]
-            else:
-                try:
-                    x = float(issnum)
-                    #logger.info(x)
-                    #validity check
-                    if x < 0:
-                        #logger.info("I've encountered a negative issue #: " + str(issnum) + ". Trying to accomodate.")
-                        int_issnum = (int(x) *1000) - 1
-                    elif bool(x):
-                        logger.fdebug('Infinity issue found.')
-                        int_issnum = 9999999999 * 1000
-                    else: raise ValueError
-                except ValueError as e:
-                    #this will account for any alpha in a issue#, so long as it doesn't have decimals.
-                    x = 0
-                    tstord = None
-                    issno = None
-                    invchk = "false"
-                    if issnum.lower() != 'preview':
-                        while (x < len(issnum)):
-                            if issnum[x].isalpha():
-                            #take first occurance of alpha in string and carry it through
-                                tstord = issnum[x:].rstrip()
-                                tstord = re.sub('[\-\,\.\+]', '', tstord).rstrip()
-                                issno = issnum[:x].rstrip()
-                                issno = re.sub('[\-\,\.\+]', '', issno).rstrip()
-                                try:
-                                    isschk = float(issno)
-                                except ValueError as e:
-                                    if len(issnum) == 1 and issnum.isalpha():
-                                        break
-                                    #logger.fdebug('[' + issno + '] Invalid numeric for issue - cannot be found. Ignoring.')
-                                    issno = None
-                                    tstord = None
-                                    invchk = "true"
-                                break
-                            x+=1
-                    if tstord is not None and issno is not None:
-                        a = 0
-                        ordtot = 0
-                        if len(issnum) == 1 and issnum.isalpha():
-                            int_issnum = ord(tstord.lower())
-                        else:
-                            while (a < len(tstord)):
-                                ordtot += ord(tstord[a].lower())  #lower-case the letters for simplicty
-                                a+=1
-                            int_issnum = (int(issno) * 1000) + ordtot
-                    elif invchk == "true":
-                        if any([issnum.lower() == 'alpha', issnum.lower() == 'omega', issnum.lower() == 'fall', issnum.lower() == 'spring', issnum.lower() == 'summer', issnum.lower() == 'winter']):
-                            inu = 0
-                            ordtot = 0
-                            while (inu < len(issnum)):
-                                ordtot += ord(issnum[inu].lower())  #lower-case the letters for simplicty
-                                inu+=1
-                            int_issnum = ordtot
-                        else:
-                            logger.fdebug('this does not have an issue # that I can parse properly.')
-                            return 999999999999999
-                    else:
-                        match = re.match(r"(?P<first>\d+)\s?[-&/\\]\s?(?P<last>\d+)", issnum)
-                        if match:
-                            first_num, last_num = map(int, match.groups())
-                            if last_num > first_num:
-                                int_issnum = (first_num * 1000) + int(((last_num - first_num) * .5) * 1000)
-                            else:
-                                int_issnum = (first_num * 1000) + (.5 * 1000)
-                        elif issnum == '9-5':
-                            issnum = '9\xbd'
-                            logger.fdebug('issue: 9-5 is an invalid entry. Correcting to : ' + issnum)
-                            int_issnum = (9 * 1000) + (.5 * 1000)
-                        elif issnum == '2 & 3':
-                            logger.fdebug('issue: 2 & 3 is an invalid entry. Ensuring things match up')
-                            int_issnum = (2 * 1000) + (.5 * 1000)
-                        elif issnum == '4 & 5':
-                            logger.fdebug('issue: 4 & 5 is an invalid entry. Ensuring things match up')
-                            int_issnum = (4 * 1000) + (.5 * 1000)
-                        elif issnum == '112/113':
-                            int_issnum = (112 * 1000) + (.5 * 1000)
-                        elif issnum == '14-16':
-                            int_issnum = (15 * 1000) + (.5 * 1000)
-                        elif issnum == '380/381':
-                            int_issnum = (380 * 1000) + (.5 * 1000)
-                        elif issnum.lower() == 'preview':
-                            inu = 0
-                            ordtot = 0
-                            while (inu < len(issnum)):
-                                ordtot += ord(issnum[inu].lower())  #lower-case the letters for simplicty
-                                inu+=1
-                            int_issnum = ordtot
-                        else:
-                            logger.error(issnum + ' this has an alpha-numeric in the issue # which I cannot account for.')
-                            return 999999999999999
-
-    return int_issnum
-
-
 def checkthepub(ComicID):
     #import db
     myDB = db.DBConnection()
@@ -1449,20 +1045,27 @@ def LoadAlternateSearchNames(seriesname_alt, comicid):
 
         return Alternate_Names
 
-def havetotals(refreshit=None):
+def havetotals(refreshit=None, start_char_filter=None):
         #import db
 
         comics = []
         myDB = db.DBConnection()
 
+        start_char_where_clause = ''
+        if not start_char_filter is None:
+            if start_char_filter == '#':
+                start_char_where_clause = f"{'WHERE' if refreshit is None else 'AND'} NOT hex(lower(substr(comics.ComicName,1,1))) BETWEEN '61' AND '7A'"
+            else:
+                start_char_where_clause = f"{'WHERE' if refreshit is None else 'AND'} lower(substr(comics.ComicName,1,1)) = '{start_char_filter.lower()}'"
+
         if refreshit is None:
             if mylar.CONFIG.ANNUALS_ON:
-                comiclist = myDB.select('SELECT comics.*, COUNT(totalAnnuals.IssueID) AS TotalAnnuals FROM comics LEFT JOIN annuals as totalAnnuals on totalAnnuals.ComicID = comics.ComicID GROUP BY comics.ComicID order by comics.ComicSortName COLLATE NOCASE')
+                comiclist = myDB.select(f"SELECT comics.*, COUNT(totalAnnuals.IssueID) AS TotalAnnuals FROM comics LEFT JOIN annuals as totalAnnuals on totalAnnuals.ComicID = comics.ComicID {start_char_where_clause} GROUP BY comics.ComicID order by comics.ComicSortName COLLATE NOCASE")
             else:
-                comiclist = myDB.select('SELECT * FROM comics GROUP BY ComicID order by ComicSortName COLLATE NOCASE')
+                comiclist = myDB.select(f"SELECT * FROM comics {start_char_where_clause} GROUP BY ComicID order by ComicSortName COLLATE NOCASE")
         else:
             comiclist = []
-            comicref = myDB.selectone('SELECT comics.ComicID AS ComicID, comics.Have AS Have, comics.Total as Total, COUNT(totalAnnuals.IssueID) AS TotalAnnuals FROM comics LEFT JOIN annuals as totalAnnuals on totalAnnuals.ComicID = comics.ComicID WHERE comics.ComicID=? GROUP BY comics.ComicID', [refreshit]).fetchone()
+            comicref = myDB.selectone(f"SELECT comics.ComicID AS ComicID, comics.Have AS Have, comics.Total as Total, COUNT(totalAnnuals.IssueID) AS TotalAnnuals FROM comics LEFT JOIN annuals as totalAnnuals on totalAnnuals.ComicID = comics.ComicID WHERE comics.ComicID=? {start_char_where_clause} GROUP BY comics.ComicID", [refreshit]).fetchone()
             #refreshit is the ComicID passed from the Refresh Series to force/check numerical have totals
             comiclist.append({"ComicID":      comicref['ComicID'],
                               "Have":         comicref['Have'],
@@ -1508,6 +1111,7 @@ def havetotals(refreshit=None):
                     percent = 101
             except (ZeroDivisionError, TypeError):
                 percent = 0
+                # TODO: This should be turned into an integer (0 or -1 preferably) to avoid issues with downstream expectations that this value is an int.  Need to follow through usages of havetotals()
                 totalissues = '?'
 
             if comic['LatestDate'] is None:
@@ -1949,7 +1553,7 @@ def get_issue_title(IssueID=None, ComicID=None, IssueNumber=None, IssueArcID=Non
                 logger.fdebug('Unable to locate given IssueID within the db. Assuming Issue Title is None.')
                 return None
     else:
-        issue = myDB.selectone('SELECT * FROM issues WHERE ComicID=? AND Int_IssueNumber=?', [ComicID, issuedigits(IssueNumber)]).fetchone()
+        issue = myDB.selectone('SELECT * FROM issues WHERE ComicID=? AND Int_IssueNumber=?', [ComicID, issue_number_parser(issue).asInt]).fetchone()
         if issue is None:
             issue = myDB.selectone('SELECT * FROM annuals WHERE IssueID=?', [IssueID]).fetchone()
             if issue is None:
@@ -1986,12 +1590,12 @@ def listLibrary(comicid=None):
     myDB = db.DBConnection()
     if comicid is None:
         if mylar.CONFIG.ANNUALS_ON is True:
-            list = myDB.select("SELECT a.comicid, b.releasecomicid, a.status FROM Comics AS a LEFT JOIN annuals AS b on a.comicid=b.comicid group by a.comicid")
+            list = myDB.select("SELECT a.comicid, b.releasecomicid, a.status FROM Comics AS a LEFT JOIN annuals AS b on a.comicid=b.comicid group by a.comicid, b.releasecomicid")
         else:
             list = myDB.select("SELECT comicid, status FROM Comics group by comicid")
     else:
         if mylar.CONFIG.ANNUALS_ON is True:
-            list = myDB.select("SELECT a.comicid, b.releasecomicid, a.status FROM Comics AS a LEFT JOIN annuals AS b on a.comicid=b.comicid WHERE a.comicid=? group by a.comicid", [re.sub('4050-', '', comicid).strip()])
+            list = myDB.select("SELECT a.comicid, b.releasecomicid, a.status FROM Comics AS a LEFT JOIN annuals AS b on a.comicid=b.comicid WHERE a.comicid=? group by a.comicid, b.releasecomicid", [re.sub('4050-', '', comicid).strip()])
         else:
             list = myDB.select("SELECT comicid, status FROM Comics WHERE comicid=? group by comicid", [re.sub('4050-', '', comicid).strip()])
 
@@ -2093,7 +1697,7 @@ def manualArc(issueid, reading_order, storyarcid):
     issnum = arcval['Issue_Number']
     issdate = str(arcval['Issue_Date'])
     storedate = str(arcval['Store_Date'])
-    int_issnum = issuedigits(issnum)
+    int_issnum = issue_number_parser(issnum).asInt
 
     comicid_results = mylar.cv.getComic(comicid=None, rtype='comicyears', comicidlist=cidlist)
     seriesYear = 'None'
@@ -2630,12 +2234,12 @@ def issue_find_ids(ComicName, ComicID, pack, IssueNumber, pack_id):
     issueinfo = []
     write_valids = []  # to keep track of snatched packs already downloading so we don't re-queue/download again
 
-    Int_IssueNumber = issuedigits(IssueNumber)
+    Int_IssueNumber = issue_number_parser(IssueNumber).asInt
     valid = False
 
     ignores = []
     for iss in pack_issues:
-       int_iss = issuedigits(str(iss))
+       int_iss = issue_number_parser(str(iss)).asInt
        for xb in issuelist:
            if xb['Status'] != 'Downloaded':
                if xb['Int_IssueNumber'] == int_iss:
@@ -3118,7 +2722,7 @@ def weekly_info(week=None, year=None, current=None):
         year = int(year)
     else:
         #find the given week number for the current day
-        weeknumber = current_weeknumber
+        weeknumber = int(current_weeknumber)
         year = int(todaydate.strftime("%Y"))
 
     #monkey patch for 2018/2019 - week 52/week 0
@@ -3250,7 +2854,7 @@ def weekly_info(week=None, year=None, current=None):
 def latestdate_update():
     #import db
     myDB = db.DBConnection()
-    ccheck = myDB.select('SELECT a.ComicID, b.IssueID, a.LatestDate, b.ReleaseDate, b.Issue_Number from comics as a left join issues as b on a.comicid=b.comicid where a.LatestDate < b.ReleaseDate or a.LatestDate like "%Unknown%" group by a.ComicID')
+    ccheck = myDB.select("SELECT a.ComicID, b.IssueID, a.LatestDate, b.ReleaseDate, b.Issue_Number from comics as a left join issues as b on a.comicid=b.comicid where a.LatestDate < b.ReleaseDate or a.LatestDate like '%Unknown%' group by a.ComicID")
     if ccheck is None or len(ccheck) == 0:
         return
     logger.info('Now preparing to update ' + str(len(ccheck)) + ' series that have out-of-date latest date information.')
@@ -3277,7 +2881,7 @@ def latestissue_update():
         c_list = []
         for ck in cck:
             c_list.append({'ComicID': ck['ComicID'],
-                           'intLatestIssue': issuedigits(ck['LatestIssue'])})
+                           'intLatestIssue': issue_number_parser(ck['LatestIssue']).asInt})
 
         logger.info('[LATEST_ISSUE_TO_INT] Updating the latestIssue field for %s series' % (len(c_list)))
 
@@ -3290,22 +2894,462 @@ def latestissue_update():
                 logger.fdebug('exception encountered: %s' % e)
                 continue
 
+def ddl_watchdog():
+    """
+    Watchdog function to detect stuck DDL downloads.
+    Checks if DDL_LOCK is True and if the download is actually progressing.
+    If download is stuck for more than 10 minutes, resets DDL_LOCK and requeues the item.
+    Also checks for "Downloading" items that are already completed.
+    """
+    while True:
+        try:
+            time.sleep(60)  # Check every minute
+            
+            myDB = db.DBConnection()
+            
+            # First, check for "Downloading" items that are actually completed
+            downloading_items = myDB.select("SELECT * FROM ddl_info WHERE status = 'Downloading'")
+            items_fixed = 0  # Track how many items we fixed
+            if downloading_items:
+                for downloading_item in downloading_items:
+                    try:
+                        filename = downloading_item['filename']
+                        try:
+                            remote_filesize_str = downloading_item['remote_filesize']
+                        except (KeyError, TypeError):
+                            remote_filesize_str = None
+                    except (KeyError, TypeError):
+                        filename = None
+                        remote_filesize_str = None
+                    
+                    if filename and mylar.CONFIG.DDL_LOCATION:
+                        filepath = os.path.join(mylar.CONFIG.DDL_LOCATION, filename)
+                        
+                        if os.path.exists(filepath):
+                            try:
+                                # Try to convert remote_filesize to int, default to 0 if it fails
+                                remote_filesize = 0
+                                if remote_filesize_str and remote_filesize_str != 'None':
+                                    try:
+                                        remote_filesize = int(str(remote_filesize_str).strip())
+                                    except (ValueError, TypeError):
+                                        remote_filesize = 0
+                                current_size = os.path.getsize(filepath)
+                                
+                                # If file exists and has the expected size (or is close to it), mark as Completed
+                                if remote_filesize > 0 and abs(current_size - remote_filesize) < 1024:  # Within 1KB tolerance
+                                    logger.info('[DDL-WATCHDOG] File %s is already downloaded (size: %s). Marking as Completed.' % (filename, current_size))
+                                    
+                                    ctrlval = {'id': downloading_item['id']}
+                                    val = {'status': 'Completed',
+                                           'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}
+                                    myDB.upsert('ddl_info', val, ctrlval)
+                                    
+                                    # Remove from DDL_QUEUED if present
+                                    try:
+                                        item_id = downloading_item['id']
+                                        if item_id in mylar.DDL_QUEUED:
+                                            mylar.DDL_QUEUED.remove(item_id)
+                                    except (ValueError, KeyError, TypeError):
+                                        pass
+                                    
+                                    items_fixed += 1
+                                    continue  # Skip to next item
+                                
+                                # File exists but doesn't have correct size yet - check if it's actively downloading
+                                # Check file modification time - if file was modified recently (within 2 minutes), it's actively downloading
+                                file_mtime = os.path.getmtime(filepath)
+                                time_since_mod = datetime.datetime.now() - datetime.datetime.fromtimestamp(file_mtime)
+                                
+                                # If file was modified recently, it's actively downloading - don't reset it
+                                if time_since_mod < timedelta(minutes=2):
+                                    logger.fdebug('[DDL-WATCHDOG] File %s is actively downloading (modified %s seconds ago). Skipping.' % 
+                                                 (filename, int(time_since_mod.total_seconds())))
+                                    continue  # Skip to next item - this is an active download
+                                
+                                # File exists but size is wrong and hasn't been modified recently - might be stuck
+                                # But we only reset if it's been more than 10 minutes since last update
+                                try:
+                                    updated_date_str = downloading_item['updated_date']
+                                except (KeyError, TypeError):
+                                    updated_date_str = None
+                                
+                                if updated_date_str:
+                                    try:
+                                        updated_date = datetime.datetime.strptime(updated_date_str, '%Y-%m-%d %H:%M')
+                                        time_diff = datetime.datetime.now() - updated_date
+                                        
+                                        # If it's been more than 10 minutes and file hasn't been modified recently, it's stuck
+                                        if time_diff > timedelta(minutes=10) and time_since_mod > timedelta(minutes=10):
+                                            try:
+                                                series_name = downloading_item['series']
+                                            except (KeyError, TypeError):
+                                                series_name = 'Unknown'
+                                            
+                                            logger.warn('[DDL-WATCHDOG] File %s exists but download appears stuck (size: %s/%s, last modified: %s minutes ago). Resetting to Queued: %s' % 
+                                                       (filename, current_size, remote_filesize, int(time_since_mod.total_seconds() / 60), series_name))
+                                            
+                                            # Requeue the item
+                                            ctrlval = {'id': downloading_item['id']}
+                                            val = {'status': 'Queued',
+                                                   'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}
+                                            myDB.upsert('ddl_info', val, ctrlval)
+                                            
+                                            # Remove from DDL_QUEUED if present
+                                            try:
+                                                item_id = downloading_item['id']
+                                                if item_id in mylar.DDL_QUEUED:
+                                                    mylar.DDL_QUEUED.remove(item_id)
+                                            except (KeyError, TypeError):
+                                                pass
+                                            
+                                            items_fixed += 1
+                                            continue  # Skip to next item
+                                    except (ValueError, TypeError) as e:
+                                        logger.fdebug('[DDL-WATCHDOG] Error checking date for stuck file: %s' % e)
+                            except (ValueError, TypeError) as e:
+                                logger.fdebug('[DDL-WATCHDOG] Error checking file size: %s' % e)
+                        else:
+                            # File doesn't exist but status is Downloading - check if it's stuck
+                            try:
+                                updated_date_str = downloading_item['updated_date']
+                            except (KeyError, TypeError):
+                                updated_date_str = None
+                            
+                            if updated_date_str:
+                                try:
+                                    updated_date = datetime.datetime.strptime(updated_date_str, '%Y-%m-%d %H:%M')
+                                    time_diff = datetime.datetime.now() - updated_date
+                                    
+                                    # If it's been more than 10 minutes and file doesn't exist, reset to Queued
+                                    if time_diff > timedelta(minutes=10):
+                                        try:
+                                            series_name = downloading_item['series']
+                                        except (KeyError, TypeError):
+                                            series_name = 'Unknown'
+                                        
+                                        logger.warn('[DDL-WATCHDOG] Download status is "Downloading" but file doesn\'t exist for %s minutes. Resetting to Queued: %s' % 
+                                                   (int(time_diff.total_seconds() / 60), series_name))
+                                        
+                                        # Requeue the item
+                                        ctrlval = {'id': downloading_item['id']}
+                                        val = {'status': 'Queued',
+                                               'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}
+                                        myDB.upsert('ddl_info', val, ctrlval)
+                                        
+                                        # Remove from DDL_QUEUED if present
+                                        try:
+                                            item_id = downloading_item['id']
+                                            if item_id in mylar.DDL_QUEUED:
+                                                mylar.DDL_QUEUED.remove(item_id)
+                                        except (KeyError, TypeError):
+                                            pass
+                                        
+                                        items_fixed += 1
+                                        continue  # Skip to next item
+                                except (ValueError, TypeError) as e:
+                                    logger.fdebug('[DDL-WATCHDOG] Error checking date for missing file: %s' % e)
+                    else:
+                        # No filename or DDL_LOCATION - check if it's been stuck for a while
+                        try:
+                            updated_date_str = downloading_item['updated_date']
+                        except (KeyError, TypeError):
+                            updated_date_str = None
+                        
+                        if updated_date_str:
+                            try:
+                                updated_date = datetime.datetime.strptime(updated_date_str, '%Y-%m-%d %H:%M')
+                                time_diff = datetime.datetime.now() - updated_date
+                                
+                                # If it's been more than 10 minutes without filename, reset to Queued
+                                if time_diff > timedelta(minutes=10):
+                                    try:
+                                        series_name = downloading_item['series']
+                                    except (KeyError, TypeError):
+                                        series_name = 'Unknown'
+                                    
+                                    logger.warn('[DDL-WATCHDOG] Download status is "Downloading" but no filename for %s minutes. Resetting to Queued: %s' % 
+                                               (int(time_diff.total_seconds() / 60), series_name))
+                                    
+                                    # Requeue the item
+                                    ctrlval = {'id': downloading_item['id']}
+                                    val = {'status': 'Queued',
+                                           'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}
+                                    myDB.upsert('ddl_info', val, ctrlval)
+                                    
+                                    # Remove from DDL_QUEUED if present
+                                    try:
+                                        item_id = downloading_item['id']
+                                        if item_id in mylar.DDL_QUEUED:
+                                            mylar.DDL_QUEUED.remove(item_id)
+                                    except (ValueError, KeyError, TypeError):
+                                        pass
+                                    
+                                    items_fixed += 1
+                            except (ValueError, TypeError) as e:
+                                logger.fdebug('[DDL-WATCHDOG] Error checking date for item without filename: %s' % e)
+            
+            # After fixing stuck items, check if there are any remaining "Downloading" items
+            # If not, and DDL_LOCK is True, reset it
+            if items_fixed > 0:
+                remaining_downloading = myDB.selectone("SELECT count(*) AS count FROM ddl_info WHERE status = 'Downloading'").fetchone()
+                remaining_count = 0
+                if remaining_downloading:
+                    try:
+                        remaining_count = remaining_downloading['count']
+                    except (KeyError, TypeError):
+                        remaining_count = 0
+                
+                # If no "Downloading" items remain and DDL_LOCK is True, reset it
+                if remaining_count == 0 and mylar.DDL_LOCK is True:
+                    mylar.DDL_LOCK = False
+                    logger.info('[DDL-WATCHDOG] Reset DDL_LOCK - no "Downloading" items remaining after cleanup')
+            
+            # Then check for stuck downloads (original logic)
+            if mylar.DDL_LOCK is True:
+                # Find item with status "Downloading"
+                downloading_item = myDB.selectone("SELECT * FROM ddl_info WHERE status = 'Downloading' ORDER BY updated_date DESC").fetchone()
+                
+                if downloading_item:
+                    # Check if file exists and get its size
+                    # sqlite3.Row doesn't support .get(), use dictionary access with try/except
+                    try:
+                        filename = downloading_item['filename']
+                    except (KeyError, TypeError):
+                        filename = None
+                    if filename and mylar.CONFIG.DDL_LOCATION:
+                        filepath = os.path.join(mylar.CONFIG.DDL_LOCATION, filename)
+                        
+                        if os.path.exists(filepath):
+                            current_size = os.path.getsize(filepath)
+                            
+                            # Check updated_date - if it's been more than 10 minutes, check if file size changed
+                            try:
+                                updated_date_str = downloading_item['updated_date']
+                            except (KeyError, TypeError):
+                                updated_date_str = None
+                            if updated_date_str:
+                                try:
+                                    updated_date = datetime.datetime.strptime(updated_date_str, '%Y-%m-%d %H:%M')
+                                    time_diff = datetime.datetime.now() - updated_date
+                                    
+                                    # If it's been more than 10 minutes since last update
+                                    if time_diff > timedelta(minutes=10):
+                                        # Check file modification time - if file hasn't been modified in 10 minutes, it's stuck
+                                        file_mtime = os.path.getmtime(filepath)
+                                        time_since_mod = datetime.datetime.now() - datetime.datetime.fromtimestamp(file_mtime)
+                                        
+                                        # If file hasn't been modified in 10 minutes, it's stuck
+                                        if time_since_mod > timedelta(minutes=10):
+                                            logger.warn('[DDL-WATCHDOG] Detected stuck download: %s (size: %s bytes, last modified: %s minutes ago)' % 
+                                                       (filename, current_size, int(time_since_mod.total_seconds() / 60)))
+                                            
+                                            # Reset DDL_LOCK
+                                            mylar.DDL_LOCK = False
+                                            logger.warn('[DDL-WATCHDOG] Reset DDL_LOCK due to stuck download')
+                                            
+                                            # Requeue the item
+                                            ctrlval = {'id': downloading_item['id']}
+                                            val = {'status': 'Queued',
+                                                   'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}
+                                            myDB.upsert('ddl_info', val, ctrlval)
+                                            
+                                            # Remove from DDL_QUEUED if present
+                                            try:
+                                                if downloading_item['id'] in mylar.DDL_QUEUED:
+                                                    mylar.DDL_QUEUED.remove(downloading_item['id'])
+                                            except (ValueError, KeyError):
+                                                pass
+                                            
+                                            try:
+                                                series_name = downloading_item['series']
+                                            except (KeyError, TypeError):
+                                                series_name = 'Unknown'
+                                            logger.info('[DDL-WATCHDOG] Requeued stuck download: %s' % series_name)
+                                            
+                                            # Optionally: delete incomplete file
+                                            try:
+                                                os.remove(filepath)
+                                                logger.info('[DDL-WATCHDOG] Removed incomplete file: %s' % filepath)
+                                            except Exception as e:
+                                                logger.warn('[DDL-WATCHDOG] Could not remove incomplete file %s: %s' % (filepath, e))
+                                
+                                except Exception as e:
+                                    logger.fdebug('[DDL-WATCHDOG] Error checking download status: %s' % e)
+                        else:
+                            # File doesn't exist but status is Downloading - might be stuck
+                            try:
+                                updated_date_str = downloading_item['updated_date']
+                            except (KeyError, TypeError):
+                                updated_date_str = None
+                            if updated_date_str:
+                                try:
+                                    updated_date = datetime.datetime.strptime(updated_date_str, '%Y-%m-%d %H:%M')
+                                    time_diff = datetime.datetime.now() - updated_date
+                                    
+                                    # If it's been more than 10 minutes and file doesn't exist, reset
+                                    if time_diff > timedelta(minutes=10):
+                                        logger.warn('[DDL-WATCHDOG] Download status is "Downloading" but file doesn\'t exist for 10+ minutes. Resetting.')
+                                        mylar.DDL_LOCK = False
+                                        
+                                        ctrlval = {'id': downloading_item['id']}
+                                        val = {'status': 'Queued',
+                                               'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}
+                                        myDB.upsert('ddl_info', val, ctrlval)
+                                        
+                                        try:
+                                            if downloading_item['id'] in mylar.DDL_QUEUED:
+                                                mylar.DDL_QUEUED.remove(downloading_item['id'])
+                                        except (ValueError, KeyError):
+                                            pass
+                                        
+                                        try:
+                                            series_name = downloading_item['series']
+                                        except (KeyError, TypeError):
+                                            series_name = 'Unknown'
+                                        logger.info('[DDL-WATCHDOG] Requeued stuck download (no file): %s' % series_name)
+                                
+                                except Exception as e:
+                                    logger.fdebug('[DDL-WATCHDOG] Error in watchdog: %s' % e)
+                else:
+                    # DDL_LOCK is True but no item with status "Downloading" - reset lock
+                    logger.warn('[DDL-WATCHDOG] DDL_LOCK is True but no item with status "Downloading" found. Resetting lock.')
+                    mylar.DDL_LOCK = False
+        
+        except Exception as e:
+            logger.error('[DDL-WATCHDOG] Error in watchdog thread: %s' % e)
+            time.sleep(60)  # Wait before retrying
+
+def ddl_load_queued_items():
+    """
+    Load items from ddl_info table with status 'Queued' into DDL_QUEUE on startup.
+    This ensures that items queued before restart will continue downloading.
+    """
+    try:
+        myDB = db.DBConnection()
+        queued_items = myDB.select("SELECT * FROM ddl_info WHERE status = 'Queued' ORDER BY updated_date ASC")
+        
+        if queued_items:
+            logger.info('[DDL-STARTUP] Found %s queued items in ddl_info table. Loading into DDL queue...' % len(queued_items))
+            
+            items_loaded = 0
+            items_skipped = 0
+            for item in queued_items:
+                try:
+                    # Check if already in queue or downloading to prevent duplicates
+                    if item['id'] in mylar.DDL_QUEUED:
+                        logger.fdebug('[DDL-STARTUP] Item %s [ID: %s] already in DDL_QUEUED, skipping' % (item['series'], item['id']))
+                        items_skipped += 1
+                        continue
+                    
+                    # Determine if it's a oneoff
+                    OneOff = False
+                    comic = myDB.selectone(
+                        "SELECT * from comics WHERE ComicID=? AND ComicName != 'None'",
+                        [item['comicid']],
+                    ).fetchone()
+                    if comic is None:
+                        comic = myDB.selectone(
+                            "SELECT * from storyarcs WHERE IssueID=?",
+                            [item['issueid']],
+                        ).fetchone()
+                        if comic is None:
+                            OneOff = True
+                    
+                    # Reconstruct the item dictionary to match what parse_downloadresults creates
+                    # sqlite3.Row doesn't support .get(), use dictionary access with try/except
+                    try:
+                        remote_filesize = item['remote_filesize']
+                        if remote_filesize is None:
+                            remote_filesize = 0
+                    except (KeyError, TypeError):
+                        remote_filesize = 0
+                    
+                    queue_item = {
+                        'link': item['link'],
+                        'mainlink': item['mainlink'],
+                        'series': item['series'],
+                        'year': item['year'],
+                        'size': item['size'],
+                        'comicid': item['comicid'],
+                        'issueid': item['issueid'],
+                        'oneoff': OneOff,
+                        'id': item['id'],
+                        'link_type': item['link_type'],
+                        'filename': item['filename'],
+                        'comicinfo': None,
+                        'packinfo': None,
+                        'site': item['site'],
+                        'remote_filesize': remote_filesize,
+                        'resume': None,
+                    }
+                    
+                    mylar.DDL_QUEUE.put(queue_item)
+                    # Add to DDL_QUEUED to prevent duplicates
+                    mylar.DDL_QUEUED.append(item['id'])
+                    items_loaded += 1
+                    logger.fdebug('[DDL-STARTUP] Loaded queued item: %s (%s) [ID: %s]' % (item['series'], item['year'], item['id']))
+                except Exception as e:
+                    try:
+                        item_id = item['id']
+                    except (KeyError, TypeError):
+                        item_id = 'Unknown'
+                    logger.warn('[DDL-STARTUP] Error loading queued item ID %s: %s' % (item_id, e))
+            
+            logger.info('[DDL-STARTUP] Successfully loaded %s items into DDL queue (skipped %s duplicates)' % (items_loaded, items_skipped))
+            # Set flag to indicate startup load is complete
+            mylar.DDL_STARTUP_LOADED = True
+        else:
+            logger.fdebug('[DDL-STARTUP] No queued items found in ddl_info table')
+            mylar.DDL_STARTUP_LOADED = True
+    except Exception as e:
+        logger.error('[DDL-STARTUP] Error loading queued items: %s' % e)
+        mylar.DDL_STARTUP_LOADED = True
+
 def ddl_downloader(queue):
     myDB = db.DBConnection()
     link_type_failure = {}
+    loop_count = 0
+    last_status_log = time.time()
+    
+    logger.info('[DDL-DOWNLOADER] DDL downloader thread started and running')
+    
     while True:
+        loop_count += 1
+        current_time = time.time()
+        
+        # Log status every 60 seconds (1 minute) for debugging
+        if current_time - last_status_log >= 60:
+            logger.info('[DDL-DOWNLOADER] Status - Loop: %s, DDL_LOCK: %s, Queue size: %s, DDL_QUEUED count: %s' % 
+                       (loop_count, mylar.DDL_LOCK, queue.qsize(), len(mylar.DDL_QUEUED)))
+            last_status_log = current_time
+        
         if mylar.DDL_LOCK is True:
+            logger.debug('[DDL-DOWNLOADER] DDL_LOCK is True, waiting... (Queue size: %s)' % queue.qsize())
             time.sleep(5)
 
         elif mylar.DDL_LOCK is False and queue.qsize() >= 1:
-            item = queue.get(True)
+            logger.info('[DDL-DOWNLOADER] Processing item from queue - DDL_LOCK: False, Queue size: %s' % queue.qsize())
+            try:
+                item = queue.get(True)
+                logger.info('[DDL-DOWNLOADER] Got item from queue: %s (%s) [ID: %s]' % 
+                           (item.get('series', 'Unknown'), item.get('year', 'Unknown'), item.get('id', 'Unknown')))
+            except Exception as e:
+                logger.error('[DDL-DOWNLOADER] Error getting item from queue: %s' % e)
+                import traceback
+                logger.error('[DDL-DOWNLOADER] Traceback: %s' % traceback.format_exc())
+                time.sleep(5)
+                continue
 
             if item == 'exit':
-                logger.info('Cleaning up workers for shutdown')
+                logger.info('[DDL-DOWNLOADER] Received exit signal, cleaning up workers for shutdown')
                 break
 
             if item['id'] not in mylar.DDL_QUEUED:
                 mylar.DDL_QUEUED.append(item['id'])
+                logger.debug('[DDL-DOWNLOADER] Added item ID %s to DDL_QUEUED' % item['id'])
+            else:
+                logger.debug('[DDL-DOWNLOADER] Item ID %s already in DDL_QUEUED' % item['id'])
 
             try:
                 link_type_failure[item['id']].append(item['link_type_failure'])
@@ -3321,6 +3365,7 @@ def ddl_downloader(queue):
             val = {'status':       'Downloading',
                    'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}
             myDB.upsert('ddl_info', val, ctrlval)
+            logger.debug('[DDL-DOWNLOADER] Updated item ID %s status to Downloading in DB' % item['id'])
 
             if item['site'] == 'DDL(GetComics)':
                 try:
@@ -3389,7 +3434,12 @@ def ddl_downloader(queue):
                     logger.error('process error: %s [%s]' %(e, ddzstat))
 
                 #logger.fdebug('mylar.ddl_queued: %s' % mylar.DDL_QUEUED)
-                mylar.DDL_QUEUED.remove(item['id'])
+                # Remove from DDL_QUEUED if present (may have been removed by watchdog)
+                try:
+                    if item['id'] in mylar.DDL_QUEUED:
+                        mylar.DDL_QUEUED.remove(item['id'])
+                except (ValueError, KeyError):
+                    pass
                 try:
                     link_type_failure.pop(item['id'])
                 except KeyError:
@@ -3436,14 +3486,108 @@ def ddl_downloader(queue):
                         myDB.upsert('ddl_info', nval, ctrlval)
                         #undo all snatched items, to previous status via item['id'] - this will be set to Skipped currently regardless of previous status
                         reverse_the_pack_snatch(item['id'], item['comicid'])
-                        link_type_failure.pop(item['id'])
+                        try:
+                            link_type_failure.pop(item['id'])
+                        except KeyError:
+                            pass
                         ddl_cleanup(item['id'])
                 else:
                     logger.info('[Status: %s] Failed to download item from %s : %s ' % (ddzstat['success'], item['site'], ddzstat))
                     myDB.action('DELETE FROM ddl_info where id=?', [item['id']])
                     mylar.search.FailedMark(item['issueid'], item['comicid'], item['id'], ddzstat['filename'], item['site'])
         else:
-            time.sleep(5)
+            # This branch: DDL_LOCK is True OR (DDL_LOCK is False AND queue.qsize() == 0)
+            if mylar.DDL_LOCK is True:
+                logger.debug('[DDL-DOWNLOADER] DDL_LOCK is True, cannot process. Queue size: %s' % queue.qsize())
+                time.sleep(5)
+            elif queue.qsize() == 0:
+                # Queue is empty - check DB for queued items and auto-load them
+                # But only if startup load has completed to prevent race conditions
+                if mylar.DDL_LOCK is False:
+                    # Wait for startup load to complete before auto-loading
+                    if not hasattr(mylar, 'DDL_STARTUP_LOADED') or not mylar.DDL_STARTUP_LOADED:
+                        logger.debug('[DDL-DOWNLOADER] Waiting for startup load to complete...')
+                        time.sleep(2)
+                        continue
+                    
+                    try:
+                        queued_items = myDB.select("SELECT * FROM ddl_info WHERE status = 'Queued' ORDER BY updated_date ASC")
+                        if queued_items:
+                            logger.info('[DDL-DOWNLOADER] Queue empty, found %s queued items in DB. Auto-loading...' % len(queued_items))
+                            items_loaded = 0
+                            for db_item in queued_items:
+                                # Check if already in queue or downloading
+                                if db_item['id'] in mylar.DDL_QUEUED:
+                                    logger.fdebug('[DDL-DOWNLOADER] Item %s [ID: %s] already in DDL_QUEUED, skipping' % (db_item['series'], db_item['id']))
+                                    continue
+                                
+                                # Determine if it's a oneoff
+                                OneOff = False
+                                comic = myDB.selectone(
+                                    "SELECT * from comics WHERE ComicID=? AND ComicName != 'None'",
+                                    [db_item['comicid']],
+                                ).fetchone()
+                                if comic is None:
+                                    comic = myDB.selectone(
+                                        "SELECT * from storyarcs WHERE IssueID=?",
+                                        [db_item['issueid']],
+                                    ).fetchone()
+                                    if comic is None:
+                                        OneOff = True
+                                
+                                # Reconstruct the item dictionary
+                                try:
+                                    remote_filesize = db_item['remote_filesize']
+                                    if remote_filesize is None:
+                                        remote_filesize = 0
+                                except (KeyError, TypeError):
+                                    remote_filesize = 0
+                                
+                                queue_item = {
+                                    'link': db_item['link'],
+                                    'mainlink': db_item['mainlink'],
+                                    'series': db_item['series'],
+                                    'year': db_item['year'],
+                                    'size': db_item['size'],
+                                    'comicid': db_item['comicid'],
+                                    'issueid': db_item['issueid'],
+                                    'oneoff': OneOff,
+                                    'id': db_item['id'],
+                                    'link_type': db_item['link_type'],
+                                    'filename': db_item['filename'],
+                                    'comicinfo': None,
+                                    'packinfo': None,
+                                    'site': db_item['site'],
+                                    'remote_filesize': remote_filesize,
+                                    'resume': None,
+                                }
+                                
+                                queue.put(queue_item)
+                                mylar.DDL_QUEUED.append(db_item['id'])
+                                items_loaded += 1
+                                logger.fdebug('[DDL-DOWNLOADER] Auto-loaded queued item: %s (%s) [ID: %s]' % (db_item['series'], db_item['year'], db_item['id']))
+                            
+                            if items_loaded > 0:
+                                logger.info('[DDL-DOWNLOADER] Auto-loaded %s items from DB into queue (Queue size now: %s)' % (items_loaded, queue.qsize()))
+                            else:
+                                # No items to load, sleep a bit before checking again
+                                logger.debug('[DDL-DOWNLOADER] No items to auto-load (all already in DDL_QUEUED). Sleeping...')
+                                time.sleep(5)
+                        else:
+                            # No queued items in DB, sleep a bit before checking again
+                            time.sleep(5)
+                    except Exception as e:
+                        logger.error('[DDL-DOWNLOADER] Error checking DB for queued items: %s' % e)
+                        import traceback
+                        logger.error('[DDL-DOWNLOADER] Traceback: %s' % traceback.format_exc())
+                        time.sleep(5)
+                else:
+                    logger.debug('[DDL-DOWNLOADER] Queue empty but DDL_LOCK is True, cannot auto-load. Waiting...')
+                    time.sleep(5)
+            else:
+                # Unexpected state - should not happen
+                logger.warn('[DDL-DOWNLOADER] Unexpected state: DDL_LOCK=%s, queue.qsize()=%s' % (mylar.DDL_LOCK, queue.qsize()))
+                time.sleep(5)
 
 def ddl_cleanup(id):
    # remove html file from cache if it's successful
@@ -3662,7 +3806,8 @@ def cdh_monitor(queue, item, nzstat, readd=False):
         if item not in queue.queue:
             mylar.NZB_QUEUE.put(item)
     elif nzstat['status'] is True:
-        if nzstat['failed'] is False:
+        # Currently only checks SAB at this point as nzbget filename not available
+        if nzstat['failed'] is False and mylar.USE_SABNZBD is True:
             fullpath = Path(nzstat['location']) / nzstat['name']
             filecondition = check_file_condition(fullpath)
             if not filecondition['status']:
@@ -4341,8 +4486,48 @@ def getImage(comicid, url, issueid=None, thumbnail_path=None, apicall=False, ove
 
     if apicall is False:
         logger.info('Attempting to retrieve the comic image for series')
+    
+    # Use curl_cffi for CloudFlare bypass (TLS fingerprinting)
     try:
-        r = requests.get(url, params=None, stream=True, verify=mylar.CONFIG.CV_VERIFY, headers=mylar.CV_HEADERS)
+        if CURL_CFFI_AVAILABLE:
+            # Prepare headers with ComicVine-specific ones
+            headers = {
+                'User-Agent': mylar.CV_HEADERS.get('User-Agent', mylar.CONFIG.CV_USER_AGENT),
+                'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Referer': 'https://comicvine.gamespot.com/',
+                'Origin': 'https://comicvine.gamespot.com',
+                'Sec-Fetch-Dest': 'image',
+                'Sec-Fetch-Mode': 'no-cors',
+                'Sec-Fetch-Site': 'same-site',
+                'DNT': '1',
+            }
+            r = curl_requests.get(url, headers=headers, impersonate="chrome110", verify=mylar.CONFIG.CV_VERIFY, stream=True, timeout=30)
+        else:
+            raise ImportError("curl_cffi not available")
+    except ImportError:
+        # Fallback to cfscrape if curl_cffi is not available
+        try:
+            scraper = cfscrape.create_scraper()
+            # Update headers with ComicVine-specific ones
+            scraper.headers.update({
+                'User-Agent': mylar.CV_HEADERS.get('User-Agent', mylar.CONFIG.CV_USER_AGENT),
+                'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Referer': 'https://comicvine.gamespot.com/',
+                'Origin': 'https://comicvine.gamespot.com',
+                'Sec-Fetch-Dest': 'image',
+                'Sec-Fetch-Mode': 'no-cors',
+                'Sec-Fetch-Site': 'same-site',
+                'DNT': '1',
+            })
+            r = scraper.get(url, stream=True, verify=mylar.CONFIG.CV_VERIFY, timeout=30)
+        except ImportError:
+            # Fallback to regular requests if cfscrape is also not available
+            logger.warn('[getImage] curl_cffi and cfscrape not available, falling back to requests')
+            session = requests.Session()
+            session.headers.update(mylar.CV_HEADERS)
+            r = session.get(url, params=None, stream=True, verify=mylar.CONFIG.CV_VERIFY, timeout=30)
     except Exception as e:
         if apicall is False:
             logger.warn('[ERROR: %s] Unable to download image from CV URL link: %s' % (e, url))
@@ -5013,9 +5198,12 @@ def check_file_condition(file_path):
         file_path (str): Location of the file to check
 
     Returns:
-        dict: A dictionary containing a status (True/False for good/bad file), type (known file type), 
+        dict: A dictionary containing a status (True/False for good/bad file), type (known file type),
             and quality (descriptive string)
     """
+    if not os.path.isfile(file_path):
+        return {'status': True, 'type' : 'unknown', 'quality': 'Asked to check something that does not exist or is a diretory.  Passing it for now.'}
+
     logger.fdebug(f'Checking file condition of {file_path}')
 
     max_number_length = max(len(m) for m in magic_numbers.values())
@@ -5055,6 +5243,445 @@ def check_file_condition(file_path):
     else:
         return {'status': False, 'type' : 'unknown', 'quality': 'Unknown file type, unknown condition'}
 
+def issue_number_to_int(number_part = None, string_part = None):
+    """
+    Calculate the numeric representation of an issue number based on the numeric and string components.  This prioritised the
+    numeric part for sorting purposes.
+
+    Parameters
+    ----------
+    number_part : float
+        The numeric part of the issue number
+    string_part : str
+        The string decorations of the issue number
+
+    Returns
+    -------
+    An integer representation of the issue number
+    """
+    # TODO: Add a check for integer overflow (miniscule risk) for SQLITE maxint - either limit it here as a preventative check, or handle it in database handler class.
+
+    if number_part is None and string_part is None:
+        return 0
+
+    if string_part is None and isinstance(number_part, int):
+        return number_part * 1000
+
+    string_ordinal_sum = 0
+    if string_part is not None:
+        string_part = string_part.lower()
+        for x in string_part:
+            string_ordinal_sum += ord(x)
+
+    # If the number is not visible within three decimal places, but non-zero, need to differentiate it from zero (e.g. Quantum and Woody)
+    if (number_part is not None) and (0 < number_part < 0.001):
+        string_ordinal_sum += 1
+
+    if (number_part is not None) and (number_part < 0):
+        string_ordinal_sum *= -1
+
+    int_issuenum = round((0 if number_part is None else number_part) * 1000) + string_ordinal_sum
+
+    return int_issuenum
+
+def format_issue_number(number, zero_padding=0):
+    """
+    Consistent formatting string for numbers
+
+    Parameters
+    ----------
+    number: str
+        The numeric part of the issue number
+    zero_padding : int
+        Significant figures for padding the whole number part
+
+    Returns
+    -------
+    Formatted string
+    """
+    negative = False
+    if number[0] == '-':
+        negative = True
+        number = number[1:]
+
+    split_num = number.split('.')
+
+    whole = 0 if split_num[0] == '' else split_num[0]
+    dec = 0 if len(split_num) == 1 else split_num[1]
+
+    return f"{'-' if negative else ''}{whole:0>{zero_padding}}{'' if dec == 0 else f'.{dec}'}"
+
+
+IssueNumber = namedtuple('IssueNumber', ['asInt', 'asString', 'asLegacy'], defaults=[None])
+def issue_number_parser(issue_no, zero_padding=None, issue_id= None, from_data_source= False, pretty_string = False):
+    """
+    Returns a tuple of the integer representation of an issue "number", and the string representation for file naming.
+
+    For ordering purposes, it will choose the first valid numeric string found in the issue number, and treat all remaining
+    characters as decoration for differentiation purposes between two different "numbers".
+
+    General approach is to minimise change to the raw issue number for the filename, for naming stability and avoiding
+    creating a situation where a rename stops mylar from identifying the number again causing an archive status.  Any
+    characters that are ill supported on filesystems should be dealt with, any any characters that represent numbers
+    (fractions, infinity, etc.) should be converted for some semblance of sensible ordering.
+
+    Parameters
+    ----------
+    issue_no         : str
+        The issue number as a string
+    issue_id         : str (optional)
+        The IssueID for this issue for potential dupe detection within volumes
+    from_data_source : bool
+        If this has been called using data from a data source of record (e.g. ComicVine) then any string parts may be
+        considered for addition to the exceptions list for file identification / matching
+    pretty_string    : bool
+        For efficiency saving, it will not generate the string formatted version by default.
+
+    The below parameter will default to the global mylar config if not set.
+    zero_padding : int (optional)
+        The width of zero padding required for the numeric part string representation
+
+    Returns
+    -------
+    A namedtuple of issue number representations.
+
+    asInt    : int
+        The integer representation of the issue number
+    asString : str
+        The formatted string representation of the issue number
+    asLegacy : str
+        The legacy issue number denoted by square brackets (if one exists)
+
+    References
+    ----------
+    Here are a list of known awkward issue numbering examples that have been used to inform this method and
+    their CV URLs correct at time of writing.
+
+    Amazing Spider-Man 65.Deaths : https://comicvine.gamespot.com/the-amazing-spider-man/4050-142577/
+    Ninjak 0 and 00 : https://comicvine.gamespot.com/ninjak/4050-5348/
+    Wolverine & the X-Men 027AU : https://comicvine.gamespot.com/wolverine-the-x-men/4050-43539/
+    Weapon Zero T-4 : https://comicvine.gamespot.com/weapon-zero/4050-19915/
+    Super DC Giant S-27 : https://comicvine.gamespot.com/super-dc-giant/4050-2466/
+    Earth X X, Earth X ½ : https://comicvine.gamespot.com/earth-x/4050-6354/
+    Avengers 1½ : https://comicvine.gamespot.com/the-avengers/4050-2128/
+    Shield Infinity 1 : https://comicvine.gamespot.com/shield-infinity/4050-112433/
+    Prime Infinity ∞ : https://comicvine.gamespot.com/prime-infinity/4050-61187/ (see also https://comicvine.gamespot.com/the-night-man-infinity/4050-61188/)
+    Wizard 207 (duplicated) : https://comicvine.gamespot.com/wizard-the-comics-magazine/4050-18692/
+    X-O Manowar 050X : https://comicvine.gamespot.com/x-o-manowar/4050-4831/
+    Amazing Spider-Man 92.BEY : https://comicvine.gamespot.com/the-amazing-spider-man/4050-112161/
+    U-Comix 170/171 : https://comicvine.gamespot.com/u-comix-170-171/4000-472797/
+    Spider-Man Badrock 1A : https://comicvine.gamespot.com/spider-manbadrock/4050-20275/
+    Totally Awesome Hulk 1.MU : https://comicvine.gamespot.com/the-totally-awesome-hulk/4050-86408/
+    Hulk -1 : https://comicvine.gamespot.com/the-incredible-hulk/4050-2406/
+    Original Sin 3.3 : https://comicvine.gamespot.com/original-sin/4050-73241/
+    Haunt of Fear 1 [15] : https://comicvine.gamespot.com/haunt-of-fear/4050-1398/
+    God is Dead Alpha/Omega : https://comicvine.gamespot.com/god-is-dead-the-book-of-acts/4050-76270/
+    Quantum and Woody 0.0001½ : https://comicvine.gamespot.com/quantum-and-woody/4050-105656/
+
+    Still unsolved (need more filechecker changes):
+    Army and Navy 1 #02: https://comicvine.gamespot.com/army-and-navy-fun-parade/4050-127823/
+    Dark Fantasies 9 & 10: https://comicvine.gamespot.com/dark-fantasies/4050-24691/
+    """
+    #logger.debug(f'Attempting to process issue number "{issue_no}"')
+
+    # if not isinstance(issue_no, str):
+    #     logger.warn(f'Issue Number not a string, attempting to cast as one: {issue_no}')
+    #     try:
+    #         issue_no = str(issue_no)
+    #     except:
+    #         logger.error(f'Failed to convert issue number to string.  Defaulting to a large number.')
+    #         return IssueNumber(999999999999999,'999999999999999')
+
+    legacy_issue = None
+
+    # Grab mylar's settings for number formatting
+    #issueHashPrefix = False
+    #if r'#$Issue' in mylar.CONFIG.FILE_FORMAT:
+    #    issueHashPrefix = True
+
+    if zero_padding is None:
+        if mylar.CONFIG.ZERO_LEVEL_N == '0x':
+            zero_padding = 2
+        elif mylar.CONFIG.ZERO_LEVEL_N == '00x':
+            zero_padding = 3
+        else:
+            zero_padding = 0
+
+    try:
+        if issue_no.isdigit():
+            return IssueNumber(issue_number_to_int(int(issue_no)),format_issue_number(issue_no,zero_padding) if pretty_string else None, legacy_issue)
+    except:
+        if issue_no is None:
+            return IssueNumber(999999999999999,'999999999999999')
+        
+        try:
+            test_issue_no = str(issue_no)
+            if test_issue_no.isdigit():
+                return IssueNumber(issue_number_to_int(int(test_issue_no)),format_issue_number(test_issue_no,zero_padding) if pretty_string else None, legacy_issue)
+        except:
+            return IssueNumber(999999999999999,'999999999999999')
+
+    # - Filename safety characters
+    # - Hash marks as special for mylar identification
+    if len(issue_no) > 0 and issue_no[0] == '#':
+        issue_no = issue_no[1:]
+
+    # Numbers traversing issues listed in CV as either A/B or C-D will get picked up as separate numbers by
+    # the file checker.  Let's just consider them to be the first number for sorting and ordering purposes
+    # Examples are Cerebus and U-Comix
+    check_range = re.fullmatch(r'(?P<firstno>\d+)(?P<splitter>[\/\-])(?P<lastno>\d+)', issue_no)
+    if check_range:
+        first_no = check_range.group('firstno')
+        last_no  = check_range.group('lastno')
+        logger.fdebug(f'Issue number {issue_no} provided as range, sorting based on first number {first_no}')
+        formatted_first_no = format_issue_number(first_no,zero_padding)
+        formatted_last_no = format_issue_number(last_no,zero_padding)
+        return IssueNumber(issue_number_to_int(float(first_no)), f"{formatted_first_no}-{formatted_last_no}" if pretty_string else None, legacy_issue)
+
+    issue_no = re.sub(r'[\\/&#]', '.', issue_no)
+
+    if issue_no == '':
+        return IssueNumber(1,'')
+
+    # Extract any legacy issue numbers and drop the legacy part
+    if all([ '[' in issue_no, ']' in issue_no ]):
+        legacy_start = issue_no.find('[')
+        legacy_issue = issue_no[legacy_start+1:issue_no.find(']')]
+        issue_no = issue_no[:legacy_start].strip()
+        #logger.debug(f'Found legacy issue number [{legacy_issue}] and treating this as #{issue_no}')
+
+    # Make the assumption that infinity is a) large for sorting b) uses the whole string for
+    # differentiation (if not solo) and c) can be expressed in a filename without error
+    if '\u221e' in issue_no:
+        #logger.debug(f'Found infinity issue - setting to be very large')
+        return IssueNumber(issue_number_to_int(9999999,issue_no), issue_no if pretty_string else None, legacy_issue)
+
+    # Tries its best to account for multiple fractions in a number, but there really is a limit ...
+    # fraction_chars = {'\xbc' : '25', '\xbd' : '5', '\xbe' : '75', '\u2152' : '1', '\u2153' : '33', '\u2154' : '67'}
+    fraction_chars = {chr(x) : str(round(unicodedata.numeric(chr(x)),2))[2:] for x in itertools.chain(range(0x00BC, 0x00BF),range(0x2150,0x215F))}
+    fractions_present = [x for x in fraction_chars.keys() if x in issue_no]
+    # if len(fractions_present) > 0:
+    #     logger.debug(f'Found fractions in issue number ({fractions_present}) - converting to decimal form')
+
+    for fraction_char in fractions_present:
+        # Substitue in order of solo entry (quickest), existing decimal prefix, then existing whole number prefix
+        if issue_no == fraction_char:
+            issue_no = f'0.{fraction_chars[fraction_char]}'
+        else:
+            decimal_search = fr'(?P<decimal>\.\d*)(?P<fraction>{fraction_char})'
+            wholenum_search = fr'(?P<wholenum>\d*)(?P<fraction>{fraction_char})'
+
+            # This has to be done sequentially for special case of 0.000¼0000¼
+            while re.search(decimal_search, issue_no) is not None:
+                issue_no = re.sub(decimal_search,fr'\g<decimal>{fraction_chars[fraction_char]}', issue_no, count=1)
+            issue_no = re.sub(wholenum_search,fr'\g<wholenum>.{fraction_chars[fraction_char]}', issue_no)
+
+    # Pre-scrub any commas within numbers for thousandths seperators
+    issue_no = re.sub(r'(?P<prenum>\d),(?P<postnum>\d)',r'\g<prenum>\g<postnum>',issue_no)
+
+    # Quick finish if we've already got a number after pre-processing
+    try:
+        float(issue_no)
+    except ValueError:
+        #logger.debug('Issue Number is not solely numeric, moving on')
+        pass
+    else:
+        #logger.debug(f'Issue identified as numeric {issue_no}')
+        return IssueNumber(issue_number_to_int(float(issue_no)),format_issue_number(issue_no,zero_padding) if pretty_string else None, legacy_issue)
+
+    # Find the first recognisable numeric string, and use that to denote the issue "number"
+    # Note that the regex will match empty strings so we need to filter this result set.  This was to
+    # allow for decimals <1 with no leading 0
+    numeric_parts = [x for x in re.findall(r'(?:-|\+)?\d*(?:\.\d{1,3})?', issue_no) if x != '']
+
+    if len(numeric_parts) == 0:
+        # Issue number is a pure string.
+        #logger.debug('Issue Number is entirely String based')
+        if from_data_source:
+            add_issue_exception(issue_no, exception_type='Exact')
+        return IssueNumber(issue_number_to_int(string_part=issue_no), issue_no if pretty_string else None, legacy_issue)
+    else:
+        numeric_part = numeric_parts[0]
+        match_position = issue_no.find(numeric_part)
+        # The filechecker has to operate on a l-r basis to avoid picking part of the volume as the issue number.  It also will remove full-stops, 
+        # and spaces when processing so we need to remove these from the int calculation to ensure comparisons.  The calculation itself is case insensitive
+        prefix = issue_no[:match_position]
+        suffix = issue_no[match_position + len(numeric_part):]
+        intIssueNumStringPart = re.sub(r'[\.\-]','',(prefix.strip() + suffix.strip()))
+
+        # Manage the exception list if this issue number has come from CV
+        # For string prefixed issues, the whole issue should be considered for matching, otherwise just the suffix
+        if from_data_source:
+            if len(prefix) > 0:
+                add_issue_exception(issue_no, exception_type='Exact')
+            else:
+                add_issue_exception(re.sub(r'[\. ]','',suffix), exception_type='Exact')
+
+        #logger.debug(f'Breaking Issue Number into parts and formatting number ({prefix},{numeric_part},{suffix})')
+        formatted_number = format_issue_number(numeric_part,zero_padding)
+        return IssueNumber(issue_number_to_int(float(numeric_part), intIssueNumStringPart), (prefix + formatted_number + suffix) if pretty_string else None, legacy_issue)
+
+    logger.error(f'Something went horribly wrong and I could not work out the issue number from {issue_no}.  Somehow I have also bypassed the conditional above.')
+    return IssueNumber(999999999999999,'999999999999999')
+
+def issueExceptionCheck(checkString, full_match=True):
+    if full_match:
+        return any(re.fullmatch(pattern, checkString, re.IGNORECASE) for pattern in issue_exception_list('Pattern')) or any(exact.lower() == checkString.lower() for exact in issue_exception_list('Exact'))
+    else:
+        return any(re.search(pattern, checkString, re.IGNORECASE) for pattern in issue_exception_list('Pattern')) or any(exact.lower() in checkString.lower() for exact in issue_exception_list('Exact'))
+
+def issue_exception_list(exception_type = 'Exact'):
+    """Returns the superset of the inbuilt INBUILT_ISSUE_EXCEPTIONS and any stored in config.ini as CUSTOM_ISSUE_EXCEPTIONS
+
+    Returns:
+        list[str] : Issue numbering exceptions
+    """
+    if type(mylar.CONFIG.CUSTOM_ISSUE_EXCEPTIONS) != list:
+        try:
+            mylar.CONFIG.CUSTOM_ISSUE_EXCEPTIONS = json.loads(mylar.CONFIG.CUSTOM_ISSUE_EXCEPTIONS)
+        except Exception:
+            pass
+
+    return [x[0] for x in
+            [list(item) for item in set([tuple(entry) for entry in mylar.INBUILT_ISSUE_EXCEPTIONS] +
+                                         [tuple(entry) for entry in mylar.CONFIG.CUSTOM_ISSUE_EXCEPTIONS])]
+              if x[1] == exception_type]
+
+def add_issue_exception(exception, exception_type='Exact'):
+    """Check if a non-numeric issue number part is already covered by existing issue exceptions, and add it to
+    the list if not covered.
+
+    Args:
+        exception (str) : The string exception to be checked against
+        exception_type (Exact/Pattern) : The type of exception being checked
+    """
+    exception_exists = False
+    if exception_type == 'Exact':
+        if exception.lower() in [x.lower() for x in issue_exception_list(exception_type)] or any(re.fullmatch(pattern, exception, re.IGNORECASE) for pattern in issue_exception_list('Pattern')):
+            exception_exists = True
+    else:
+        if exception.lower() in [x.lower() for x in issue_exception_list('Pattern')]:
+            exception_exists = True
+
+    if not exception_exists:
+        logger.info(f'Issue numbering exception "{exception}" not found in list.  Adding to CUSTOM_ISSUE_EXCEPTIONS.')
+
+        # Storing numeric exceptions is likely to cause problems.  Let's not.  If we can cast it, GTFO
+        try:
+            float(exception)
+            logger.fdebug(f"Attempted to add {exception} as an issue number exception but it is numeric")
+            return
+        except ValueError:
+            pass
+
+        mylar.CONFIG.CUSTOM_ISSUE_EXCEPTIONS.append([exception, exception_type])
+        mylar.CONFIG.writeconfig(values={'custom_issue_exceptions': json.dumps(mylar.CONFIG.CUSTOM_ISSUE_EXCEPTIONS)})
+
+def where_am_i(ignore_host_return=False):
+    """ Attempt to determine the externally facing URL for mylar.
+
+    Args:
+        ignore_host_return (bool, optional): Ignore the host_return config override. Defaults to False.
+
+    Returns:
+        str: A URL for mylar in the form protocol://address:port/
+    """
+    # generate the mylar host address if applicable.
+    if mylar.CONFIG.ENABLE_HTTPS:
+        proto = 'https://'
+    else:
+        proto = 'http://'
+
+    if mylar.CONFIG.HTTP_ROOT is None:
+        hroot = '/'
+    elif mylar.CONFIG.HTTP_ROOT.endswith('/'):
+        hroot = mylar.CONFIG.HTTP_ROOT
+    else:
+        if mylar.CONFIG.HTTP_ROOT != '/':
+            hroot = mylar.CONFIG.HTTP_ROOT + '/'
+        else:
+            hroot = mylar.CONFIG.HTTP_ROOT
+
+    if mylar.LOCAL_IP is None:
+        # if mylar's local, get the local IP using socket.
+        try:
+            import socket
+
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(('8.8.8.8', 80))
+            mylar.LOCAL_IP = s.getsockname()[0]
+            s.close()
+        except Exception as e:
+            logger.warn(
+                'Unable to determine local IP. Defaulting to host address for'
+                ' Mylar provided as : %s. Error returned: %s'
+                % (mylar.CONFIG.HTTP_HOST, e)
+            )
+
+    if mylar.CONFIG.HOST_RETURN and not ignore_host_return:
+        # mylar has the return value already provided
+        # (easier and will work if it's right)
+        if mylar.CONFIG.HOST_RETURN.endswith('/'):
+            mylar_host = mylar.CONFIG.HOST_RETURN
+        else:
+            mylar_host = mylar.CONFIG.HOST_RETURN + '/'
+
+    elif mylar.CONFIG.SAB_TO_MYLAR:
+        # if sab & mylar are on different machines, check to see if they are
+        # local or external IP's provided for host.
+        if (
+            mylar.CONFIG.HTTP_HOST == 'localhost'
+            or mylar.CONFIG.HTTP_HOST == '0.0.0.0'
+            or mylar.CONFIG.HTTP_HOST.startswith('10.')
+            or mylar.CONFIG.HTTP_HOST.startswith('192.')
+            or mylar.CONFIG.HTTP_HOST.startswith('172.')
+        ):
+            # if mylar's local, use the local IP already assigned to LOCAL_IP.
+            mylar_host = (
+                '%s%s:%s%s'
+                % (proto, mylar.LOCAL_IP, mylar.CONFIG.HTTP_PORT, hroot)
+                )
+        else:
+            if mylar.EXT_IP is None:
+                # if mylar isn't local, get the external IP using pystun.
+                import stun
+
+                sip = mylar.CONFIG.HTTP_HOST
+                port = int(mylar.CONFIG.HTTP_PORT)
+                try:
+                    nat_type, ext_ip, ext_port = stun.get_ip_info(sip, port)
+                    mylar_host = (
+                        '%s%s:%s%s'
+                        % (proto, ext_ip, ext_port, hroot)
+                        )
+                    mylar.EXT_IP = ext_ip
+                except Exception as e:
+                    logger.warn(
+                        'Unable to retrieve External IP - try using the'
+                        ' host_return option in the config.ini. Error: %s' % e
+                    )
+                    mylar_host = (
+                        '%s%s:%s%s'
+                        % (proto, mylar.CONFIG.HTTP_HOST,
+                            mylar.CONFIG.HTTP_PORT, hroot)
+                    )
+            else:
+                mylar_host = (
+                    '%s%s:%s%s'
+                    % (proto, mylar.EXT_IP, mylar.CONFIG.HTTP_PORT, hroot)
+                )
+
+    else:
+        # if all else fails, drop it back to the basic host:port and try that.
+        if mylar.LOCAL_IP is None:
+            tmp_host = mylar.CONFIG.HTTP_HOST
+        else:
+            tmp_host = mylar.LOCAL_IP
+        mylar_host = (
+            proto + str(tmp_host) + ':' + str(mylar.CONFIG.HTTP_PORT) + hroot
+        )
+
+    return mylar_host
 
 from threading import Thread
 
