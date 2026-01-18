@@ -4267,10 +4267,36 @@ class WebInterface(object):
             myDB.action("DELETE FROM ddl_info WHERE status = 'Completed'")
             return json.dumps({'status': True, 'message': 'Successfully cleared %s completed items from the history' % countchk})
 
+        if mode == 'clear_failed':
+            chk = myDB.selectone("SELECT count(*) AS count FROM ddl_info WHERE status = 'Failed'").fetchone()
+            countchk = 0
+            if chk:
+                countchk = chk['count']
+
+            if countchk == 0:
+                return json.dumps({'status': True, 'message': 'No failed items to clear'})
+
+            myDB.action("DELETE FROM ddl_info WHERE status = 'Failed'")
+            return json.dumps({'status': True, 'message': 'Successfully cleared %s failed items from the history' % countchk})
+
         if mode == 'restart_queue':
             # Reset DDL_LOCK first
             mylar.DDL_LOCK = False
             logger.info('[DDL-RESTART-QUEUE] Reset DDL_LOCK')
+            
+            # Check if DDL downloader thread is running, restart if not
+            try:
+                if mylar.DDLPOOL is None or not mylar.DDLPOOL.is_alive():
+                    logger.warn('[DDL-RESTART-QUEUE] DDL downloader thread is not running. Restarting...')
+                    mylar.queue_schedule('ddl_queue', 'start')
+                else:
+                    logger.debug('[DDL-RESTART-QUEUE] DDL downloader thread is running (thread alive: %s)' % mylar.DDLPOOL.is_alive())
+            except Exception as e:
+                logger.warn('[DDL-RESTART-QUEUE] Error checking DDL thread status: %s. Attempting to restart...' % e)
+                try:
+                    mylar.queue_schedule('ddl_queue', 'start')
+                except Exception as e2:
+                    logger.error('[DDL-RESTART-QUEUE] Failed to restart DDL thread: %s' % e2)
             
             # Clear DDL_QUEUED to allow requeuing all items
             # This ensures that items that were in queue but not yet processed can be requeued
@@ -4305,6 +4331,44 @@ class WebInterface(object):
                            'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}
                     myDB.upsert('ddl_info', val, ctrlval)
                 logger.info('[DDL-RESTART-QUEUE] Reset %s stuck "Downloading" items to "Queued" status' % len(downloading_items))
+            
+            # Reset "Completed" and "Failed" items to "Queued" status (for re-downloading snatched issues)
+            # This handles cases where an issue has status "Snatched" but ddl_info has "Completed" or "Failed"
+            completed_failed_items = myDB.select("SELECT * FROM ddl_info WHERE status IN ('Completed', 'Failed')")
+            reset_count = 0
+            if completed_failed_items:
+                for item in completed_failed_items:
+                    # Check if the corresponding issue is still "Snatched" - if so, reset it
+                    try:
+                        issue = myDB.selectone("SELECT * FROM issues WHERE IssueID=? AND Status='Snatched'", [item['issueid']]).fetchone()
+                        if issue is not None:
+                            ctrlval = {'id': item['id']}
+                            val = {'status': 'Queued',
+                                   'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}
+                            myDB.upsert('ddl_info', val, ctrlval)
+                            reset_count += 1
+                            try:
+                                series_name = item['series']
+                            except (KeyError, TypeError):
+                                series_name = 'Unknown'
+                            try:
+                                old_status = item['status']
+                            except (KeyError, TypeError):
+                                old_status = 'Unknown'
+                            try:
+                                issue_id = item['issueid']
+                            except (KeyError, TypeError):
+                                issue_id = 'Unknown'
+                            logger.debug('[DDL-RESTART-QUEUE] Reset %s item (status was %s) for snatched issue ID %s to "Queued"' % 
+                                       (series_name, old_status, issue_id))
+                    except Exception as e:
+                        try:
+                            item_id = item['id']
+                        except (KeyError, TypeError):
+                            item_id = 'Unknown'
+                        logger.warn('[DDL-RESTART-QUEUE] Error checking/resetting item ID %s: %s' % (item_id, e))
+                if reset_count > 0:
+                    logger.info('[DDL-RESTART-QUEUE] Reset %s "Completed"/"Failed" items for snatched issues to "Queued" status' % reset_count)
             
             # Now get all Queued items (including the ones we just reset)
             items = myDB.select("SELECT * FROM ddl_info WHERE status = 'Queued' ORDER BY updated_date DESC")
@@ -4741,17 +4805,49 @@ class WebInterface(object):
         else:
             filtered = [row for row in resultlist if any([sSearch.lower() in row['series'].lower(), sSearch.lower() in row['status'].lower()])]
         sortcolumn = 'series'
-        if iSortCol_0 == '1':
+        # Convert iSortCol_0 to int for comparison (DataTables sends column index)
+        # Column mapping: 0=series, 1=size, 2=linktype (not sortable by value), 3=progress, 4=status, 5=updated_date
+        try:
+            sort_col = int(iSortCol_0)
+        except (ValueError, TypeError):
+            sort_col = 0
+        
+        if sort_col == 0:
             sortcolumn = 'series'
-        elif iSortCol_0 == '2':
+        elif sort_col == 1:
             sortcolumn = 'size'
-        elif iSortCol_0 == '3':
+        elif sort_col == 3:
             sortcolumn = 'progress'
-        elif iSortCol_0 == '4':
+        elif sort_col == 4:
             sortcolumn = 'status'
-        elif iSortCol_0 == '5':
+        elif sort_col == 5:
             sortcolumn = 'updated_date'
-        filtered.sort(key=lambda x: (x[sortcolumn] is None, x[sortcolumn] == '', x[sortcolumn]), reverse=sSortDir_0 == "desc")
+        
+        # Custom sort function for size column (convert string "405 MB" to bytes for numeric sorting)
+        def size_to_bytes(size_str):
+            """Convert size string like '405 MB' or '1.5 GB' to bytes for numeric sorting"""
+            if not size_str or size_str is None:
+                return 0
+            try:
+                size_str = str(size_str).strip().upper()
+                # Remove any spaces and extract number and unit
+                # Match patterns like "405 MB", "1.5GB", "1024 KB", etc.
+                match = re.match(r'([\d.,]+)\s*(KB|MB|GB|TB|B)', size_str)
+                if match:
+                    number = float(match.group(1).replace(',', ''))
+                    unit = match.group(2)
+                    # Convert to bytes
+                    multipliers = {'B': 1, 'KB': 1024, 'MB': 1024**2, 'GB': 1024**3, 'TB': 1024**4}
+                    return int(number * multipliers.get(unit, 1))
+                return 0
+            except (ValueError, AttributeError, TypeError):
+                return 0
+        
+        # Use custom sort key for size column, normal sort for others
+        if sortcolumn == 'size':
+            filtered.sort(key=lambda x: (x[sortcolumn] is None, x[sortcolumn] == '', size_to_bytes(x[sortcolumn])), reverse=sSortDir_0 == "desc")
+        else:
+            filtered.sort(key=lambda x: (x[sortcolumn] is None, x[sortcolumn] == '', x[sortcolumn]), reverse=sSortDir_0 == "desc")
         if iDisplayLength != -1:
             rows = filtered[iDisplayStart:(iDisplayStart + iDisplayLength)]
         else:

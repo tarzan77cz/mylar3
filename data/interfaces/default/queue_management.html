@@ -8,6 +8,7 @@
                 <div id="subhead_menu">
                       <a id="menu_link_refresh" href="#" title="Restart stalled queue" onclick="doAjaxCall('ddl_requeue?mode=restart_queue',$(this),'table')" data-success="Restarted Queue">Restart Queue</a>
                       <a id="menu_link_refresh" href="#" title="Clear the queue of all Qeueued entries" onclick="ajaxcallit('clear_queue')" data-success="Qeueue successfully cleared">Clear Queue</a>
+                      <a id="menu_link_refresh" href="#" title="Clear all Failed entries from history" onclick="ajaxcallit('clear_failed')" data-success="Failed items cleared">Clear Failed</a>
                       <a id="menu_link_refresh" href="#" title="Clear all Completed entries from history" onclick="ajaxcallit('clear_completed')" data-success="Completed items cleared">Clear Completed</a>
                 </div>
         </div>
@@ -217,6 +218,8 @@
                    } else if (qmode == 'restart-queue') {
                        $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+objd['message']+"</div>");
                    } else if (qmode == 'clear_queue') {
+                       $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+objd['message']+"</div>");
+                   } else if (qmode == 'clear_failed') {
                        $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+objd['message']+"</div>");
                    } else if (qmode == 'clear_completed') {
                        $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+objd['message']+"</div>");
