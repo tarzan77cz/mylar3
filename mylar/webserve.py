@@ -9612,22 +9612,68 @@ class WebInterface(object):
                  if os.path.exists(filelocation) is True:
                      filesize = os.stat(filelocation).st_size
                      #logger.fdebug('filesize: %s / remote: %s' % (filesize, active['remote_filesize']))
-                     remote_filesize = active['remote_filesize']
-                     cmath = int(float(filesize*100)/int(int(remote_filesize)*100) * 100)
-                     if filesize > int(remote_filesize) and cmath > 102:
-                         logger.fdebug('size calc is incorrect ... correcting...')
-                         remote_filesize = helpers.human2bytes(re.sub('/s', '', active['size'][:-1]).strip())
-                         cmath = int(float(filesize*100)/int(int(remote_filesize)*100) * 100)
+                     try:
+                         remote_filesize = active['remote_filesize']
+                         # Handle None or zero remote_filesize
+                         if remote_filesize is None or remote_filesize == 0 or str(remote_filesize).strip() in ['', 'None', '0']:
+                             # Fallback to parsing from size string if available
+                             if active['size']:
+                                 try:
+                                     remote_filesize = helpers.human2bytes(re.sub('/s', '', active['size'][:-1]).strip())
+                                 except:
+                                     # If we can't parse size, return with 0% progress
+                                     return json.dumps({'status':      'Downloading',
+                                                         'percent':     '0%',
+                                                         'a_series':    active['series'],
+                                                         'a_year':      active['year'],
+                                                         'a_filename':  active['filename'],
+                                                         'a_size':      active['size'],
+                                                         'a_id':        active['id']})
+                             else:
+                                 # No size info at all, return with 0% progress
+                                 return json.dumps({'status':      'Downloading',
+                                                     'percent':     '0%',
+                                                     'a_series':    active['series'],
+                                                     'a_year':      active['year'],
+                                                     'a_filename':  active['filename'],
+                                                     'a_size':      active['size'],
+                                                     'a_id':        active['id']})
+                         
+                         remote_filesize_int = int(float(str(remote_filesize).strip()))
+                         if remote_filesize_int == 0:
+                             # Still zero after conversion, return with 0% progress
+                             return json.dumps({'status':      'Downloading',
+                                                 'percent':     '0%',
+                                                 'a_series':    active['series'],
+                                                 'a_year':      active['year'],
+                                                 'a_filename':  active['filename'],
+                                                 'a_size':      active['size'],
+                                                 'a_id':        active['id']})
+                         
+                         cmath = int(float(filesize*100)/int(remote_filesize_int*100) * 100)
+                         if filesize > remote_filesize_int and cmath > 102:
+                             logger.fdebug('size calc is incorrect ... correcting...')
+                             try:
+                                 remote_filesize_parsed = helpers.human2bytes(re.sub('/s', '', active['size'][:-1]).strip())
+                                 remote_filesize_int = int(remote_filesize_parsed)
+                                 if remote_filesize_int > 0:
+                                     cmath = int(float(filesize*100)/int(remote_filesize_int*100) * 100)
+                             except:
+                                 pass
+                     except (ValueError, TypeError, ZeroDivisionError) as e:
+                         logger.warn('[check_ActiveDDL] Error calculating progress: %s. Using 0%%' % e)
+                         cmath = 0
+                     
                      #logger.fdebug('remote_filesize: %s' % (remote_filesize))
                      #logger.fdebug('ACTIVE DDL: %s  %s%s  [%s]' % (active['filename'], cmath, '%', 'Downloading'))
                      #logger.fdebug('size: %s' % active['size'])
                      return json.dumps({'status':      'Downloading',
-                                        'percent':     "%s%s" % (cmath, '%'),
-                                        'a_series':    active['series'],
-                                        'a_year':      active['year'],
-                                        'a_filename':  active['filename'],
-                                        'a_size':      active['size'],
-                                        'a_id':        active['id']})
+                                         'percent':     "%s%s" % (cmath, '%'),
+                                         'a_series':    active['series'],
+                                         'a_year':      active['year'],
+                                         'a_filename':  active['filename'],
+                                         'a_size':      active['size'],
+                                         'a_id':        active['id']})
                  statline = '%s does not exist.</br> This probably needs to be restarted (use the option in the GUI)' % filelocation
              else:
                  infoline = '%s (%s)' % (active['series'], active['year'])
