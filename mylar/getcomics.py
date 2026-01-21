@@ -318,19 +318,55 @@ class GC(object):
 
         self.cookie_receipt()
         #logger.fdebug('session cookies: %s' % (self.session.cookies,))
-        t = self.session.get(
-            link,
-            verify=True,
-            headers=self.headers,
-            stream=True,
-           timeout=(30,30)
-        )
-
-        with open(title + '.html', 'wb') as f:
-            for chunk in t.iter_content(chunk_size=1024):
-                if chunk:  # filter out keep-alive new chunks
-                    f.write(chunk)
-                    f.flush()
+        
+        # Retry logic for server errors (500, 502, 503, 504)
+        max_retries = 2
+        retry_delay = 2  # seconds
+        retry_count = 0
+        
+        while retry_count <= max_retries:
+            try:
+                t = self.session.get(
+                    link,
+                    verify=True,
+                    headers=self.headers,
+                    stream=True,
+                    timeout=(30,30)
+                )
+                
+                # Check for server errors
+                if t.status_code >= 500:
+                    if retry_count < max_retries:
+                        logger.warn('[GetComics] Server returned %s error for %s. Retrying in %s seconds... (attempt %s/%s)' % 
+                                  (t.status_code, link, retry_delay, retry_count + 1, max_retries))
+                        time.sleep(retry_delay)
+                        retry_count += 1
+                        continue
+                    else:
+                        logger.error('[GetComics] Server returned %s error for %s after %s retries. Giving up.' % 
+                                   (t.status_code, link, max_retries))
+                        t.raise_for_status()  # Raise exception to be caught below
+                
+                # Success - write the file
+                with open(title + '.html', 'wb') as f:
+                    for chunk in t.iter_content(chunk_size=1024):
+                        if chunk:  # filter out keep-alive new chunks
+                            f.write(chunk)
+                            f.flush()
+                
+                # Successfully downloaded
+                return
+                
+            except Exception as e:
+                if retry_count < max_retries:
+                    logger.warn('[GetComics] Error loading %s: %s. Retrying in %s seconds... (attempt %s/%s)' % 
+                              (link, str(e), retry_delay, retry_count + 1, max_retries))
+                    time.sleep(retry_delay)
+                    retry_count += 1
+                    continue
+                else:
+                    logger.error('[GetComics] Failed to load %s after %s retries: %s' % (link, max_retries, str(e)))
+                    raise
 
     def perform_search_queries(self, queryline):
         next_url = self.url
