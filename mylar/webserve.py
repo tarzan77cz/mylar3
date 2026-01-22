@@ -3612,21 +3612,29 @@ class WebInterface(object):
 
                 try:
                     rejected_count = len(mylar.REJECTED_MATCHES.get(row['IssueID'], []))
-                    # Check if Snatched issue has ddl_info entry
-                    has_ddl_info = False
+                    # Check if Snatched issue has ddl_info entry and its status
+                    ddl_info_status = None
                     if row['Status'] == 'Snatched':
-                        ddl_check = myDB.selectone("SELECT id FROM ddl_info WHERE issueid=?", [row['IssueID']]).fetchone()
-                        has_ddl_info = ddl_check is not None
-                    filtered.append([row['ComicName'], row['Issue_Number'], row['ReleaseDate'], row['IssueID'], tier, row['ComicID'], row['Status'], storyarc, storyarcid, issuearcid, watcharc, row['Int_IssueNumber'], rejected_count, has_ddl_info])
+                        ddl_check = myDB.selectone("SELECT status FROM ddl_info WHERE issueid=?", [row['IssueID']]).fetchone()
+                        if ddl_check is not None:
+                            try:
+                                ddl_info_status = ddl_check['status']
+                            except (KeyError, TypeError):
+                                ddl_info_status = None
+                    filtered.append([row['ComicName'], row['Issue_Number'], row['ReleaseDate'], row['IssueID'], tier, row['ComicID'], row['Status'], storyarc, storyarcid, issuearcid, watcharc, row['Int_IssueNumber'], rejected_count, ddl_info_status])
                 except Exception as e:
                     #logger.warn('danger Wil Robinson: %s' % (e,))
                     rejected_count = len(mylar.REJECTED_MATCHES.get(row['IssueID'], []))
-                    # Check if Snatched issue has ddl_info entry
-                    has_ddl_info = False
+                    # Check if Snatched issue has ddl_info entry and its status
+                    ddl_info_status = None
                     if row['Status'] == 'Snatched':
-                        ddl_check = myDB.selectone("SELECT id FROM ddl_info WHERE issueid=?", [row['IssueID']]).fetchone()
-                        has_ddl_info = ddl_check is not None
-                    filtered.append([row['ComicName'], row['Issue_Number'], row['ReleaseDate'], row['IssueID'], tier, row['ComicID'], row['Status'], None, None, None, watcharc, row['Int_IssueNumber'], rejected_count, has_ddl_info])
+                        ddl_check = myDB.selectone("SELECT status FROM ddl_info WHERE issueid=?", [row['IssueID']]).fetchone()
+                        if ddl_check is not None:
+                            try:
+                                ddl_info_status = ddl_check['status']
+                            except (KeyError, TypeError):
+                                ddl_info_status = None
+                    filtered.append([row['ComicName'], row['Issue_Number'], row['ReleaseDate'], row['IssueID'], tier, row['ComicID'], row['Status'], None, None, None, watcharc, row['Int_IssueNumber'], rejected_count, ddl_info_status])
 
         if mylar.CONFIG.UPCOMING_STORYARCS is True:
             for key, ark in arcs.items():
@@ -3676,12 +3684,16 @@ class WebInterface(object):
 
                 if matched is True:
                     rejected_count = len(mylar.REJECTED_MATCHES.get(key, []))
-                    # Check if Snatched issue has ddl_info entry
-                    has_ddl_info = False
+                    # Check if Snatched issue has ddl_info entry and its status
+                    ddl_info_status = None
                     if ark['status'] == 'Snatched':
-                        ddl_check = myDB.selectone("SELECT id FROM ddl_info WHERE issueid=?", [key]).fetchone()
-                        has_ddl_info = ddl_check is not None
-                    filtered.append([ark['comicname'], ark['issuenumber'], ark['releasedate'], key, tier, ark['comicid'], ark['status'], ark['storyarc'], ark['storyarcid'], ark['issuearcid'], "oneoff", ark['int_issuenumber'], rejected_count, has_ddl_info])
+                        ddl_check = myDB.selectone("SELECT status FROM ddl_info WHERE issueid=?", [key]).fetchone()
+                        if ddl_check is not None:
+                            try:
+                                ddl_info_status = ddl_check['status']
+                            except (KeyError, TypeError):
+                                ddl_info_status = None
+                    filtered.append([ark['comicname'], ark['issuenumber'], ark['releasedate'], key, tier, ark['comicid'], ark['status'], ark['storyarc'], ark['storyarcid'], ark['issuearcid'], "oneoff", ark['int_issuenumber'], rejected_count, ddl_info_status])
 
         #logger.fdebug('[%s] one-off arcs: %s' % (len(arcs), arcs,))
 
@@ -4162,6 +4174,34 @@ class WebInterface(object):
             logger.error(traceback.format_exc())
             return json.dumps({"status": "error", "message": str(e)})
     select_rejected_match.exposed = True
+
+    def clear_rejected_matches(self, IssueID):
+        """
+        Clear all rejected matches for a given issue.
+        This allows them to be found again in future searches.
+        """
+        try:
+            if IssueID not in mylar.REJECTED_MATCHES:
+                return json.dumps({"status": "error", "message": "No rejected matches found for this issue"})
+            
+            # Get count before clearing
+            count = len(mylar.REJECTED_MATCHES[IssueID])
+            
+            # Remove from REJECTED_MATCHES
+            del mylar.REJECTED_MATCHES[IssueID]
+            
+            logger.info('[CLEAR-REJECTED-MATCHES] Cleared %s rejected matches for IssueID %s' % (count, IssueID))
+            
+            return json.dumps({
+                "status": "success",
+                "message": "Successfully cleared %s rejected matches" % count
+            })
+        except Exception as e:
+            logger.error('[CLEAR-REJECTED-MATCHES] Error: %s' % e)
+            import traceback
+            logger.error(traceback.format_exc())
+            return json.dumps({"status": "error", "message": str(e)})
+    clear_rejected_matches.exposed = True
 
     def searchformissing(self, ComicID):
         #search for 'missing' issues for a given series without marking them as Wanted (issues that are in a Skipped or Wanted state).
@@ -9674,9 +9714,11 @@ class WebInterface(object):
                                          'a_filename':  active['filename'],
                                          'a_size':      active['size'],
                                          'a_id':        active['id']})
+                 # File doesn't exist - just show message, don't reset (ddl_watchdog handles stuck downloads)
                  statline = '%s does not exist.</br> This probably needs to be restarted (use the option in the GUI)' % filelocation
              else:
                  infoline = '%s (%s)' % (active['series'], active['year'])
+                 # No filename assigned - just show message, don't reset (ddl_watchdog handles stuck downloads)
                  statline = 'No filename assigned for %s.</br> This was probably never started successfully - you should restart the download (use the option in the GUI)' % infoline
              return json.dumps({'a_id': active['id'], 'status': statline, 'percent': 0})
 

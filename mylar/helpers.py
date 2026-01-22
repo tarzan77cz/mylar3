@@ -3332,6 +3332,11 @@ def ddl_downloader(queue):
             logger.info('[DDL-DOWNLOADER] Processing item from queue - DDL_LOCK: False, Queue size: %s' % queue.qsize())
             try:
                 item = queue.get(True)
+                # Check for exit signal first, before trying to access item as dict
+                if item == 'exit':
+                    logger.info('[DDL-DOWNLOADER] Received exit signal, cleaning up workers for shutdown')
+                    break
+                
                 logger.info('[DDL-DOWNLOADER] Got item from queue: %s (%s) [ID: %s]' % 
                            (item.get('series', 'Unknown'), item.get('year', 'Unknown'), item.get('id', 'Unknown')))
             except Exception as e:
@@ -3340,10 +3345,6 @@ def ddl_downloader(queue):
                 logger.error('[DDL-DOWNLOADER] Traceback: %s' % traceback.format_exc())
                 time.sleep(5)
                 continue
-
-            if item == 'exit':
-                logger.info('[DDL-DOWNLOADER] Received exit signal, cleaning up workers for shutdown')
-                break
 
             if item['id'] not in mylar.DDL_QUEUED:
                 mylar.DDL_QUEUED.append(item['id'])
@@ -3367,6 +3368,7 @@ def ddl_downloader(queue):
             myDB.upsert('ddl_info', val, ctrlval)
             logger.debug('[DDL-DOWNLOADER] Updated item ID %s status to Downloading in DB' % item['id'])
 
+            ddzstat = None  # Initialize to None
             if item['site'] == 'DDL(GetComics)':
                 try:
                     remote_filesize = item['remote_filesize']
@@ -3388,27 +3390,40 @@ def ddl_downloader(queue):
                 elif item['link_type'] == 'GC-Pixel':
                     pdrain = pixeldrain.PixelDrain()
                     ddzstat = pdrain.ddl_download(item['link'], item['id'], item['issueid']) #item['filename'], item['id'])
+                else:
+                    # Unknown link_type - mark as failed
+                    logger.warn('[DDL-DOWNLOADER] Unknown link_type: %s for item %s. Marking as failed.' % (item['link_type'], item['id']))
+                    ddzstat = {'success': False, 'filename': None, 'path': None, 'link_type': item['link_type']}
 
             elif item['site'] == 'DDL(External)':
                 meganz = mega.MegaNZ()
                 ddzstat = meganz.ddl_download(item['link'], item['filename'], item['id'], item['issueid'], item['link_type'])
+            else:
+                # Unknown site - mark as failed
+                logger.warn('[DDL-DOWNLOADER] Unknown site: %s for item %s. Marking as failed.' % (item['site'], item['id']))
+                ddzstat = {'success': False, 'filename': None, 'path': None, 'link_type': item.get('link_type', None)}
+
+            # Check if ddzstat is None (should not happen, but safety check)
+            if ddzstat is None:
+                logger.error('[DDL-DOWNLOADER] ddzstat is None for item %s. This should not happen. Marking as failed.' % item['id'])
+                ddzstat = {'success': False, 'filename': None, 'path': None, 'link_type': item.get('link_type', None)}
 
             # Check for file validity post download and mark as failure if file is not a zip, rar, or pdf
             # Can only check single downloads.  Packs will have to be managed by post-processing if enabled
-            if ddzstat['success'] and ddzstat['filename'] is not None:
+            if ddzstat and ddzstat.get('success') and ddzstat.get('filename') is not None:
                 filecondition = check_file_condition(ddzstat['path'])
                 if not filecondition['status']:
                     logger.warn(f"CRC Check: File {ddzstat['path']} failed condition check ({filecondition['quality']}).  Marking as failed.")
                     ddzstat['success'] = False
                     ddzstat['link_type_failure'] = item['link_type']
 
-            if ddzstat['success'] is True:
+            if ddzstat and ddzstat.get('success') is True:
                 tdnow = datetime.datetime.now()
                 nval = {'status':  'Completed',
                         'updated_date': tdnow.strftime('%Y-%m-%d %H:%M')}
                 myDB.upsert('ddl_info', nval, ctrlval)
 
-            if all([ddzstat['success'] is True, mylar.CONFIG.POST_PROCESSING is True]):
+            if ddzstat and all([ddzstat.get('success') is True, mylar.CONFIG.POST_PROCESSING is True]):
                 try:
                     if ddzstat['filename'] is None:
                         logger.info('%s successfully downloaded - now initiating post-processing for %s.' % (os.path.basename(ddzstat['path']), ddzstat['path']))
@@ -3460,18 +3475,18 @@ def ddl_downloader(queue):
                 # remove html file from cache if it's successful
                 ddl_cleanup(item['id'])
 
-            elif all([ddzstat['success'] is True, mylar.CONFIG.POST_PROCESSING is False]):
-                path = ddzstat['path']
-                if ddzstat['filename'] is not None:
+            elif ddzstat and all([ddzstat.get('success') is True, mylar.CONFIG.POST_PROCESSING is False]):
+                path = ddzstat.get('path')
+                if ddzstat.get('filename') is not None:
                     path = os.path.join(path, ddzstat['filename'])
                 logger.info('File successfully downloaded. Post Processing is not enabled - item retained here: %s' % (path,))
                 ddl_cleanup(item['id'])
             else:
                 if item['site'] == 'DDL(GetComics)':
                     try:
-                        ltf = ddzstat['links_exhausted']
-                    except KeyError:
-                        logger.info('[Status: %s] Failed to download item from %s : %s ' % (ddzstat['success'], item['link_type'], ddzstat))
+                        ltf = ddzstat.get('links_exhausted') if ddzstat else None
+                    except (KeyError, AttributeError):
+                        logger.info('[Status: %s] Failed to download item from %s : %s ' % (ddzstat.get('success') if ddzstat else 'Unknown', item['link_type'], ddzstat))
                         try:
                             link_type_failure[item['id']].append(item['link_type'])
                         except KeyError:
@@ -3480,7 +3495,9 @@ def ddl_downloader(queue):
                         ggc = getcomics.GC(comicid=item['comicid'], issueid=item['issueid'], oneoff=item['oneoff'])
                         ggc.parse_downloadresults(item['id'], item['mainlink'], item['comicinfo'], item['packinfo'], link_type_failure[item['id']])
                     else:
-                        logger.info('[REDO] Exhausted all available links [%s] for issueid %s and was not able to download anything' % (link_type_failure[item['id']], item['issueid']))
+                        # links_exhausted was returned, meaning all links were tried
+                        failed_links = link_type_failure.get(item['id'], [item.get('link_type', 'Unknown')])
+                        logger.info('[REDO] Exhausted all available links [%s] for issueid %s and was not able to download anything' % (failed_links, item['issueid']))
                         nval = {'status':  'Failed',
                                 'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}
                         myDB.upsert('ddl_info', nval, ctrlval)
@@ -3492,9 +3509,9 @@ def ddl_downloader(queue):
                             pass
                         ddl_cleanup(item['id'])
                 else:
-                    logger.info('[Status: %s] Failed to download item from %s : %s ' % (ddzstat['success'], item['site'], ddzstat))
+                    logger.info('[Status: %s] Failed to download item from %s : %s ' % (ddzstat.get('success') if ddzstat else 'Unknown', item['site'], ddzstat))
                     myDB.action('DELETE FROM ddl_info where id=?', [item['id']])
-                    mylar.search.FailedMark(item['issueid'], item['comicid'], item['id'], ddzstat['filename'], item['site'])
+                    mylar.search.FailedMark(item['issueid'], item['comicid'], item['id'], ddzstat.get('filename') if ddzstat else None, item['site'])
         else:
             # This branch: DDL_LOCK is True OR (DDL_LOCK is False AND queue.qsize() == 0)
             if mylar.DDL_LOCK is True:

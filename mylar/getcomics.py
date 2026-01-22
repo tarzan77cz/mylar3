@@ -373,12 +373,15 @@ class GC(object):
         seen_urls = set()
         while next_url is not None:
             pause_the_search = mylar.CONFIG.DDL_QUERY_DELAY
-            diff = mylar.search.check_time(self.provider_stat['lastrun']) # only limit the search queries - the other calls should be direct and not as intensive
-            if diff < pause_the_search:
-                logger.warn('[PROVIDER-SEARCH-DELAY][DDL] Waiting %s seconds before we fetch a search page again...' % (pause_the_search - int(diff)))
-                time.sleep(pause_the_search - int(diff))
+            if self.provider_stat['lastrun'] == 0:
+                logger.fdebug('[PROVIDER-SEARCH-DELAY][DDL] No previous search recorded. Proceeding...')
             else:
-                logger.fdebug('[PROVIDER-SEARCH-DELAY][DDL] Last search page fetch took place %s seconds ago. We\'re clear...' % (int(diff)))
+                diff = mylar.search.check_time(self.provider_stat['lastrun']) # only limit the search queries - the other calls should be direct and not as intensive
+                if diff < pause_the_search:
+                    logger.warn('[PROVIDER-SEARCH-DELAY][DDL] Waiting %s seconds before we fetch a search page again...' % (pause_the_search - int(diff)))
+                    time.sleep(pause_the_search - int(diff))
+                else:
+                    logger.fdebug('[PROVIDER-SEARCH-DELAY][DDL] Last search page fetch took place %s seconds ago. We\'re clear...' % (int(diff)))
 
             gc_page = self.session.get(
                 next_url + '/',
@@ -712,6 +715,124 @@ class GC(object):
             count_bees +=1
 
         #logger.fdebug('final valid_links: %s' % (valid_links))
+        
+        # Fallback: If no links were found in <p> tags, try to find <div class="aio-pulse"> directly in document
+        links_found_in_paragraphs = False
+        for k, y in valid_links.items():
+            if 'links' in y and len(y['links']) > 0:
+                links_found_in_paragraphs = True
+                break
+        
+        if not links_found_in_paragraphs:
+            logger.info('[DDL-GATHERER-OF-LINKAGE] No links found in <p> tags, trying fallback: searching for <div class="aio-pulse"> directly in document...')
+            # Find all <div class="aio-pulse"> directly in document
+            aio_pulse_divs = soup.findAll("div", {"class": "aio-pulse"})
+            
+            if aio_pulse_divs:
+                # Try to get series/year/size from valid_links if available, otherwise use defaults
+                fallback_series = None
+                fallback_year = None
+                fallback_size = None
+                fallback_multiple_links = 'normal'
+                
+                # Extract info from valid_links if available
+                for k, y in valid_links.items():
+                    if 'series' in y:
+                        fallback_series = y['series']
+                        fallback_multiple_links = k
+                    if 'year' in y:
+                        fallback_year = y['year']
+                    if 'size' in y:
+                        fallback_size = y['size']
+                
+                # If no info found in valid_links, try to extract from first <p> tag with metadata
+                if fallback_series is None:
+                    for p_tag in beeswax:
+                        linkage_test = p_tag.text.strip()
+                        if all(['Language' in linkage_test, 'Year' in linkage_test, 'Size' in linkage_test]):
+                            # Extract series name - use same logic as original code
+                            option_find = p_tag
+                            i = 0
+                            while True:
+                                try:
+                                    prev_option = option_find
+                                    option_find = option_find.findNext(text=True)
+                                    if option_find is None:
+                                        break
+                                    if i == 0 and fallback_series is None:
+                                        fallback_series = option_find
+                                        if 'upscaled' in fallback_series.lower():
+                                            fallback_multiple_links = 'HD-Upscaled'
+                                            fallback_series = re.sub('(hd-upscaled)', '', fallback_series, re.IGNORECASE).strip()
+                                        elif 'sd-digital' in fallback_series.lower():
+                                            fallback_multiple_links = 'SD-Digital'
+                                            fallback_series = re.sub('(sd-digital)', '', fallback_series, re.IGNORECASE).strip()
+                                        elif 'hd-digital' in fallback_series.lower():
+                                            fallback_multiple_links = 'HD-Digital'
+                                            fallback_series = re.sub('(hd-digital)', '', fallback_series, re.IGNORECASE).strip()
+                                    elif 'Year' in str(option_find):
+                                        # option_find is a NavigableString containing "Year", findNext will find next text node
+                                        try:
+                                            year_next = option_find.findNext(text=True)
+                                            if year_next:
+                                                fallback_year = re.sub(r'\|', '', str(year_next)).strip()
+                                        except (AttributeError, TypeError):
+                                            pass
+                                    elif 'Size' in str(prev_option):
+                                        fallback_size = option_find
+                                        break
+                                    i += 1
+                                    if i > 20:  # Safety limit
+                                        break
+                                except (AttributeError, TypeError):
+                                    break
+                            break
+                
+                # Process each aio-pulse div
+                for aio_pulse_div in aio_pulse_divs:
+                    lk = aio_pulse_div.find('a')
+                    if lk and lk.get('href') and 'sh.st' not in lk['href']:
+                        t_site = re.sub('link', '', lk.get('title', '').lower()).strip()
+                        if not t_site:
+                            continue
+                        
+                        ltf = False
+                        if link_type_failure is not None:
+                            if [
+                                True
+                                for tst in link_type_failure
+                                if t_site[:4].lower() in tst.lower()
+                                or all(["main" in tst.lower(), "download" in t_site.lower()])
+                                or all(["mirror" in tst.lower(), "mirror" in t_site.lower()])
+                            ]:
+                                logger.fdebug('[REDO-FAILURE-DETECTION] detected previous invalid link for %s - ignoring this result'
+                                            ' and seeing if anything else can be downloaded.' % t_site)
+                                ltf = True
+                        
+                        if not ltf:
+                            # Initialize valid_links entry if needed
+                            if fallback_multiple_links not in valid_links:
+                                valid_links[fallback_multiple_links] = {}
+                            if 'series' not in valid_links[fallback_multiple_links] and fallback_series:
+                                valid_links[fallback_multiple_links]['series'] = fallback_series
+                            if 'year' not in valid_links[fallback_multiple_links] and fallback_year:
+                                valid_links[fallback_multiple_links]['year'] = fallback_year
+                            if 'size' not in valid_links[fallback_multiple_links] and fallback_size:
+                                valid_links[fallback_multiple_links]['size'] = fallback_size
+                            if 'links' not in valid_links[fallback_multiple_links]:
+                                valid_links[fallback_multiple_links]['links'] = []
+                            
+                            valid_links[fallback_multiple_links]['links'].append({
+                                "series": fallback_series,
+                                "site": t_site,
+                                "year": fallback_year,
+                                "issues": None,
+                                "size": fallback_size,
+                                "links": lk['href'],
+                                "pack": pack
+                            })
+                            logger.fdebug('[FALLBACK] Found link: %s - %s' % (t_site, lk['href'][:50]))
+        
         tmp_links = []
         tmp_sites = []
         site_position = {}
@@ -762,6 +883,8 @@ class GC(object):
                            t_site = 'pixeldrain'
                        elif 'mediafire' in a['site'].lower():
                            t_site = 'mediafire'
+                       elif a['site'].lower() == 'download now' or a['site'].lower() == 'mirror download':
+                           t_site = 'main'  # Map "download now" and "mirror download" to "main" provider
                        d_site = '%s:%s' % (k, t_site)
                        tmp_a = a
                        tmp_a['site_type'] = d_site
@@ -772,6 +895,46 @@ class GC(object):
                        cntr +=1
 
 
+        # Filter tmp_links and tmp_sites based on DDL_PRIORITY_ORDER
+        # Only keep links from allowed providers
+        if mylar.CONFIG.DDL_PRIORITY_ORDER:
+            total_links_before = len(tmp_links)
+            allowed_providers = [p.lower() for p in mylar.CONFIG.DDL_PRIORITY_ORDER]
+            filtered_links = []
+            filtered_sites = []
+            filtered_site_position = {}
+            new_cntr = 0
+            
+            for idx, site_key in enumerate(tmp_sites):
+                # Extract provider from site_key (e.g., "normal:main", "HD-Digital:mega")
+                provider = None
+                if ':' in site_key:
+                    provider_part = site_key.split(':', 1)[1]  # Get part after ":"
+                    # Map "download now" and "mirror download" to "main"
+                    if provider_part in ['download now', 'mirror download']:
+                        provider = 'main'
+                    else:
+                        provider = provider_part
+                else:
+                    provider = site_key
+                
+                # Check if provider is in allowed list
+                if provider and provider.lower() in allowed_providers:
+                    filtered_links.append(tmp_links[idx])
+                    filtered_sites.append(site_key)
+                    filtered_site_position[site_key] = new_cntr
+                    new_cntr += 1
+                    logger.fdebug('[DDL-FILTER] Keeping link: %s (provider: %s)' % (site_key, provider))
+                else:
+                    logger.fdebug('[DDL-FILTER] Filtering out link: %s (provider: %s not in DDL_PRIORITY_ORDER)' % (site_key, provider))
+            
+            # Replace original lists with filtered ones
+            tmp_links = filtered_links
+            tmp_sites = filtered_sites
+            site_position = filtered_site_position
+            
+            logger.info('[DDL-FILTER] Filtered links: %d allowed out of %d total' % (len(tmp_links), total_links_before))
+
         #logger.fdebug('tmp_links: %s' % (tmp_links))
         logger.fdebug('tmp_sites: %s' % (tmp_sites))
         logger.fdebug('site_position: %s' % (site_position))
@@ -780,6 +943,24 @@ class GC(object):
         link = None
         if len(tmp_links) == 1:
             link = tmp_links[0]
+            # Verify that this single link is from an allowed provider (should already be filtered, but double-check)
+            site_key = tmp_sites[0] if tmp_sites else None
+            if site_key and mylar.CONFIG.DDL_PRIORITY_ORDER:
+                provider = None
+                if ':' in site_key:
+                    provider_part = site_key.split(':', 1)[1]
+                    if provider_part in ['download now', 'mirror download']:
+                        provider = 'main'
+                    else:
+                        provider = provider_part
+                else:
+                    provider = site_key
+                
+                allowed_providers = [p.lower() for p in mylar.CONFIG.DDL_PRIORITY_ORDER]
+                if provider and provider.lower() not in allowed_providers:
+                    logger.warn('[DDL-FILTER] Single available link from provider %s is not in DDL_PRIORITY_ORDER. Skipping...' % provider)
+                    return {'success': False, 'links_exhausted': link_type_failure}
+            
             series = link['series']
             logger.info('only one available item that can be downloaded via %s - %s. Let\'s do this..' % (link['site'], series))
             link_matched = True
@@ -829,13 +1010,33 @@ class GC(object):
                                     link_matched = True
 
                         elif not link_matched and site_lp == 'main':
-                            sub_site_chk = [y for y in tmp_sites if 'download now' in y]
+                            # Look for both 'download now' and 'main' in tmp_sites (because 'download now' is mapped to 'main' for normal links)
+                            sub_site_chk = [y for y in tmp_sites if 'download now' in y or ('main' in y and 'normal:' in y)]
                             if any('HD-Upscaled' in ssc for ssc in sub_site_chk):
-                                kk = tmp_links[site_position['HD-Upscaled:download now']]
+                                # Try HD-Upscaled:download now first (for non-normal links)
+                                if 'HD-Upscaled:download now' in site_position:
+                                    kk = tmp_links[site_position['HD-Upscaled:download now']]
+                                elif 'HD-Upscaled:main' in site_position:
+                                    kk = tmp_links[site_position['HD-Upscaled:main']]
+                                else:
+                                    # Fallback - find any HD-Upscaled link with main/download now
+                                    for key in site_position.keys():
+                                        if 'HD-Upscaled' in key and ('main' in key or 'download now' in key):
+                                            kk = tmp_links[site_position[key]]
+                                            break
                                 logger.info('[MAIN-SERVER] HD-Upscaled preference detected...attempting %s' % kk['series'])
                                 link_matched = True
                             elif any('HD-Digital' in ssc for ssc in sub_site_chk):
-                                kk = tmp_links[site_position['HD-Digital:download now']]
+                                # Similar logic for HD-Digital
+                                if 'HD-Digital:download now' in site_position:
+                                    kk = tmp_links[site_position['HD-Digital:download now']]
+                                elif 'HD-Digital:main' in site_position:
+                                    kk = tmp_links[site_position['HD-Digital:main']]
+                                else:
+                                    for key in site_position.keys():
+                                        if 'HD-Digital' in key and ('main' in key or 'download now' in key):
+                                            kk = tmp_links[site_position[key]]
+                                            break
                                 logger.info('[MAIN-SERVER] HD-Digital preference detected...attempting %s' % kk['series'])
                                 link_matched = True
 
@@ -893,8 +1094,11 @@ class GC(object):
                     elif not link_matched and site_lp == 'main':
                         # Try to find available download option in order of preference
                         # Support HD-Digital, SD-Digital, and normal options
+                        # Check both 'download now' and 'main' variants (because 'download now' is mapped to 'main' for normal links)
                         found_link = False
-                        for key_option in ['HD-Digital:download now', 'HD-Digital:mirror download', 'SD-Digital:download now', 'SD-Digital:mirror download', 'normal:download now', 'normal:mirror download']:
+                        for key_option in ['HD-Digital:download now', 'HD-Digital:main', 'HD-Digital:mirror download', 
+                                           'SD-Digital:download now', 'SD-Digital:main', 'SD-Digital:mirror download', 
+                                           'normal:download now', 'normal:main', 'normal:mirror download']:
                             if key_option in site_position:
                                 try:
                                     pos = site_position[key_option]
@@ -946,9 +1150,13 @@ class GC(object):
                                logger.info('[mediafire] Unable to attain proper link...')
                                link_matched = False
                    elif not link_matched and site_lp == 'main':
-                       if 'download now' in tmp_sites:
-                           link = tmp_links[site_position['normal:download now']]
-                       elif 'mirror download' in tmp_sites:
+                       # Check both 'download now' and 'main' variants (because 'download now' is mapped to 'main' for normal links)
+                       if 'normal:download now' in tmp_sites or 'normal:main' in tmp_sites:
+                           if 'normal:download now' in site_position:
+                               link = tmp_links[site_position['normal:download now']]
+                           elif 'normal:main' in site_position:
+                               link = tmp_links[site_position['normal:main']]
+                       elif 'normal:mirror download' in tmp_sites:
                            link = tmp_links[site_position['normal:mirror download']]
                        else:
                            link = tmp_links[0]
@@ -1053,7 +1261,7 @@ class GC(object):
                 check_extras = soup.findAll("h3")
                 for sb in check_extras:
                     header = sb.findNext(text=True)
-                    if header == 'TPBs' and bookype == 'TPB':
+                    if header == 'TPBs' and booktype == 'TPB':
                         nxt = sb.next_sibling
                         if nxt.name == 'ul':
                             bb = nxt.findAll('li')

@@ -76,6 +76,9 @@
 
         <!-- Rejected Matches Dialog -->
         <div id="rejected_matches_dialog" title="Rejected Search Matches" style="display:none;">
+            <div style="position: relative; margin-bottom: 5px; min-height: 35px;">
+                <button id="clear_rejected_matches_btn" style="position: absolute; top: 0; right: 0; padding: 5px 10px; background-color: #f44336; color: white; border: none; border-radius: 3px; cursor: pointer; z-index: 1000;">Clear rejected matches</button>
+            </div>
             <div id="rejected_matches_loading" style="text-align: center; padding: 20px;">
                 <p>Loading rejected matches...</p>
             </div>
@@ -466,11 +469,14 @@
                         "visible": true,
                         "render":function (data,type,full) {
                             var status = full[6];
-                            var has_ddl_info = full[13] !== undefined ? full[13] : true; // Default to true if not set (for backwards compatibility)
+                            var ddl_info_status = full[13] !== undefined ? full[13] : null; // Status from ddl_info table (null if no record exists)
                             
-                            // If status is Snatched and no ddl_info exists, add warning icon
-                            if (status === 'Snatched' && !has_ddl_info) {
-                                return status + ' <img src="images/cross.png" height="16" width="16" style="margin-left: 5px; vertical-align: middle;" title="Download failed - no download information available. Please mark as Wanted and search again." />';
+                            // If status is Snatched and no ddl_info exists OR ddl_info status is Failed, add warning icon
+                            if (status === 'Snatched' && (ddl_info_status === null || ddl_info_status === 'Failed')) {
+                                var titleText = ddl_info_status === 'Failed' 
+                                    ? 'Download failed - all download links exhausted. Please mark as Wanted and search again.' 
+                                    : 'Download failed - no download information available. Please mark as Wanted and search again.';
+                                return status + ' <img src="images/cross.png" height="16" width="16" style="margin-left: 5px; vertical-align: middle;" title="' + titleText + '" />';
                             }
                             return status;
                         }
@@ -480,22 +486,22 @@
                         "targets": [ 5 ],
                         "visible": true,
                         "render":function (data,type,full){
-                            // Add magnifying glass icon for Wanted issues or Snatched issues without ddl_info
+                            // Add magnifying glass icon for Wanted issues or Snatched issues without ddl_info or with Failed status
                             var tierText = full[4];
                             var issueId = full[3];
                             var rejectedCount = full[12] || 0; // Get rejected matches count (default to 0 if undefined)
-                            var has_ddl_info = full[13] !== undefined ? full[13] : true; // Default to true if not set (for backwards compatibility)
+                            var ddl_info_status = full[13] !== undefined ? full[13] : null; // Status from ddl_info table (null if no record exists)
                             var status = full[6];
                             
-                            // Show rejected matches link for Wanted issues, or Snatched issues without ddl_info
-                            if (issueId && (status === "Wanted" || (status === "Snatched" && !has_ddl_info))) {
+                            // Show rejected matches link for Wanted issues, or Snatched issues without ddl_info or with Failed status
+                            if (issueId && (status === "Wanted" || (status === "Snatched" && (ddl_info_status === null || ddl_info_status === 'Failed')))) {
                                 var iconHtml = '<img src="images/search.png" height="16" width="16" style="margin-left: 5px; vertical-align: middle;" />';
                                 if (rejectedCount > 0) {
                                     // Add count badge
                                     iconHtml += '<span style="background-color: #ff6b6b; color: white; border-radius: 50%; padding: 1px 5px; font-size: 10px; font-weight: bold; margin-left: 2px; vertical-align: super;">' + rejectedCount + '</span>';
                                 }
                                 var titleText = rejectedCount > 0 ? 'View rejected search matches (' + rejectedCount + ' available)' : 'View rejected search matches';
-                                if (status === "Snatched" && !has_ddl_info) {
+                                if (status === "Snatched" && (ddl_info_status === null || ddl_info_status === 'Failed')) {
                                     titleText = 'Download failed - try alternative download from rejected matches' + (rejectedCount > 0 ? ' (' + rejectedCount + ' available)' : '');
                                 }
                                 tierText += ' <a href="#" class="rejected-matches-link" data-issueid="' + $('<div/>').text(issueId).html() + '" title="' + titleText + '">' + iconHtml + '</a>';
@@ -647,6 +653,9 @@
                 resizable: true
             });
 
+            // Store current IssueID for clear button
+            var currentRejectedMatchesIssueId = null;
+
             // Handle click on magnifying glass icon
             $(document).on('click', '.rejected-matches-link', function(e) {
                 e.preventDefault();
@@ -655,6 +664,9 @@
                     alert('Error: Issue ID not found');
                     return false;
                 }
+                
+                // Store IssueID for clear button
+                currentRejectedMatchesIssueId = issueId;
                 
                 // Show loading
                 $('#rejected_matches_loading').show();
@@ -700,6 +712,39 @@
                 }).fail(function(jqXHR, textStatus, errorThrown) {
                     $('#rejected_matches_loading').hide();
                     alert('Error loading rejected matches: ' + textStatus);
+                });
+                
+                return false;
+            });
+
+            // Handle clear rejected matches button click
+            $(document).on('click', '#clear_rejected_matches_btn', function(e) {
+                e.preventDefault();
+                if (!currentRejectedMatchesIssueId) {
+                    alert('Error: Issue ID not found');
+                    return false;
+                }
+                
+                if (!confirm('Are you sure you want to clear all rejected matches for this issue? This will allow them to be found again in future searches.')) {
+                    return false;
+                }
+                
+                var btn = $(this);
+                btn.prop('disabled', true).text('Clearing...');
+                
+                $.getJSON('clear_rejected_matches', {IssueID: currentRejectedMatchesIssueId}, function(data) {
+                    btn.prop('disabled', false).text('Clear rejected matches');
+                    
+                    if (data.status === 'success') {
+                        // Close dialog and show success message
+                        $("#rejected_matches_dialog").dialog("close");
+                        alert('Rejected matches cleared successfully. They may appear again in future searches.');
+                    } else {
+                        alert('Error clearing rejected matches: ' + (data.message || 'Unknown error'));
+                    }
+                }).fail(function(jqXHR, textStatus, errorThrown) {
+                    btn.prop('disabled', false).text('Clear rejected matches');
+                    alert('Error clearing rejected matches: ' + textStatus);
                 });
                 
                 return false;
