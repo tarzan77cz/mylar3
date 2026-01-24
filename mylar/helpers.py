@@ -3378,7 +3378,7 @@ def ddl_downloader(queue):
                     except Exception:
                         remote_filesize = 0
 
-                if any([item['link_type'] == 'GC-Main', item['link_type'] == 'GC_Mirror']):
+                if any([item['link_type'] == 'GC-Main', item['link_type'] == 'GC-Mirror']):
                     ddz = getcomics.GC()
                     ddzstat = ddz.downloadit(item['id'], item['link'], item['mainlink'], item['resume'], item['issueid'], remote_filesize)
                 elif item['link_type'] == 'GC-Mega':
@@ -3425,6 +3425,7 @@ def ddl_downloader(queue):
 
             if ddzstat and all([ddzstat.get('success') is True, mylar.CONFIG.POST_PROCESSING is True]):
                 try:
+                    time.sleep(2)  # Allow filesystem to persist file before PP opens it (Docker/NFS)
                     if ddzstat['filename'] is None:
                         logger.info('%s successfully downloaded - now initiating post-processing for %s.' % (os.path.basename(ddzstat['path']), ddzstat['path']))
                         mylar.PP_QUEUE.put({'nzb_name':     os.path.basename(ddzstat['path']),
@@ -3445,6 +3446,7 @@ def ddl_downloader(queue):
                                             'apicall':      True,
                                             'ddl':          True,
                                             'download_info': {'provider': 'DDL', 'id': item['id']}})
+                    mylar.PP_DDL_IDS.add(item['id'])
                 except Exception as e:
                     logger.error('process error: %s [%s]' %(e, ddzstat))
 
@@ -3630,6 +3632,16 @@ def postprocess_main(queue):
                 logger.info('Cleaning up workers for shutdown')
                 break
 
+            ddl_id_processing = None
+            di = item.get('download_info') if isinstance(item, dict) else None
+            if di and di.get('provider') == 'DDL' and 'id' in di:
+                try:
+                    mylar.PP_DDL_IDS.discard(di['id'])
+                    mylar.PP_CURRENT_DDL_IDS.add(di['id'])
+                    ddl_id_processing = di['id']
+                except Exception:
+                    pass
+
             if mylar.APILOCK is False:
                 try:
                     pprocess = process.Process(item['nzb_name'], item['nzb_folder'], item['failed'], item['issueid'], item['comicid'], item['apicall'], item['ddl'], item['download_info'])
@@ -3637,6 +3649,11 @@ def postprocess_main(queue):
                     pprocess = process.Process(item['nzb_name'], item['nzb_folder'], item['failed'], item['issueid'], item['comicid'], item['apicall'])
                 pp = pprocess.post_process()
                 time.sleep(5) #arbitrary sleep to let the process attempt to finish pp'ing
+                if ddl_id_processing is not None:
+                    try:
+                        mylar.PP_CURRENT_DDL_IDS.discard(ddl_id_processing)
+                    except Exception:
+                        pass
 
             if pp is not None:
                 if pp['mode'] == 'stop':

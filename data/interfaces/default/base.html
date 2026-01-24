@@ -359,6 +359,7 @@
                     }
                     var cid = retrieve_comicid();
                     var tt = document.getElementById("page_name");
+                    if (!tt) return;
                     if (data.status == 'success'){
                         $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
                         console.log('data.comicid:'+data.comicid)

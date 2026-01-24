@@ -12,6 +12,15 @@
 		#rejected_matches_table tbody tr {
 			transition: background-color 0.2s ease;
 		}
+		#wanted_table th.col-checkbox,
+		#wanted_table td.col-checkbox {
+			width: 28px !important;
+			max-width: 28px !important;
+			min-width: 28px !important;
+			padding-left: 4px;
+			padding-right: 4px;
+			box-sizing: border-box;
+		}
 	</style>
 	<div id="subhead_container">
 		<div id="subhead_menu">
@@ -423,6 +432,7 @@
                         "sortable": false,
                         "targets": [ 0 ],
                         "visible": true,
+                        "className": "col-checkbox",
                         "render":function (data,type,full,meta) {
                            return '<input type="checkbox" name="issueid[]" value="' + $('<div/>').text(full[3]).html() + '" />';
                         }
@@ -431,6 +441,7 @@
                         "sortable": true,
                         "targets": [ 1 ],
                         "visible": true,
+                        "width": "31%",
                         "render":function (data,type,full) {
                            if(typeof(full[8]) === "undefined" || full[8] === null){
                                linkit = '<a href="comicDetails?ComicID='+full[5]+'">'+full[0]+'</a>';
@@ -451,6 +462,7 @@
                         "sortable": true,
                         "targets": [ 2 ],
                         "visible": true,
+                        "width": "2%",
                         "render":function (data,type,full) {
                            return full[1];
                         }
@@ -459,6 +471,7 @@
                         "sortable": true,
                         "targets": [ 3 ],
                         "visible": true,
+                        "width": "9%",
                         "render":function (data,type,full) {
                             return full[2];
                         }
@@ -467,16 +480,29 @@
                         "sortable": true,
                         "targets": [ 4 ],
                         "visible": true,
+                        "width": "11%",
                         "render":function (data,type,full) {
                             var status = full[6];
-                            var ddl_info_status = full[13] !== undefined ? full[13] : null; // Status from ddl_info table (null if no record exists)
+                            var ddl_activity = full[14] !== undefined && full[14] !== null ? full[14] : null;
                             
-                            // If status is Snatched and no ddl_info exists OR ddl_info status is Failed, add warning icon
-                            if (status === 'Snatched' && (ddl_info_status === null || ddl_info_status === 'Failed')) {
-                                var titleText = ddl_info_status === 'Failed' 
-                                    ? 'Download failed - all download links exhausted. Please mark as Wanted and search again.' 
-                                    : 'Download failed - no download information available. Please mark as Wanted and search again.';
-                                return status + ' <img src="images/cross.png" height="16" width="16" style="margin-left: 5px; vertical-align: middle;" title="' + titleText + '" />';
+                            if (status === 'Snatched') {
+                                if (ddl_activity === 'Failed') {
+                                    var titleText = 'Download failed - all download links exhausted. Please mark as Wanted and search again.';
+                                    return '<span style="white-space: nowrap;">' + status + ' <img src="images/cross.png" height="16" width="16" style="margin-left: 5px; vertical-align: middle;" title="' + titleText + '" /></span>';
+                                }
+                                if (ddl_activity === null) {
+                                    return '<span style="white-space: nowrap;">' + status + ' <img src="images/hourglass.png" height="16" width="16" style="margin-left: 5px; vertical-align: middle;" title="Waiting for download..." /></span>';
+                                }
+                                var iconMap = {
+                                    'Queued': { icon: 'images/hourglass.png', tip: 'Queued for download' },
+                                    'Downloading': { icon: 'images/loader_black.gif', tip: 'Downloading' },
+                                    'Post-processing': { icon: 'images/icon_gear.png', tip: 'Post-processing' },
+                                    'Downloaded': { icon: 'images/checkmark.png', tip: 'Downloaded' },
+                                    'Paused': { icon: 'images/pause-icon.png', tip: 'Paused' }
+                                };
+                                var m = iconMap[ddl_activity] || { icon: 'images/hourglass.png', tip: ddl_activity };
+                                var tip = (m.tip || '').replace(/"/g, '&quot;');
+                                return '<span style="white-space: nowrap;">' + status + ' <img src="' + m.icon + '" height="16" width="16" style="margin-left: 5px; vertical-align: middle;" title="' + tip + '" /></span>';
                             }
                             return status;
                         }
@@ -485,24 +511,24 @@
                         "sortable": true,
                         "targets": [ 5 ],
                         "visible": true,
+                        "width": "11%",
                         "render":function (data,type,full){
-                            // Add magnifying glass icon for Wanted issues or Snatched issues without ddl_info or with Failed status
                             var tierText = full[4];
                             var issueId = full[3];
-                            var rejectedCount = full[12] || 0; // Get rejected matches count (default to 0 if undefined)
-                            var ddl_info_status = full[13] !== undefined ? full[13] : null; // Status from ddl_info table (null if no record exists)
+                            var rejectedCount = full[12] || 0;
+                            var ddl_activity = full[14] !== undefined && full[14] !== null ? full[14] : null;
                             var status = full[6];
                             
-                            // Show rejected matches link for Wanted issues, or Snatched issues without ddl_info or with Failed status
-                            if (issueId && (status === "Wanted" || (status === "Snatched" && (ddl_info_status === null || ddl_info_status === 'Failed')))) {
+                            if (issueId && (status === "Wanted" || (status === "Snatched" && (ddl_activity === null || ddl_activity === 'Failed')))) {
                                 var iconHtml = '<img src="images/search.png" height="16" width="16" style="margin-left: 5px; vertical-align: middle;" />';
                                 if (rejectedCount > 0) {
-                                    // Add count badge
                                     iconHtml += '<span style="background-color: #ff6b6b; color: white; border-radius: 50%; padding: 1px 5px; font-size: 10px; font-weight: bold; margin-left: 2px; vertical-align: super;">' + rejectedCount + '</span>';
                                 }
                                 var titleText = rejectedCount > 0 ? 'View rejected search matches (' + rejectedCount + ' available)' : 'View rejected search matches';
-                                if (status === "Snatched" && (ddl_info_status === null || ddl_info_status === 'Failed')) {
+                                if (status === "Snatched" && ddl_activity === 'Failed') {
                                     titleText = 'Download failed - try alternative download from rejected matches' + (rejectedCount > 0 ? ' (' + rejectedCount + ' available)' : '');
+                                } else if (status === "Snatched" && ddl_activity === null) {
+                                    titleText = 'Waiting for download...' + (rejectedCount > 0 ? ' View rejected matches (' + rejectedCount + ' available).' : '');
                                 }
                                 tierText += ' <a href="#" class="rejected-matches-link" data-issueid="' + $('<div/>').text(issueId).html() + '" title="' + titleText + '">' + iconHtml + '</a>';
                             }
@@ -563,10 +589,23 @@
 	};
 
     var lastChecked = null;
+    var wantedRefreshTimer = null;
+    var WANTED_REFRESH_INTERVAL_MS = 30000;
+
+    function doWantedRefresh() {
+        if (!$('#wanted_table').length || !$.fn.DataTable.isDataTable('#wanted_table')) return;
+        if ($('#wanted_table tbody input[name="issueid[]"]:checked').length > 0) return;
+        var dt = $('#wanted_table').DataTable();
+        if (dt) dt.ajax.reload(null, false);
+    }
 
 	$(document).ready(function() {
             initThisPage();
             var tables = $('table.display').DataTable();
+            wantedRefreshTimer = setInterval(doWantedRefresh, WANTED_REFRESH_INTERVAL_MS);
+            $(window).on('beforeunload', function() {
+                if (wantedRefreshTimer) { clearInterval(wantedRefreshTimer); wantedRefreshTimer = null; }
+            });
             $(document).on("change", '#checkboxControls input[type="checkbox"]', function() {
             //$('#checkboxControls input[type="checkbox"]').onchange(function(){
                 tables.ajax.reload();

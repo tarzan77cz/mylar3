@@ -3612,29 +3612,67 @@ class WebInterface(object):
 
                 try:
                     rejected_count = len(mylar.REJECTED_MATCHES.get(row['IssueID'], []))
-                    # Check if Snatched issue has ddl_info entry and its status
                     ddl_info_status = None
+                    ddl_activity = None
                     if row['Status'] == 'Snatched':
-                        ddl_check = myDB.selectone("SELECT status FROM ddl_info WHERE issueid=?", [row['IssueID']]).fetchone()
+                        ddl_check = myDB.selectone("SELECT id, status FROM ddl_info WHERE issueid=?", [row['IssueID']]).fetchone()
                         if ddl_check is not None:
                             try:
                                 ddl_info_status = ddl_check['status']
+                                did = ddl_check['id']
+                                st = ddl_check['status']
+                                if did is not None and st is not None:
+                                    if did in mylar.PP_DDL_IDS or did in mylar.PP_CURRENT_DDL_IDS:
+                                        ddl_activity = 'Post-processing'
+                                    elif st == 'Failed':
+                                        ddl_activity = 'Failed'
+                                    elif st == 'Incomplete':
+                                        ddl_activity = 'Paused'
+                                    elif st == 'Downloading':
+                                        ddl_activity = 'Downloading'
+                                    elif did in mylar.DDL_QUEUED:
+                                        ddl_activity = 'Queued'
+                                    elif st == 'Completed':
+                                        if not mylar.CONFIG.POST_PROCESSING:
+                                            ddl_activity = 'Downloaded'
+                                        else:
+                                            ddl_activity = 'Post-processing'
                             except (KeyError, TypeError):
                                 ddl_info_status = None
-                    filtered.append([row['ComicName'], row['Issue_Number'], row['ReleaseDate'], row['IssueID'], tier, row['ComicID'], row['Status'], storyarc, storyarcid, issuearcid, watcharc, row['Int_IssueNumber'], rejected_count, ddl_info_status])
+                                ddl_activity = None
+                    filtered.append([row['ComicName'], row['Issue_Number'], row['ReleaseDate'], row['IssueID'], tier, row['ComicID'], row['Status'], storyarc, storyarcid, issuearcid, watcharc, row['Int_IssueNumber'], rejected_count, ddl_info_status, ddl_activity])
                 except Exception as e:
                     #logger.warn('danger Wil Robinson: %s' % (e,))
                     rejected_count = len(mylar.REJECTED_MATCHES.get(row['IssueID'], []))
-                    # Check if Snatched issue has ddl_info entry and its status
                     ddl_info_status = None
+                    ddl_activity = None
                     if row['Status'] == 'Snatched':
-                        ddl_check = myDB.selectone("SELECT status FROM ddl_info WHERE issueid=?", [row['IssueID']]).fetchone()
+                        ddl_check = myDB.selectone("SELECT id, status FROM ddl_info WHERE issueid=?", [row['IssueID']]).fetchone()
                         if ddl_check is not None:
                             try:
                                 ddl_info_status = ddl_check['status']
+                                did = ddl_check['id']
+                                st = ddl_check['status']
+                                if did is not None and st is not None:
+                                    if did in mylar.PP_DDL_IDS or did in mylar.PP_CURRENT_DDL_IDS:
+                                        ddl_activity = 'Post-processing'
+                                    elif st == 'Failed':
+                                        ddl_activity = 'Failed'
+                                    elif st == 'Incomplete':
+                                        ddl_activity = 'Paused'
+                                    elif st == 'Downloading':
+                                        ddl_activity = 'Downloading'
+                                    elif did in mylar.DDL_QUEUED:
+                                        ddl_activity = 'Queued'
+                                    elif st == 'Completed':
+                                        if not mylar.CONFIG.POST_PROCESSING:
+                                            ddl_activity = 'Downloaded'
+                                        else:
+                                            ddl_activity = 'Post-processing'
                             except (KeyError, TypeError):
                                 ddl_info_status = None
-                    filtered.append([row['ComicName'], row['Issue_Number'], row['ReleaseDate'], row['IssueID'], tier, row['ComicID'], row['Status'], None, None, None, watcharc, row['Int_IssueNumber'], rejected_count, ddl_info_status])
+                                ddl_activity = None
+                    filtered.append([row['ComicName'], row['Issue_Number'], row['ReleaseDate'], row['IssueID'], tier, row['ComicID'], row['Status'], None, None, None, watcharc, row['Int_IssueNumber'], rejected_count, ddl_info_status, ddl_activity])
 
         if mylar.CONFIG.UPCOMING_STORYARCS is True:
             for key, ark in arcs.items():
@@ -3684,16 +3722,35 @@ class WebInterface(object):
 
                 if matched is True:
                     rejected_count = len(mylar.REJECTED_MATCHES.get(key, []))
-                    # Check if Snatched issue has ddl_info entry and its status
                     ddl_info_status = None
+                    ddl_activity = None
                     if ark['status'] == 'Snatched':
-                        ddl_check = myDB.selectone("SELECT status FROM ddl_info WHERE issueid=?", [key]).fetchone()
+                        ddl_check = myDB.selectone("SELECT id, status FROM ddl_info WHERE issueid=?", [key]).fetchone()
                         if ddl_check is not None:
                             try:
                                 ddl_info_status = ddl_check['status']
+                                did = ddl_check['id']
+                                st = ddl_check['status']
+                                if did is not None and st is not None:
+                                    if did in mylar.PP_DDL_IDS or did in mylar.PP_CURRENT_DDL_IDS:
+                                        ddl_activity = 'Post-processing'
+                                    elif st == 'Failed':
+                                        ddl_activity = 'Failed'
+                                    elif st == 'Incomplete':
+                                        ddl_activity = 'Paused'
+                                    elif st == 'Downloading':
+                                        ddl_activity = 'Downloading'
+                                    elif did in mylar.DDL_QUEUED:
+                                        ddl_activity = 'Queued'
+                                    elif st == 'Completed':
+                                        if not mylar.CONFIG.POST_PROCESSING:
+                                            ddl_activity = 'Downloaded'
+                                        else:
+                                            ddl_activity = 'Post-processing'
                             except (KeyError, TypeError):
                                 ddl_info_status = None
-                    filtered.append([ark['comicname'], ark['issuenumber'], ark['releasedate'], key, tier, ark['comicid'], ark['status'], ark['storyarc'], ark['storyarcid'], ark['issuearcid'], "oneoff", ark['int_issuenumber'], rejected_count, ddl_info_status])
+                                ddl_activity = None
+                    filtered.append([ark['comicname'], ark['issuenumber'], ark['releasedate'], key, tier, ark['comicid'], ark['status'], ark['storyarc'], ark['storyarcid'], ark['issuearcid'], "oneoff", ark['int_issuenumber'], rejected_count, ddl_info_status, ddl_activity])
 
         #logger.fdebug('[%s] one-off arcs: %s' % (len(arcs), arcs,))
 
@@ -4382,6 +4439,9 @@ class WebInterface(object):
                     try:
                         issue = myDB.selectone("SELECT * FROM issues WHERE IssueID=? AND Status='Snatched'", [item['issueid']]).fetchone()
                         if issue is not None:
+                            if item['id'] in mylar.PP_DDL_IDS or item['id'] in mylar.PP_CURRENT_DDL_IDS:
+                                logger.debug('[DDL-RESTART-QUEUE] Skipping item ID %s (issue %s) - in PP queue or currently post-processing' % (item['id'], item['issueid']))
+                                continue
                             ctrlval = {'id': item['id']}
                             val = {'status': 'Queued',
                                    'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}
@@ -9626,6 +9686,10 @@ class WebInterface(object):
 
     def check_ActiveDDL(self):
          myDB = db.DBConnection()
+         try:
+             pp_count = mylar.PP_QUEUE.qsize()
+         except Exception:
+             pp_count = 0
          active = myDB.selectone("SELECT * FROM DDL_INFO WHERE STATUS = 'Downloading' ORDER BY updated_date DESC, id DESC").fetchone()
          if active is None:
              return json.dumps({'status':   'There are no active downloads currently being attended to',
@@ -9635,7 +9699,8 @@ class WebInterface(object):
                                 'a_filename':  None,
                                 'a_size':  None,
                                 'a_id':  None,
-                                'a_issueid': None})
+                                'a_issueid': None,
+                                'pp_queue_count': pp_count})
          else:
              filelocation = None
              if active['filename'] is not None:
@@ -9668,7 +9733,8 @@ class WebInterface(object):
                                                          'a_year':      active['year'],
                                                          'a_filename':  active['filename'],
                                                          'a_size':      active['size'],
-                                                         'a_id':        active['id']})
+                                                         'a_id':        active['id'],
+                                                         'pp_queue_count': pp_count})
                              else:
                                  # No size info at all, return with 0% progress
                                  return json.dumps({'status':      'Downloading',
@@ -9677,7 +9743,8 @@ class WebInterface(object):
                                                      'a_year':      active['year'],
                                                      'a_filename':  active['filename'],
                                                      'a_size':      active['size'],
-                                                     'a_id':        active['id']})
+                                                     'a_id':        active['id'],
+                                                     'pp_queue_count': pp_count})
                          
                          remote_filesize_int = int(float(str(remote_filesize).strip()))
                          if remote_filesize_int == 0:
@@ -9688,7 +9755,8 @@ class WebInterface(object):
                                                  'a_year':      active['year'],
                                                  'a_filename':  active['filename'],
                                                  'a_size':      active['size'],
-                                                 'a_id':        active['id']})
+                                                 'a_id':        active['id'],
+                                                 'pp_queue_count': pp_count})
                          
                          cmath = int(float(filesize*100)/int(remote_filesize_int*100) * 100)
                          if filesize > remote_filesize_int and cmath > 102:
@@ -9713,14 +9781,15 @@ class WebInterface(object):
                                          'a_year':      active['year'],
                                          'a_filename':  active['filename'],
                                          'a_size':      active['size'],
-                                         'a_id':        active['id']})
+                                         'a_id':        active['id'],
+                                         'pp_queue_count': pp_count})
                  # File doesn't exist - just show message, don't reset (ddl_watchdog handles stuck downloads)
                  statline = '%s does not exist.</br> This probably needs to be restarted (use the option in the GUI)' % filelocation
              else:
                  infoline = '%s (%s)' % (active['series'], active['year'])
                  # No filename assigned - just show message, don't reset (ddl_watchdog handles stuck downloads)
                  statline = 'No filename assigned for %s.</br> This was probably never started successfully - you should restart the download (use the option in the GUI)' % infoline
-             return json.dumps({'a_id': active['id'], 'status': statline, 'percent': 0})
+             return json.dumps({'a_id': active['id'], 'status': statline, 'percent': 0, 'pp_queue_count': pp_count})
 
     check_ActiveDDL.exposed = True
 

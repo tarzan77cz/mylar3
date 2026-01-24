@@ -237,6 +237,8 @@ class ComicInfoXml:
         md.webLink = xlate('Web')
         md.language = xlate('LanguageISO')
         md.format = xlate('Format')
+        if md.format == 'SC':
+            md.format = 'TPB'
         md.manga = xlate('Manga')
         md.characters = xlate('Characters')
         md.teams = xlate('Teams')

@@ -1,3 +1,10 @@
+/* Disable DataTables modal alerts on AJAX error; errors are swallowed silently. */
+(function() {
+    if (typeof $ !== 'undefined' && $.fn && typeof $.fn.dataTable !== 'undefined' && $.fn.dataTable.ext) {
+        $.fn.dataTable.ext.errMode = 'none';
+    }
+})();
+
 function initHeader() {
 	//settings
 	var header = $("#container header");
@@ -77,7 +84,14 @@ function refreshSubmenu() {
 	});
 }
 function refreshTable() {
-	var url =  $(location).attr('href');
+	var url = $(location).attr('href');
+	if (url.indexOf('queueManage') !== -1) {
+		if ($('#queue_table').length && $.fn.dataTable && $.fn.dataTable.isDataTable('#queue_table')) {
+			$('#queue_table').DataTable().ajax.reload(null, false);
+			if (typeof updateStatusSummary === 'function') updateStatusSummary();
+		}
+		return;
+	}
 	$("table.display").load(url + " table.display tbody, table.display thead", function() {
 		initThisPage();
 	});

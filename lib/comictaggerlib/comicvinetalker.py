@@ -507,6 +507,8 @@ class ComicVineTalker(QObject):
         num_s = IssueString(issue_results['issue_number']).asString()
         metadata.issue = num_s
         metadata.title = issue_results['name']
+        if issue_results.get('name') == 'SC':
+            metadata.format = 'TPB'
 
         metadata.publisher = volume_results['publisher']['name']
         metadata.day, metadata.month, metadata.year = self.parseDateStr(

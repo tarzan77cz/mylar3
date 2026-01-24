@@ -1432,7 +1432,7 @@ class GC(object):
                     verify=True,
                     headers=self.headers,
                     stream=True,
-                    timeout=(30,30)
+                    timeout=(30, 120)
                 )
 
                 filename = os.path.basename(
@@ -1460,7 +1460,7 @@ class GC(object):
                                 verify=True,
                                 headers=self.headers,
                                 stream=True,
-                                timeout=(30,30)
+                                timeout=(30, 120)
                             )
                             filename = os.path.basename(
                                 urllib.parse.unquote(t.url)
@@ -1552,6 +1552,8 @@ class GC(object):
                                     f.flush()
                                     bytes_written = 0
                         f.flush()  # Final flush at the end
+                        if hasattr(f, 'fileno') and f.fileno() >= 0:
+                            os.fsync(f.fileno())
 
                 else:
                     if os.path.exists(dst_path):
@@ -1578,6 +1580,8 @@ class GC(object):
                                     f.flush()
                                     bytes_written = 0
                         f.flush()  # Final flush at the end
+                        if hasattr(f, 'fileno') and f.fileno() >= 0:
+                            os.fsync(f.fileno())
 
         except requests.exceptions.Timeout as e:
             logger.error('[ERROR] download has timed out due to inactivity...: %s', e)
@@ -1691,8 +1695,8 @@ class GC(object):
             issfind_en = title.find('-')
             #logger.fdebug('issfind_en: %s' % issfind_en)
             #logger.fdebug('issfind_en-2: %s' % issfind_en -2)
-            if title[issfind_en -2].isdigit():
-                issfind_st = issfind_en -2
+            if issfind_en != -1 and issfind_en >= 2 and title[issfind_en - 2].isdigit():
+                issfind_st = issfind_en - 2
                 #logger.fdebug('issfind_st: %s' % issfind_st)
             #logger.fdebug('rfind: %s' % title.lower().rfind('vol'))
             if title.lower().rfind('vol') != -1:
@@ -1706,7 +1710,7 @@ class GC(object):
 
         #logger.fdebug('issfind_en: %s' % issfind_en)
         if issfind_en != -1:
-            if all([title[issfind_en + 1] == ' ', title[issfind_en + 2].isdigit()]):
+            if issfind_en + 2 < len(title) and all([title[issfind_en + 1] == ' ', title[issfind_en + 2].isdigit()]):
                 iss_en = title.find(' ', issfind_en + 2)
                 #logger.info('iss_en: %s [%s]' % (iss_en, title[iss_en +2]))
                 if iss_en == -1:
@@ -1751,7 +1755,7 @@ class GC(object):
 
                     pack = True
                     logger.fdebug('issues: %s' % issues)
-            elif title[issfind_en + 1].isdigit():
+            elif issfind_en + 1 < len(title) and title[issfind_en + 1].isdigit():
                 iss_en = title.find(' ', issfind_en + 1)
                 if iss_en != -1:
                     issues = title[issfind_st + 1 : iss_en]
@@ -1761,7 +1765,7 @@ class GC(object):
         # to handle packs that are denoted without a # sign being present.
         # if there's a dash, check to see if both sides of the dash are numeric.
         logger.fdebug('pack: [%s] %s' % (type(pack),pack))
-        if not pack and title.find('-') != -1:
+        if not pack and title.find('-') != -1 and issfind_en != -1 and issfind_en >= 1 and issfind_en + 2 < len(title):
             #logger.fdebug('title: %s' % title)
             #logger.fdebug('title[issfind_en+1]: %s' % title[issfind_en +1])
             #logger.fdebug('title[issfind_en+2]: %s' % title[issfind_en +2])
@@ -1773,7 +1777,7 @@ class GC(object):
                    ]
             ) and all(
                    [
-                       title[issfind_en -1] == ' ',
+                       title[issfind_en - 1] == ' ',
                    ]
             ):
                 spaces = [m.start() for m in re.finditer(' ', title)]

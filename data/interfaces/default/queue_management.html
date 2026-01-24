@@ -15,12 +15,15 @@
 </%def>
 
 <%def name="body()">
-                
+        <input type="hidden" id="page_name" value="queueManage" />
             <div id="paddingheader">
                 <h1 class="clearfix">QUEUE MANAGEMENT</h1></br>
             </div>
             <div style="text-align:center;">
              <h2><center><bold>ACTIVE</bold></center></h2>
+              <div id="active_status_div" style="text-align: center; margin-top: 5px; margin-bottom: 5px; padding: 5px; color: #AAAAAA;">
+                <strong>(PP queue: 0)</strong>
+              </div>
               <div id="active_message" align="center" style="display:none;">
                   <div id="amessage" align="center"></div>
               </div>
@@ -94,7 +97,7 @@
         <script src="js/libs/jquery.dataTables.min.js"></script>
         <script src="js/libs/full_numbers_no_ellipses.js"></script>
         <script>
-        var ImportTimer = setInterval(activecheck, 5000);
+        var ImportTimer = setInterval(activecheck, 2000);
         var previousStatus = null;
         var previousAid = null;
         
@@ -124,6 +127,8 @@
                         var percent = obj['percent'];
                         var status = obj['status'];
                         var aid = obj['a_id'];
+                        var ppCount = obj['pp_queue_count'] != null ? obj['pp_queue_count'] : 0;
+                        $('#active_status_div strong').text('(PP queue: ' + ppCount + ')');
                         
                         // Check if download status changed (new download started or previous completed)
                         var statusChanged = (previousStatus !== status) || (previousAid !== aid);
@@ -194,7 +199,7 @@
                             clearInterval(ImportTimer);
                             $('#queue_table').DataTable().ajax.reload(null, false);
                             updateStatusSummary();
-                            ImportTimer = setInterval(activecheck, 5000);
+                            ImportTimer = setInterval(activecheck, 2000);
                         }
                 });
         };
