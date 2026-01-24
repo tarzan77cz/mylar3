@@ -1537,12 +1537,21 @@ class GC(object):
                 dst_path = os.path.join(mylar.CONFIG.DDL_LOCATION, filename)
 
                 t.headers['Accept-encoding'] = 'gzip'
+                chunk_size = 1048576  # 1MB chunks for better performance
+                flush_interval = 1048576  # Flush every 1MB to keep file modification time updated for watchdog
+                
                 if resume is not None:
                     with open(dst_path, 'ab') as f:
-                        for chunk in t.iter_content(chunk_size=1024):
+                        bytes_written = 0
+                        for chunk in t.iter_content(chunk_size=chunk_size):
                             if chunk:
                                 f.write(chunk)
-                                f.flush()
+                                bytes_written += len(chunk)
+                                # Flush periodically to keep file modification time updated for watchdog
+                                if bytes_written >= flush_interval:
+                                    f.flush()
+                                    bytes_written = 0
+                        f.flush()  # Final flush at the end
 
                 else:
                     if os.path.exists(dst_path):
@@ -1559,10 +1568,16 @@ class GC(object):
                             )
 
                     with open(dst_path, 'wb') as f:
-                        for chunk in t.iter_content(chunk_size=1024):
+                        bytes_written = 0
+                        for chunk in t.iter_content(chunk_size=chunk_size):
                             if chunk:
                                 f.write(chunk)
-                                f.flush()
+                                bytes_written += len(chunk)
+                                # Flush periodically to keep file modification time updated for watchdog
+                                if bytes_written >= flush_interval:
+                                    f.flush()
+                                    bytes_written = 0
+                        f.flush()  # Final flush at the end
 
         except requests.exceptions.Timeout as e:
             logger.error('[ERROR] download has timed out due to inactivity...: %s', e)
