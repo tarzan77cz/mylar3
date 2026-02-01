@@ -608,6 +608,9 @@ class search_check(object):
         else:
             p_comic = filechecker.FileChecker(file=ComicTitle, watchcomic=ComicName)
             parsed_comic = p_comic.listFiles()
+            # For DDL (GetComics) single-issue: use year from card when title has no year
+            if 'DDL' in entry.get('site', '') and entry.get('year') is not None and parsed_comic.get('issue_year') is None:
+                parsed_comic['issue_year'] = entry['year']
 
         logger.fdebug('parsed_info: %s' % parsed_comic)
         logger.fdebug(
