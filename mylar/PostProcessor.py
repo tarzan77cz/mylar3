@@ -1153,6 +1153,10 @@ class PostProcessor(object):
                                     # then spit out the error message and don't post-process it.
                                     watch_values = cs['WatchValues']
                                     second_check = False
+                                    # When comicid/issueid was explicitly provided (DDL, API, manual/rejected match),
+                                    # trust the assignment and skip requiring filename series name to match DB name.
+                                    if self.comicid is not None or self.issueid is not None:
+                                        second_check = True
                                     if watch_values['LatestIssueInt'] >= fcdigit:
                                         logger.fdebug('possible match - issue in dB (%s) is greater than issue in file (%s)' % (watch_values['LatestIssueInt'], fcdigit))
 

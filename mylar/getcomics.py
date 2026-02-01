@@ -833,6 +833,88 @@ class GC(object):
                             })
                             logger.fdebug('[FALLBACK] Found link: %s - %s' % (t_site, lk['href'][:50]))
         
+        # Second fallback: if still no links, find <a href*="/dlds/"> with title/text "Download Now" or "Mirror Download"
+        links_found_after_aio = False
+        for k, y in valid_links.items():
+            if 'links' in y and len(y['links']) > 0:
+                links_found_after_aio = True
+                break
+        
+        if not links_found_after_aio:
+            logger.info('[DDL-GATHERER-OF-LINKAGE] No links from aio-pulse fallback, trying fallback: searching for /dlds/ links by title...')
+            dlds_fallback_series = None
+            dlds_fallback_year = None
+            dlds_fallback_size = None
+            for k, y in valid_links.items():
+                if 'series' in y:
+                    dlds_fallback_series = y['series']
+                if 'year' in y:
+                    dlds_fallback_year = y['year']
+                if 'size' in y:
+                    dlds_fallback_size = y['size']
+            if dlds_fallback_series is None and beeswax:
+                for p_tag in beeswax:
+                    linkage_test = p_tag.text.strip()
+                    if all(['Language' in linkage_test, 'Year' in linkage_test, 'Size' in linkage_test]):
+                        option_find = p_tag
+                        i = 0
+                        while True:
+                            try:
+                                prev_option = option_find
+                                option_find = option_find.findNext(text=True)
+                                if option_find is None:
+                                    break
+                                if i == 0 and dlds_fallback_series is None:
+                                    dlds_fallback_series = option_find
+                                elif 'Year' in str(option_find):
+                                    try:
+                                        year_next = option_find.findNext(text=True)
+                                        if year_next:
+                                            dlds_fallback_year = re.sub(r'\|', '', str(year_next)).strip()
+                                    except (AttributeError, TypeError):
+                                        pass
+                                elif 'Size' in str(prev_option):
+                                    dlds_fallback_size = option_find
+                                    break
+                                i += 1
+                                if i > 20:
+                                    break
+                            except (AttributeError, TypeError):
+                                break
+                        break
+            for a in soup.findAll('a', href=True):
+                href = a.get('href', '')
+                if '/dlds/' not in href or 'sh.st' in href:
+                    continue
+                title_attr = a.get('title', '').strip().lower()
+                text_attr = a.get_text(strip=True).lower()
+                if title_attr == 'download now' or text_attr == 'download now':
+                    t_site = 'download now'
+                elif title_attr == 'mirror download' or text_attr == 'mirror download':
+                    t_site = 'mirror download'
+                else:
+                    continue
+                if 'normal' not in valid_links:
+                    valid_links['normal'] = {}
+                if 'links' not in valid_links['normal']:
+                    valid_links['normal']['links'] = []
+                if dlds_fallback_series is not None:
+                    valid_links['normal']['series'] = dlds_fallback_series
+                if dlds_fallback_year is not None:
+                    valid_links['normal']['year'] = dlds_fallback_year
+                if dlds_fallback_size is not None:
+                    valid_links['normal']['size'] = dlds_fallback_size
+                valid_links['normal']['links'].append({
+                    "series": dlds_fallback_series,
+                    "site": t_site,
+                    "year": dlds_fallback_year,
+                    "issues": None,
+                    "size": dlds_fallback_size,
+                    "links": href,
+                    "pack": pack
+                })
+                logger.fdebug('[FALLBACK-DLDS] Found link: %s - %s' % (t_site, href[:50]))
+        
         tmp_links = []
         tmp_sites = []
         site_position = {}
