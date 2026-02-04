@@ -540,6 +540,46 @@ class PostProcessor(object):
 
                     if any([self.issueid is not None, self.comicid is not None]) and fl['issueid'] is None:
                         comicseries = myDB.select('SELECT * FROM comics WHERE ComicID=?', [self.comicid])
+                        # DDL single-issue: we have issueid/comicid from queue but filename/dir has no [__issueid__] in parsed name - force-match from DB
+                        if self.issueid is not None and comicseries:
+                            try:
+                                csi = myDB.selectone(
+                                    'SELECT i.ComicID, i.IssueID, i.Issue_Number, c.ComicName, c.ComicYear, c.AgeRating FROM comics as c JOIN issues as i ON c.ComicID = i.ComicID WHERE i.IssueID=?',
+                                    [self.issueid]).fetchone()
+                            except Exception as e:
+                                logger.error(f"Database error when querying comics/issues for DDL force-match: {e}")
+                                csi = None
+                            if csi is not None:
+                                if os.path.isfile(fl['comiclocation']):
+                                    clocation = fl['comiclocation']
+                                else:
+                                    clocation = os.path.join(fl['comiclocation'], fl['comicfilename'])
+                                annualtype = None
+                                annualseries = None
+                                if mylar.CONFIG.ANNUALS_ON:
+                                    if 'Annual' in csi['ComicName']:
+                                        annualtype = 'Annual'
+                                    elif 'Special' in csi['ComicName']:
+                                        annualtype = 'Special'
+                                        annualseries = csi['ComicName']
+                                    if annualtype == 'Annual':
+                                        annualseries = csi['ComicName']
+                                tmp_manual_list = {"ComicLocation":   clocation,
+                                                   "ComicID":         csi['ComicID'],
+                                                   "IssueID":         csi['IssueID'],
+                                                   "IssueNumber":     csi['Issue_Number'],
+                                                   "AnnualType":      annualtype,
+                                                   "AnnualSeries":    annualseries,
+                                                   "ComicName":       csi['ComicName'],
+                                                   "AgeRating":       csi['AgeRating'],
+                                                   "Series":          fl['series_name'],
+                                                   "SeriesYear":      csi['ComicYear'],
+                                                   "AltSeries":       fl['alt_series'],
+                                                   "One-Off":         False,
+                                                   "ForcedMatch":     True}
+                                manual_list.append(tmp_manual_list)
+                                logger.fdebug('%s DDL force-match: added %s to manual_list (issueid from queue, path: %s)' % (module, fl.get('comicfilename', clocation), clocation))
+                                continue
                     else:
                         if fl['issueid'] is not None:
                             story_the_arcs = False

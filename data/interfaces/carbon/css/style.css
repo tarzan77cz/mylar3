@@ -765,6 +765,58 @@ footer {
   color: #FFF;
   border-color: #272b30 #272b30 #272b30;
 }
+/* Direct Download only: match other buttons (override global link colour/underline) */
+#subhead #subhead_container #subhead_menu a#menu_link_directdownload,
+#subhead #subhead_container #subhead_menu a.subhead_menu_link {
+  color: #e4e4e4 !important;
+  text-decoration: none !important;
+}
+#subhead #subhead_container #subhead_menu a#menu_link_directdownload:hover,
+#subhead #subhead_container #subhead_menu a.subhead_menu_link:hover {
+  color: #FFF;
+}
+#subhead #subhead_container #subhead_menu a .subhead_menu_icon {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  vertical-align: middle;
+  margin-right: 4px;
+  background-image: url("../../../images/ui-icons_70b2e1_256x240.png");
+  background-repeat: no-repeat;
+}
+/* Direct Download icon: blue in default (inherits ui-icons_70b2e1), white on hover */
+#subhead #subhead_container #subhead_menu a#menu_link_directdownload:hover .ui-button-icon-primary,
+#subhead #subhead_container #subhead_menu a.subhead_menu_link:hover .ui-button-icon-primary {
+  filter: brightness(0) invert(1);
+}
+/* Direct Download dialog: buttons identical to Delete Series (input[type="submit"]) */
+.ui-dialog.direct-download-dialog .ui-dialog-buttonpane .ui-button,
+.ui-dialog.direct-download-dialog .ui-dialog-buttonpane .ui-button .ui-button-text,
+.ui-dialog.direct-download-dialog .ui-dialog-buttonpane button {
+  -moz-border-radius: 5px;
+  -webkit-border-radius: 5px;
+  border-radius: 5px;
+  background: #666 url("../../../images/button.png") repeat-x !important;
+  border: 0 !important;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.25) !important;
+  color: #fff !important;
+  cursor: pointer;
+  display: inline-block;
+  margin-right: 3px;
+  padding: 4px 10px !important;
+  position: relative;
+  text-decoration: none;
+  text-shadow: 0 -1px 1px rgba(0, 0, 0, 0.25);
+}
+.ui-dialog.direct-download-dialog .ui-dialog-buttonpane .ui-button:hover,
+.ui-dialog.direct-download-dialog .ui-dialog-buttonpane .ui-button:hover .ui-button-text,
+.ui-dialog.direct-download-dialog .ui-dialog-buttonpane button:hover {
+  color: #fff !important;
+}
+.ui-dialog.direct-download-dialog .ui-dialog-buttonpane .ui-button:hover,
+.ui-dialog.direct-download-dialog .ui-dialog-buttonpane button:hover {
+  background: #666 url("../../../images/button.png") repeat-x !important;
+}
 div#searchbar {
   border-left: 1px solid transparent;
   -moz-box-shadow: -1px 0 0 transparent;

@@ -2281,10 +2281,10 @@ def reverse_the_pack_snatch(pack_id, comicid):
     reverselist = [issueid for issueid, packid in mylar.PACK_ISSUEIDS_DONT_QUEUE.items() if pack_id == packid]
     myDB = db.DBConnection()
     for x in reverselist:
-        myDB.upsert("issues", {"Status": "Skipped"}, {"IssueID": x})
+        myDB.upsert("issues", {"Status": "Wanted"}, {"IssueID": x})
     if reverselist:
         logger.info('[REVERSE UNO] Reversal completed for %s issues' % len(reverselist))
-        mylar.GLOBAL_MESSAGES = {'status': 'success', 'comicid': comicid, 'tables': 'both', 'message': 'Successfully changed status of %s issues to %s' % (len(reverselist), 'Skipped')}
+        mylar.GLOBAL_MESSAGES = {'status': 'success', 'comicid': comicid, 'tables': 'both', 'message': 'Successfully changed status of %s issues to %s' % (len(reverselist), 'Wanted')}
 
 
 def conversion(value):
@@ -3011,6 +3011,32 @@ def ddl_watchdog():
                                 logger.fdebug('[DDL-WATCHDOG] Error checking file size: %s' % e)
                         else:
                             # File doesn't exist but status is Downloading - check if it's stuck
+                            # Pack: zip may have been extracted and deleted - if extracted folder exists, mark Completed
+                            try:
+                                is_pack = downloading_item.get('pack') in (1, True, '1')
+                            except (KeyError, TypeError):
+                                is_pack = False
+                            if is_pack and filename and str(filename).lower().endswith('.zip') and mylar.CONFIG.DDL_LOCATION:
+                                base = re.sub(r'\.zip$', '', filename, flags=re.I).strip()
+                                extracted_path = os.path.join(mylar.CONFIG.DDL_LOCATION, base)
+                                if os.path.isdir(extracted_path):
+                                    try:
+                                        series_name = downloading_item['series']
+                                    except (KeyError, TypeError):
+                                        series_name = 'Unknown'
+                                    logger.info('[DDL-WATCHDOG] Pack zip was extracted (folder exists). Marking as Completed: %s' % series_name)
+                                    ctrlval = {'id': downloading_item['id']}
+                                    val = {'status': 'Completed',
+                                           'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}
+                                    myDB.upsert('ddl_info', val, ctrlval)
+                                    try:
+                                        item_id = downloading_item['id']
+                                        if item_id in mylar.DDL_QUEUED:
+                                            mylar.DDL_QUEUED.remove(item_id)
+                                    except (KeyError, TypeError):
+                                        pass
+                                    items_fixed += 1
+                                    continue  # Skip to next item
                             try:
                                 updated_date_str = downloading_item['updated_date']
                             except (KeyError, TypeError):
@@ -3178,39 +3204,64 @@ def ddl_watchdog():
                                     logger.fdebug('[DDL-WATCHDOG] Error checking download status: %s' % e)
                         else:
                             # File doesn't exist but status is Downloading - might be stuck
+                            # Pack: zip may have been extracted and deleted - if extracted folder exists, mark Completed
                             try:
-                                updated_date_str = downloading_item['updated_date']
+                                is_pack = downloading_item.get('pack') in (1, True, '1')
                             except (KeyError, TypeError):
-                                updated_date_str = None
-                            if updated_date_str:
+                                is_pack = False
+                            if is_pack and filename and str(filename).lower().endswith('.zip') and mylar.CONFIG.DDL_LOCATION:
+                                base = re.sub(r'\.zip$', '', filename, flags=re.I).strip()
+                                extracted_path = os.path.join(mylar.CONFIG.DDL_LOCATION, base)
+                                if os.path.isdir(extracted_path):
+                                    try:
+                                        series_name = downloading_item['series']
+                                    except (KeyError, TypeError):
+                                        series_name = 'Unknown'
+                                    logger.info('[DDL-WATCHDOG] Pack zip was extracted (folder exists). Marking as Completed: %s' % series_name)
+                                    mylar.DDL_LOCK = False
+                                    ctrlval = {'id': downloading_item['id']}
+                                    val = {'status': 'Completed',
+                                           'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}
+                                    myDB.upsert('ddl_info', val, ctrlval)
+                                    try:
+                                        if downloading_item['id'] in mylar.DDL_QUEUED:
+                                            mylar.DDL_QUEUED.remove(downloading_item['id'])
+                                    except (ValueError, KeyError):
+                                        pass
+                            else:
                                 try:
-                                    updated_date = datetime.datetime.strptime(updated_date_str, '%Y-%m-%d %H:%M')
-                                    time_diff = datetime.datetime.now() - updated_date
+                                    updated_date_str = downloading_item['updated_date']
+                                except (KeyError, TypeError):
+                                    updated_date_str = None
+                                if updated_date_str:
+                                    try:
+                                        updated_date = datetime.datetime.strptime(updated_date_str, '%Y-%m-%d %H:%M')
+                                        time_diff = datetime.datetime.now() - updated_date
+                                        
+                                        # If it's been more than 10 minutes and file doesn't exist, reset
+                                        if time_diff > timedelta(minutes=10):
+                                            logger.warn('[DDL-WATCHDOG] Download status is "Downloading" but file doesn\'t exist for 10+ minutes. Resetting.')
+                                            mylar.DDL_LOCK = False
+                                            
+                                            ctrlval = {'id': downloading_item['id']}
+                                            val = {'status': 'Queued',
+                                                   'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}
+                                            myDB.upsert('ddl_info', val, ctrlval)
+                                            
+                                            try:
+                                                if downloading_item['id'] in mylar.DDL_QUEUED:
+                                                    mylar.DDL_QUEUED.remove(downloading_item['id'])
+                                            except (ValueError, KeyError):
+                                                pass
+                                            
+                                            try:
+                                                series_name = downloading_item['series']
+                                            except (KeyError, TypeError):
+                                                series_name = 'Unknown'
+                                            logger.info('[DDL-WATCHDOG] Requeued stuck download (no file): %s' % series_name)
                                     
-                                    # If it's been more than 10 minutes and file doesn't exist, reset
-                                    if time_diff > timedelta(minutes=10):
-                                        logger.warn('[DDL-WATCHDOG] Download status is "Downloading" but file doesn\'t exist for 10+ minutes. Resetting.')
-                                        mylar.DDL_LOCK = False
-                                        
-                                        ctrlval = {'id': downloading_item['id']}
-                                        val = {'status': 'Queued',
-                                               'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}
-                                        myDB.upsert('ddl_info', val, ctrlval)
-                                        
-                                        try:
-                                            if downloading_item['id'] in mylar.DDL_QUEUED:
-                                                mylar.DDL_QUEUED.remove(downloading_item['id'])
-                                        except (ValueError, KeyError):
-                                            pass
-                                        
-                                        try:
-                                            series_name = downloading_item['series']
-                                        except (KeyError, TypeError):
-                                            series_name = 'Unknown'
-                                        logger.info('[DDL-WATCHDOG] Requeued stuck download (no file): %s' % series_name)
-                                
-                                except Exception as e:
-                                    logger.fdebug('[DDL-WATCHDOG] Error in watchdog: %s' % e)
+                                    except Exception as e:
+                                        logger.fdebug('[DDL-WATCHDOG] Error in watchdog: %s' % e)
                 else:
                     # DDL_LOCK is True but no item with status "Downloading" - reset lock
                     logger.warn('[DDL-WATCHDOG] DDL_LOCK is True but no item with status "Downloading" found. Resetting lock.')
@@ -3374,7 +3425,8 @@ def ddl_downloader(queue):
                     remote_filesize = item['remote_filesize']
                 except Exception:
                     try:
-                        remote_filesize = helpers.human2bytes(re.sub('/s', '', item['size'][:-1]).strip())
+                        _size_str = (item.get('size') or '')[:-1].strip()
+                        remote_filesize = helpers.human2bytes(re.sub('/s', '', _size_str))
                     except Exception:
                         remote_filesize = 0
 
@@ -3464,7 +3516,8 @@ def ddl_downloader(queue):
 
                 try:
                     pck_cnt = 0
-                    if item['comicinfo'][0]['pack'] is True:
+                    if (item.get('comicinfo') and len(item['comicinfo']) > 0 and
+                            item['comicinfo'][0].get('pack') is True):
                         logger.fdebug('[PACK DETECTION] Attempting to remove issueids from the pack dont-queue list')
                         for x,y in dict(mylar.PACK_ISSUEIDS_DONT_QUEUE).items():
                             if y == item['id']:
@@ -3488,7 +3541,22 @@ def ddl_downloader(queue):
                     try:
                         ltf = ddzstat.get('links_exhausted') if ddzstat else None
                     except (KeyError, AttributeError):
+                        ltf = None
+                    if not ltf:
                         logger.info('[Status: %s] Failed to download item from %s : %s ' % (ddzstat.get('success') if ddzstat else 'Unknown', item['link_type'], ddzstat))
+                    # Direct-download / restarted items have no alternate links; mark failed and reverse snatch
+                    if not item.get('comicinfo') or not item.get('packinfo'):
+                        nval = {'status': 'Failed', 'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}
+                        myDB.upsert('ddl_info', nval, ctrlval)
+                        if item.get('pack') or (item.get('id') and str(item['id']).startswith('manual-')):
+                            reverse_the_pack_snatch(item['id'], item['comicid'])
+                        ddl_cleanup(item['id'])
+                        try:
+                            if item['id'] in mylar.DDL_QUEUED:
+                                mylar.DDL_QUEUED.remove(item['id'])
+                        except (ValueError, KeyError):
+                            pass
+                    elif not ltf:
                         try:
                             link_type_failure[item['id']].append(item['link_type'])
                         except KeyError:
@@ -3535,10 +3603,27 @@ def ddl_downloader(queue):
                             logger.info('[DDL-DOWNLOADER] Queue empty, found %s queued items in DB. Auto-loading...' % len(queued_items))
                             items_loaded = 0
                             for db_item in queued_items:
-                                # Check if already in queue or downloading
+                                # Stale state: in DDL_QUEUED but queue is empty (e.g. restart after items were taken from queue but not completed)
                                 if db_item['id'] in mylar.DDL_QUEUED:
-                                    logger.fdebug('[DDL-DOWNLOADER] Item %s [ID: %s] already in DDL_QUEUED, skipping' % (db_item['series'], db_item['id']))
-                                    continue
+                                    try:
+                                        mylar.DDL_QUEUED.remove(db_item['id'])
+                                    except (ValueError, KeyError):
+                                        pass
+                                    logger.debug('[DDL-DOWNLOADER] Removed stale ID %s from DDL_QUEUED (queue was empty)' % db_item['id'])
+                                    # If the issue is already Downloaded/Archived, mark ddl_info as Completed so we don't re-queue
+                                    try:
+                                        if db_item['issueid']:
+                                            issue_row = myDB.selectone("SELECT Status FROM issues WHERE IssueID=?", [db_item['issueid']]).fetchone()
+                                            if issue_row and issue_row['Status'] in ('Downloaded', 'Archived'):
+                                                myDB.upsert('ddl_info', {
+                                                    'status': 'Completed',
+                                                    'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
+                                                }, {'id': db_item['id']})
+                                                logger.info('[DDL-DOWNLOADER] Marked DDL item %s [ID: %s] as Completed (issue already %s)' % (db_item['series'], db_item['id'], issue_row['Status']))
+                                                continue
+                                    except (TypeError, KeyError):
+                                        pass
+                                    # Not already done: fall through to add to queue (we already removed from DDL_QUEUED)
                                 
                                 # Determine if it's a oneoff
                                 OneOff = False

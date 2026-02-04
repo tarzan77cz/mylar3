@@ -1126,60 +1126,76 @@ class GC(object):
                         sub_site_chk = [y for y in tmp_sites if 'mega' in y]
                         if sub_site_chk:
                             try:
-                               kk = tmp_links[site_position['HD-Digital:mega']]
-                               logger.info('[MEGA] HD-Digital preference detected...attempting %s' % kk['series'])
-                               link_matched = True
+                                kk = tmp_links[site_position['HD-Upscaled:mega']]
+                                logger.info('[MEGA] HD-Upscaled preference detected...attempting %s' % kk['series'])
+                                link_matched = True
                             except KeyError:
                                 try:
-                                   kk = tmp_links[site_position['SD-Digital:mega']]
-                                   logger.info('[MEGA] SD-Digital preference detected...attempting %s' % kk['series'])
-                                   link_matched = True
-                                except KeyError:
-                                    kk = tmp_links[site_position['normal:mega']]
-                                    logger.info('[MEGA] mega preference detected...attempting %s' % kk['series'])
+                                    kk = tmp_links[site_position['HD-Digital:mega']]
+                                    logger.info('[MEGA] HD-Digital preference detected...attempting %s' % kk['series'])
                                     link_matched = True
+                                except KeyError:
+                                    try:
+                                        kk = tmp_links[site_position['SD-Digital:mega']]
+                                        logger.info('[MEGA] SD-Digital preference detected...attempting %s' % kk['series'])
+                                        link_matched = True
+                                    except KeyError:
+                                        kk = tmp_links[site_position['normal:mega']]
+                                        logger.info('[MEGA] mega preference detected...attempting %s' % kk['series'])
+                                        link_matched = True
 
                     elif not link_matched and site_lp == 'pixeldrain':
                         sub_site_chk = [y for y in tmp_sites if 'pixel' in y]
                         if sub_site_chk:
                             try:
-                                kk = tmp_links[site_position['HD-Digital:pixeldrain']]
-                                logger.info('[PixelDrain] HD-Digital preference detected...attempting %s' % kk['series'])
+                                kk = tmp_links[site_position['HD-Upscaled:pixeldrain']]
+                                logger.info('[PixelDrain] HD-Upscaled preference detected...attempting %s' % kk['series'])
                                 link_matched = True
                             except KeyError:
                                 try:
-                                    kk = tmp_links[site_position['SD-Digital:pixeldrain']]
-                                    logger.info('[PixelDrain] SD-Digital preference detected...attempting %s' % kk['series'])
+                                    kk = tmp_links[site_position['HD-Digital:pixeldrain']]
+                                    logger.info('[PixelDrain] HD-Digital preference detected...attempting %s' % kk['series'])
                                     link_matched = True
                                 except KeyError:
-                                    kk = tmp_links[site_position['normal:pixeldrain']]
-                                    logger.info('[PixelDrain] PixelDrain preference detected...attempting %s' % kk['series'])
-                                    link_matched = True
+                                    try:
+                                        kk = tmp_links[site_position['SD-Digital:pixeldrain']]
+                                        logger.info('[PixelDrain] SD-Digital preference detected...attempting %s' % kk['series'])
+                                        link_matched = True
+                                    except KeyError:
+                                        kk = tmp_links[site_position['normal:pixeldrain']]
+                                        logger.info('[PixelDrain] PixelDrain preference detected...attempting %s' % kk['series'])
+                                        link_matched = True
 
                     elif not link_matched and site_lp == 'mediafire':
                         sub_site_chk = [y for y in tmp_sites if 'mediafire' in y]
                         if sub_site_chk:
                             try:
-                                kk = tmp_links[site_position['HD-Digital:mediafire']]
-                                logger.info('[mediafire] HD-Digital preference detected...attempting %s' % kk['series'])
+                                kk = tmp_links[site_position['HD-Upscaled:mediafire']]
+                                logger.info('[mediafire] HD-Upscaled preference detected...attempting %s' % kk['series'])
                                 link_matched = True
                             except KeyError:
                                 try:
-                                    kk = tmp_links[site_position['SD-Digital:mediafire']]
-                                    logger.info('[mediafire] SD-Digital preference detected...attempting %s' % kk['series'])
+                                    kk = tmp_links[site_position['HD-Digital:mediafire']]
+                                    logger.info('[mediafire] HD-Digital preference detected...attempting %s' % kk['series'])
                                     link_matched = True
                                 except KeyError:
-                                    kk = tmp_links[site_position['normal:mediafire']]
-                                    logger.info('[mediafire] mediafire preference detected...attempting %s' % kk['series'])
-                                    link_matched = True
+                                    try:
+                                        kk = tmp_links[site_position['SD-Digital:mediafire']]
+                                        logger.info('[mediafire] SD-Digital preference detected...attempting %s' % kk['series'])
+                                        link_matched = True
+                                    except KeyError:
+                                        kk = tmp_links[site_position['normal:mediafire']]
+                                        logger.info('[mediafire] mediafire preference detected...attempting %s' % kk['series'])
+                                        link_matched = True
 
                     elif not link_matched and site_lp == 'main':
                         # Try to find available download option in order of preference
-                        # Support HD-Digital, SD-Digital, and normal options
+                        # Support HD-Upscaled, HD-Digital, SD-Digital, and normal options
                         # Check both 'download now' and 'main' variants (because 'download now' is mapped to 'main' for normal links)
                         found_link = False
-                        for key_option in ['HD-Digital:download now', 'HD-Digital:main', 'HD-Digital:mirror download', 
-                                           'SD-Digital:download now', 'SD-Digital:main', 'SD-Digital:mirror download', 
+                        for key_option in ['HD-Upscaled:download now', 'HD-Upscaled:main', 'HD-Upscaled:mirror download',
+                                           'HD-Digital:download now', 'HD-Digital:main', 'HD-Digital:mirror download',
+                                           'SD-Digital:download now', 'SD-Digital:main', 'SD-Digital:mirror download',
                                            'normal:download now', 'normal:main', 'normal:mirror download']:
                             if key_option in site_position:
                                 try:
@@ -1208,46 +1224,74 @@ class GC(object):
                        sub_site_chk = [y for y in tmp_sites if 'mega' in y]
                        if sub_site_chk:
                            try:
-                               link = tmp_links[site_position['normal:mega']]
+                               link = tmp_links[site_position['HD-Upscaled:mega']]
                                link_matched = True
-                           except Exception as e:
-                               link = tmp_links[site_position['normal:mega link']]
-                               link_matched = True
+                           except (KeyError, TypeError):
+                               try:
+                                   link = tmp_links[site_position['HD-Digital:mega']]
+                                   link_matched = True
+                               except (KeyError, TypeError):
+                                   try:
+                                       link = tmp_links[site_position['normal:mega']]
+                                       link_matched = True
+                                   except (KeyError, TypeError):
+                                       try:
+                                           link = tmp_links[site_position['normal:mega link']]
+                                           link_matched = True
+                                       except (KeyError, TypeError):
+                                           logger.info('[MEGA] Unable to attain proper link...')
+                                           link_matched = False
                    elif not link_matched and site_lp == 'pixeldrain':
                        sub_site_chk = [y for y in tmp_sites if 'pixel' in y]
                        if sub_site_chk:
                            try:
-                               link = tmp_links[site_position['normal:pixeldrain']]
+                               link = tmp_links[site_position['HD-Upscaled:pixeldrain']]
                                link_matched = True
-                           except Exception as e:
-                               logger.info('[PIXELDRAIN] Unable to attain proper link...')
-                               link_matched = False
+                           except (KeyError, TypeError):
+                               try:
+                                   link = tmp_links[site_position['HD-Digital:pixeldrain']]
+                                   link_matched = True
+                               except (KeyError, TypeError):
+                                   try:
+                                       link = tmp_links[site_position['normal:pixeldrain']]
+                                       link_matched = True
+                                   except (KeyError, TypeError):
+                                       logger.info('[PIXELDRAIN] Unable to attain proper link...')
+                                       link_matched = False
                    elif not link_matched and site_lp == 'mediafire':
                        sub_site_chk = [y for y in tmp_sites if 'mediafire' in y]
                        if sub_site_chk:
                            try:
-                               link = tmp_links[site_position['normal:mediafire']]
+                               link = tmp_links[site_position['HD-Upscaled:mediafire']]
                                link_matched = True
-                           except Exception as e:
-                               logger.info('[mediafire] Unable to attain proper link...')
-                               link_matched = False
+                           except (KeyError, TypeError):
+                               try:
+                                   link = tmp_links[site_position['HD-Digital:mediafire']]
+                                   link_matched = True
+                               except (KeyError, TypeError):
+                                   try:
+                                       link = tmp_links[site_position['normal:mediafire']]
+                                       link_matched = True
+                                   except (KeyError, TypeError):
+                                       logger.info('[mediafire] Unable to attain proper link...')
+                                       link_matched = False
                    elif not link_matched and site_lp == 'main':
-                       # Check both 'download now' and 'main' variants (because 'download now' is mapped to 'main' for normal links)
-                       if 'normal:download now' in tmp_sites or 'normal:main' in tmp_sites:
-                           if 'normal:download now' in site_position:
-                               link = tmp_links[site_position['normal:download now']]
-                           elif 'normal:main' in site_position:
-                               link = tmp_links[site_position['normal:main']]
-                       elif 'normal:mirror download' in tmp_sites:
-                           link = tmp_links[site_position['normal:mirror download']]
-                       else:
+                       # Check HD-Upscaled, then normal 'download now' and 'main' variants
+                       found_main = False
+                       for key_option in ['HD-Upscaled:download now', 'HD-Upscaled:main', 'HD-Upscaled:mirror download',
+                                          'normal:download now', 'normal:main', 'normal:mirror download']:
+                           if key_option in site_position:
+                               link = tmp_links[site_position[key_option]]
+                               found_main = True
+                               break
+                       if not found_main:
                            link = tmp_links[0]
                            force_title = True
-                       if 'sh.st' in link:
+                       if link and ('sh.st' in (link.get('links') or '')):
                            logger.fdebug('[Paywall-link detected] this is not a valid link')
                            link_matched = False
                        else:
-                           if force_title:
+                           if force_title and link:
                                series = link['series']
                            link_matched = True
 

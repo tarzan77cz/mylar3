@@ -4284,6 +4284,98 @@ class WebInterface(object):
 
     searchformissing.exposed = True
 
+    def queue_direct_ddl(self, ComicID=None, issue_range=None, url=None):
+        """Queue a direct download link with issue range for DDL processing (same pipeline as parse_downloadresults)."""
+        if not ComicID or not url or not issue_range:
+            return json.dumps({'status': 'error', 'message': 'ComicID, issue_range and url are required'})
+        issue_range = issue_range.strip()
+        url = url.strip()
+        if not issue_range or not url:
+            return json.dumps({'status': 'error', 'message': 'issue_range and url cannot be empty'})
+        if 'sh.st' in url:
+            return json.dumps({'status': 'error', 'message': 'Paywall/shortener links are not supported'})
+        myDB = db.DBConnection()
+        comic = myDB.selectone('SELECT ComicName, ComicYear FROM comics WHERE ComicID=?', [ComicID]).fetchone()
+        if not comic:
+            return json.dumps({'status': 'error', 'message': 'Comic not found'})
+        ComicName = comic['ComicName']
+        ComicYear = comic['ComicYear'] or ''
+        # First issue in range for issue_find_ids check (e.g. "0" for "0-25", "26" for "26-50")
+        first_issue = issue_range.strip().lstrip('#').strip()
+        if '-' in first_issue:
+            first_issue = first_issue.split('-')[0].strip()
+        pack_id = 'manual-%s' % int(time.time())
+        try:
+            issueid_info = helpers.issue_find_ids(ComicName, ComicID, issue_range, first_issue, pack_id)
+        except Exception as e:
+            logger.error('[QUEUE-DIRECT-DDL] issue_find_ids failed: %s' % e)
+            return json.dumps({'status': 'error', 'message': 'Invalid issue range or no Wanted issues in range: %s' % str(e)})
+        if not issueid_info.get('valid'):
+            return json.dumps({'status': 'error', 'message': 'No Wanted issues in this range for this series'})
+        issueid = None
+        if issueid_info.get('issues'):
+            issueid = issueid_info['issues'][0]['issueid']
+        # Mark all pack issues as Snatched immediately (same as Search-4-Missing pack flow)
+        nzbname = 'Direct Download %s (%s)' % (ComicName, issue_range)
+        for isid in issueid_info['issues']:
+            updater.nzblog(isid['issueid'], nzbname, ComicName, id=pack_id, prov='DDL(GetComics)', oneoff=False)
+            updater.foundsearch(ComicID, isid['issueid'], mode='want', provider='DDL(GetComics)')
+        comicinfo = [{
+            'ComicID': ComicID,
+            'ComicName': ComicName,
+            'ComicYear': ComicYear,
+            'pack': True,
+            'pack_numbers': issue_range,
+            'pack_issuelist': issueid_info,
+            'IssueID': issueid,
+            'oneoff': False,
+            'booktype': None,
+        }]
+        packinfo = {
+            'pack': True,
+            'pack_numbers': issue_range,
+            'pack_issuelist': issueid_info,
+        }
+        link_type = 'GC-Main'
+        ctrlval = {'id': pack_id}
+        vals = {
+            'series': ComicName,
+            'year': ComicYear,
+            'size': '',
+            'issues': issue_range,
+            'issueid': issueid,
+            'comicid': ComicID,
+            'link': url,
+            'mainlink': '',
+            'site': 'DDL(GetComics)',
+            'pack': 1,
+            'link_type': link_type,
+            'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
+            'status': 'Queued',
+        }
+        myDB.upsert('ddl_info', vals, ctrlval)
+        mylar.DDL_QUEUE.put({
+            'link': url,
+            'mainlink': '',
+            'series': ComicName,
+            'year': ComicYear,
+            'size': '',
+            'comicid': ComicID,
+            'issueid': issueid,
+            'oneoff': False,
+            'id': pack_id,
+            'link_type': link_type,
+            'filename': None,
+            'comicinfo': comicinfo,
+            'packinfo': packinfo,
+            'site': 'DDL(GetComics)',
+            'remote_filesize': 0,
+            'resume': None,
+        })
+        logger.info('[QUEUE-DIRECT-DDL] Queued direct download for %s (issues %s)' % (ComicName, issue_range))
+        return json.dumps({'status': 'success', 'message': 'Direct download queued for %s (issues %s)' % (ComicName, issue_range)})
+    queue_direct_ddl.exposed = True
+
     def skipped2wanted(self, comicid, fromupdate=None):
         # change all issues for a given ComicID that are Skipped, into Wanted.
         issuestowanted = []
@@ -4476,10 +4568,12 @@ class WebInterface(object):
             items = myDB.select("SELECT * FROM ddl_info WHERE status = 'Queued' ORDER BY updated_date DESC")
         else:
             oneitem = myDB.selectone("SELECT * FROM DDL_INFO WHERE ID=?", [id]).fetchone()
-            items = [oneitem]
+            items = [oneitem] if oneitem else []
 
         itemlist = []
         for x in items:
+            if x is None:
+                continue
             OneOff = False
             comic = myDB.selectone(
                 "SELECT * from comics WHERE ComicID=? AND ComicName != 'None'",
@@ -4507,7 +4601,8 @@ class WebInterface(object):
                              'comicid': x['comicid'],
                              'issueid': x['issueid'],
                              'site': x['site'],
-                             'id': x['id']})
+                             'id': x['id'],
+                             'issues': x['issues'] if 'issues' in list(x.keys()) else None})
 
         if itemlist is not None:
             items_added = 0
@@ -4547,12 +4642,41 @@ class WebInterface(object):
                 
                 # Add item to DDL_QUEUE
                 try:
-                    # Check if item is already in queue or downloading
+                    # When restarting a single item, allow re-adding by removing from DDL_QUEUED first
+                    if mode == 'restart' and item['id'] in mylar.DDL_QUEUED:
+                        try:
+                            mylar.DDL_QUEUED.remove(item['id'])
+                            logger.debug('[DDL-REQUEUE] Removed item ID %s from DDL_QUEUED for restart' % item['id'])
+                        except ValueError:
+                            pass
+                    # Check if item is already in queue or downloading (skip duplicate unless we just removed it)
                     if item['id'] in mylar.DDL_QUEUED:
                         logger.debug('[DDL-REQUEUE] Item %s (%s) [ID: %s] already in queue or downloading, skipping duplicate' % 
                                     (item['series'], item['year'], item['id']))
                         continue
-                    
+                    # Reconstruct comicinfo/packinfo for manual direct-download pack items so worker and PP have full data
+                    comicinfo = None
+                    packinfo = None
+                    if item.get('pack') and str(item.get('id', '')).startswith('manual-') and item.get('comicid') and item.get('issues'):
+                        try:
+                            first_issue = (item['issues'].strip().split('-')[0] or '0').strip().lstrip('#')
+                            issueid_info = helpers.issue_find_ids(item['series'], item['comicid'], item['issues'], first_issue, item['id'])
+                            if issueid_info.get('valid') and issueid_info.get('issues'):
+                                issueid = issueid_info['issues'][0]['issueid']
+                                comicinfo = [{
+                                    'ComicID': item['comicid'],
+                                    'ComicName': item['series'],
+                                    'ComicYear': item.get('year') or '',
+                                    'pack': True,
+                                    'pack_numbers': item['issues'],
+                                    'pack_issuelist': issueid_info,
+                                    'IssueID': issueid,
+                                    'oneoff': False,
+                                    'booktype': None,
+                                }]
+                                packinfo = {'pack': True, 'pack_numbers': item['issues'], 'pack_issuelist': issueid_info}
+                        except Exception as e:
+                            logger.debug('[DDL-REQUEUE] Could not reconstruct comicinfo for %s: %s' % (item['id'], e))
                     mylar.DDL_QUEUE.put({'link': item['link'],
                                          'mainlink': item['mainlink'],
                                          'series': item['series'],
@@ -4564,8 +4688,8 @@ class WebInterface(object):
                                          'id': item['id'],
                                          'link_type': item['link_type'],
                                          'filename': item['filename'],
-                                         'comicinfo': None,
-                                         'packinfo': None,
+                                         'comicinfo': comicinfo,
+                                         'packinfo': packinfo,
                                          'site': item['site'],
                                          'remote_filesize': item['remote_filesize'],
                                          'resume': resume})
@@ -4662,7 +4786,7 @@ class WebInterface(object):
                                    'id':           si['id'],
                                    'volume':       si['ComicVersion'],
                                    'year':         year,
-                                   'size':         si['size'].strip(),
+                                   'size':         (si['size'] or '').strip(),
                                    'comicid':      si['ComicID'],
                                    'issueid':      si['IssueID'],
                                    'status':       si['status'],
@@ -4706,7 +4830,7 @@ class WebInterface(object):
                                    'id':           oi['id'],
                                    'volume':       None,
                                    'year':         year,
-                                   'size':         oi['size'].strip(),
+                                   'size':         (oi['size'] or '').strip(),
                                    'comicid':      oi['ComicID'],
                                    'issueid':      oi['IssueID'],
                                    'status':       oi['status'],
@@ -4781,10 +4905,11 @@ class WebInterface(object):
                     si_status = ''
 
                 if si['pack']:
-                    if si['year'] is not None and si['year'] not in si['filename']:
-                        series = '%s (%s)' % (si['filename'], si['year'])
+                    si_filename = si['filename'] or ''
+                    if (si['year'] is not None) and (si['year'] not in si_filename):
+                        series = '%s (%s)' % (si_filename, si['year'])
                     else:
-                        series = si['filename']
+                        series = si_filename
                 else:
                     if issue is not None:
                         if si['ComicVersion'] is not None:
@@ -4821,7 +4946,7 @@ class WebInterface(object):
                                    'article_title': article_title,
                                    'volume':       si['ComicVersion'],
                                    'year':         year,
-                                   'size':         si['size'].strip(),
+                                   'size':         (si['size'] or '').strip(),
                                    'comicid':      si['ComicID'],
                                    'issueid':      si['IssueID'],
                                    'status':       si['status'],
@@ -4857,10 +4982,11 @@ class WebInterface(object):
                     oi_status = ''
 
                 if oi['pack']:
-                    if oi['year'] not in oi['filename']:
-                        series = '%s (%s)' % (oi['filename'], oi['year'])
+                    oi_filename = oi['filename'] or ''
+                    if (oi['year'] or '') not in oi_filename:
+                        series = '%s (%s)' % (oi_filename, oi['year'])
                     else:
-                        series = oi['filename']
+                        series = oi_filename
                 else:
                     if issue is not None:
                         series = '%s %s (%s)' % (oi['ComicName'], issue, year)
@@ -4891,7 +5017,7 @@ class WebInterface(object):
                                    'linktype':     oi['link_type'],
                                    'article_title': article_title,
                                    'year':         year,
-                                   'size':         oi['size'].strip(),
+                                   'size':         (oi['size'] or '').strip(),
                                    'comicid':      oi['ComicID'],
                                    'issueid':      oi['IssueID'],
                                    'status':       oi['status'],
@@ -4900,10 +5026,13 @@ class WebInterface(object):
 
             #logger.info('o_info: %s' % (resultlist))
 
+        # When no items, resultlist is still the initial string; use empty list for sort/rows
+        if not isinstance(resultlist, list):
+            resultlist = []
         if sSearch == "" or sSearch == None:
             filtered = resultlist[::]
         else:
-            filtered = [row for row in resultlist if any([sSearch.lower() in row['series'].lower(), sSearch.lower() in row['status'].lower()])]
+            filtered = [row for row in resultlist if any([sSearch.lower() in (row.get('series') or '').lower(), sSearch.lower() in (row.get('status') or '').lower()])]
         sortcolumn = 'series'
         # Convert iSortCol_0 to int for comparison (DataTables sends column index)
         # Column mapping: 0=series, 1=size, 2=linktype (not sortable by value), 3=progress, 4=status, 5=updated_date
@@ -9762,7 +9891,8 @@ class WebInterface(object):
                          if filesize > remote_filesize_int and cmath > 102:
                              logger.fdebug('size calc is incorrect ... correcting...')
                              try:
-                                 remote_filesize_parsed = helpers.human2bytes(re.sub('/s', '', active['size'][:-1]).strip())
+                                 _size_str = (active.get('size') or '')[:-1].strip()
+                                 remote_filesize_parsed = helpers.human2bytes(re.sub('/s', '', _size_str))
                                  remote_filesize_int = int(remote_filesize_parsed)
                                  if remote_filesize_int > 0:
                                      cmath = int(float(filesize*100)/int(remote_filesize_int*100) * 100)

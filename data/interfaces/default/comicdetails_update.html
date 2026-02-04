@@ -33,6 +33,21 @@
 
                             <a id="menu_link_refresh" title="Rescan local files" onclick="force_rescan(${comic['ComicID']})">Recheck Files</a>
                         <a id="menu_link_searchmissing" title="Search for all Missing files" onclick="search4missing(${comic['ComicID']})" href="#">Search-4-Missing</a>
+                        <a id="menu_link_directdownload" class="ui-button ui-widget ui-state-default ui-corner-all ui-button-text-icon-primary subhead_menu_link" title="Queue a direct download link with issue range" onclick="direct_download_dialog(${comic['ComicID']})" href="#" role="button" aria-disabled="false"><span class="ui-button-icon-primary ui-icon ui-icon-arrowthick-1-s"></span><span class="ui-button-text">Direct Download</span></a>
+                           <div id="direct_download_dialog" title="Direct Download" style="display:none" class="configtable">
+                              <p>Enter the issue range (e.g. 0-25 or 26-50) and the direct download URL.</p>
+                              <form id="direct_download_form">
+                                  <div class="row">
+                                      <label for="direct_dl_issue_range">Issue range:</label>
+                                      <input type="text" name="issue_range" id="direct_dl_issue_range" placeholder="e.g. 0-25" size="20" />
+                                  </div>
+                                  <div class="row">
+                                      <label for="direct_dl_url">Direct download URL:</label>
+                                      <input type="text" name="url" id="direct_dl_url" placeholder="https://getcomics.org/dlds/..." size="50" />
+                                  </div>
+                                  <input type="hidden" name="ComicID" id="direct_dl_comicid" value="" />
+                              </form>
+                           </div>
                         %if any([mylar.CONFIG.ENABLE_META, mylar.CONFIG.CBR2CBZ_ONLY]):
                             <a id="menu_link_refresh" href="#" title="perform metatagging on each Downloaded issue" onclick="group_metatag(${comic['ComicID']})">Manual MetaTagging</a>
                         %endif
@@ -1375,6 +1390,57 @@
         var spinner_active = false;
         var loadingtext_active = false;
         var refreshInterval;
+
+        function direct_download_dialog(comicid) {
+            $('#direct_dl_comicid').val(comicid);
+            $('#direct_dl_issue_range').val('');
+            $('#direct_dl_url').val('');
+            $('#direct_download_dialog').dialog({
+                modal: true,
+                width: 520,
+                open: function() {
+                    $(this).closest('.ui-dialog').addClass('direct-download-dialog');
+                },
+                close: function() {
+                    $(this).closest('.ui-dialog').removeClass('direct-download-dialog');
+                },
+                buttons: {
+                    "Queue": function() {
+                        var issue_range = $('#direct_dl_issue_range').val().trim();
+                        var url = $('#direct_dl_url').val().trim();
+                        if (!issue_range || !url) {
+                            alert('Please enter both issue range and direct download URL.');
+                            return;
+                        }
+                        $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>Queueing direct download...</div>");
+                        $('#ajaxMsg').addClass('success').fadeIn();
+                        $.ajax({
+                            type: "POST",
+                            url: "queue_direct_ddl",
+                            data: { ComicID: comicid, issue_range: issue_range, url: url },
+                            success: function(response) {
+                                var obj = JSON.parse(response);
+                                if (obj.status === 'success') {
+                                    $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>" + obj.message + "</div>");
+                                    $('#ajaxMsg').addClass('success').fadeIn().delay(5000).fadeOut();
+                                    $('#direct_download_dialog').dialog('close');
+                                } else {
+                                    $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-alert'></span>" + (obj.message || 'Error') + "</div>");
+                                    $('#ajaxMsg').addClass('error').fadeIn().delay(5000).fadeOut();
+                                }
+                            },
+                            error: function(xhr) {
+                                $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-alert'></span>Error: " + (xhr.responseText || 'Request failed') + "</div>");
+                                $('#ajaxMsg').addClass('error').fadeIn().delay(5000).fadeOut();
+                            }
+                        });
+                    },
+                    "Cancel": function() {
+                        $(this).dialog('close');
+                    }
+                }
+            });
+        }
 
         function search4missing(comicid){
               //$('#ajaxMsg').removeClass();
