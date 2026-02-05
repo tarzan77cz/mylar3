@@ -4429,6 +4429,18 @@ class WebInterface(object):
 
     annualDelete.exposed = True
 
+    def restart_pp_queue(self):
+        """Restart the post-processing worker thread without losing queued items."""
+        try:
+            mylar.queue_schedule('pp_queue', 'shutdown')
+            mylar.queue_schedule('pp_queue', 'start')
+            logger.info('[RESTART-PP] Post-processing queue worker restarted successfully')
+            return json.dumps({'status': True, 'message': 'Post-processing queue restarted'})
+        except Exception as e:
+            logger.error('[RESTART-PP] Error restarting post-processing queue: %s' % e)
+            return json.dumps({'status': False, 'message': 'Error restarting: %s' % str(e)})
+    restart_pp_queue.exposed = True
+
     def ddl_requeue(self, mode, id=None, issueid=None):
         logger.info('id: %s / mode: %s / issueid: %s' % (id, mode, issueid))
         myDB = db.DBConnection()
@@ -4473,30 +4485,29 @@ class WebInterface(object):
             mylar.DDL_LOCK = False
             logger.info('[DDL-RESTART-QUEUE] Reset DDL_LOCK')
             
-            # Check if DDL downloader thread is running, restart if not
+            # Force-restart DDL downloader: stop current thread (or orphan if stuck), then start fresh
             try:
-                if mylar.DDLPOOL is None or not mylar.DDLPOOL.is_alive():
-                    logger.warn('[DDL-RESTART-QUEUE] DDL downloader thread is not running. Restarting...')
-                    mylar.queue_schedule('ddl_queue', 'start')
-                else:
-                    logger.debug('[DDL-RESTART-QUEUE] DDL downloader thread is running (thread alive: %s)' % mylar.DDLPOOL.is_alive())
+                pool = mylar.DDLPOOL
+                if pool is not None and getattr(pool, 'is_alive', lambda: False)():
+                    logger.info('[DDL-RESTART-QUEUE] Sending exit to current DDL thread and waiting up to 5s...')
+                    try:
+                        mylar.DDL_QUEUE.put('exit')
+                        pool.join(5)
+                    except Exception as e:
+                        logger.warn('[DDL-RESTART-QUEUE] Error during thread join: %s' % e)
+                    if pool.is_alive():
+                        logger.warn('[DDL-RESTART-QUEUE] DDL thread still alive (stuck in download). Orphaning it and starting new thread.')
+                        mylar.DDLPOOL = None
             except Exception as e:
-                logger.warn('[DDL-RESTART-QUEUE] Error checking DDL thread status: %s. Attempting to restart...' % e)
+                logger.warn('[DDL-RESTART-QUEUE] Error checking DDL thread: %s' % e)
                 try:
-                    mylar.queue_schedule('ddl_queue', 'start')
-                except Exception as e2:
-                    logger.error('[DDL-RESTART-QUEUE] Failed to restart DDL thread: %s' % e2)
-            
-            # Clear DDL_QUEUED to allow requeuing all items
-            # This ensures that items that were in queue but not yet processed can be requeued
-            mylar.DDL_QUEUED = []
-            logger.info('[DDL-RESTART-QUEUE] Cleared DDL_QUEUED list to allow requeuing all items')
-            
-            # Empty the DDL_QUEUE to prevent duplicates
-            # Python queue.Queue doesn't have clear(), so we need to drain it manually
+                    mylar.DDLPOOL = None
+                except Exception:
+                    pass
+            # Drain queue (remove 'exit' and any stale items) so new thread gets clean queue
             queue_size_before = mylar.DDL_QUEUE.qsize()
             if queue_size_before > 0:
-                logger.info('[DDL-RESTART-QUEUE] Emptying existing queue (%s items) to prevent duplicates' % queue_size_before)
+                logger.info('[DDL-RESTART-QUEUE] Draining queue (%s items) before restart' % queue_size_before)
                 try:
                     items_drained = 0
                     while True:
@@ -4507,9 +4518,12 @@ class WebInterface(object):
                             break
                     logger.info('[DDL-RESTART-QUEUE] Drained %s items from queue' % items_drained)
                 except Exception as e:
-                    logger.warn('[DDL-RESTART-QUEUE] Error emptying queue: %s' % e)
-                    import traceback
-                    logger.debug('[DDL-RESTART-QUEUE] Traceback: %s' % traceback.format_exc())
+                    logger.warn('[DDL-RESTART-QUEUE] Error draining queue: %s' % e)
+            # Start new DDL thread (will start if DDLPOOL is None or not alive)
+            mylar.queue_schedule('ddl_queue', 'start')
+            # Clear DDL_QUEUED to allow requeuing all items
+            mylar.DDL_QUEUED = []
+            logger.info('[DDL-RESTART-QUEUE] Cleared DDL_QUEUED list to allow requeuing all items')
             
             # Reset all "Downloading" items to "Queued" status
             downloading_items = myDB.select("SELECT * FROM ddl_info WHERE status = 'Downloading'")
@@ -4632,7 +4646,14 @@ class WebInterface(object):
                     logger.fdebug('resume set to resume at: %s bytes' % filesize)
                     resume = filesize
                 elif mode == 'abort':
-                    myDB.upsert("ddl_info", {'Status': 'Failed'}, {'id': id}) #DELETE FROM ddl_info where ID=?', [id])
+                    mylar.DDL_ABORT_REQUESTED = True  # Signal download loop to stop immediately
+                    myDB.upsert("ddl_info", {'status': 'Failed'}, {'id': id})
+                    try:
+                        if id in mylar.DDL_QUEUED:
+                            mylar.DDL_QUEUED.remove(id)
+                    except (ValueError, KeyError):
+                        pass
+                    mylar.DDL_LOCK = False  # Allow downloader to proceed with next item
                     continue
                 elif mode == 'remove':
                     myDB.action('DELETE FROM ddl_info where ID=?', [id])

@@ -55,6 +55,7 @@ function initActions() {
     $("#subhead_menu #menu_link_prevrename").button({ icons: { primary: "ui-icon-image" }  });
     $("#subhead_menu #menu_link_rename").button({ icons: { primary: "ui-icon-transfer-e-w" }  });
     $("#subhead_menu #menu_link_refresh").button({ icons: { primary: "ui-icon-refresh" }  });
+    $("#subhead_menu #menu_link_restart_pp").button({ icons: { primary: "ui-icon-refresh" }  });
     $("#pub_button").button({ icons: { primary: "ui-icon-check" }  });
     $("#btn_menu #menu_link_refresh").button({ icons: { primary: "ui-icon-pencil" }  });
     $("#subhead_menu #menu_link_edit").button({ icons: { primary: "ui-icon-pencil" }  });

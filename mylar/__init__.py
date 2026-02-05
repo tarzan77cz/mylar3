@@ -176,6 +176,7 @@ DOWNLOAD_APIKEY = None
 APILOCK = False
 SEARCHLOCK = False
 DDL_LOCK = False
+DDL_ABORT_REQUESTED = False  # Set by Abort action; download loop checks this and stops
 DDL_STARTUP_LOADED = False
 CMTAGGER_PATH = None
 STATIC_COMICRN_VERSION = "1.01"

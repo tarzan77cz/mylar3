@@ -1665,11 +1665,17 @@ class GC(object):
                 t.headers['Accept-encoding'] = 'gzip'
                 chunk_size = 1048576  # 1MB chunks for better performance
                 flush_interval = 1048576  # Flush every 1MB to keep file modification time updated for watchdog
-                
+                download_aborted = False
+
                 if resume is not None:
                     with open(dst_path, 'ab') as f:
                         bytes_written = 0
                         for chunk in t.iter_content(chunk_size=chunk_size):
+                            if getattr(mylar, 'DDL_ABORT_REQUESTED', False):
+                                mylar.DDL_ABORT_REQUESTED = False
+                                download_aborted = True
+                                logger.info('[DDL-ABORT] Download aborted by user - stopping.')
+                                break
                             if chunk:
                                 f.write(chunk)
                                 bytes_written += len(chunk)
@@ -1677,9 +1683,10 @@ class GC(object):
                                 if bytes_written >= flush_interval:
                                     f.flush()
                                     bytes_written = 0
-                        f.flush()  # Final flush at the end
-                        if hasattr(f, 'fileno') and f.fileno() >= 0:
-                            os.fsync(f.fileno())
+                        if not download_aborted:
+                            f.flush()  # Final flush at the end
+                            if hasattr(f, 'fileno') and f.fileno() >= 0:
+                                os.fsync(f.fileno())
 
                 else:
                     if os.path.exists(dst_path):
@@ -1698,6 +1705,11 @@ class GC(object):
                     with open(dst_path, 'wb') as f:
                         bytes_written = 0
                         for chunk in t.iter_content(chunk_size=chunk_size):
+                            if getattr(mylar, 'DDL_ABORT_REQUESTED', False):
+                                mylar.DDL_ABORT_REQUESTED = False
+                                download_aborted = True
+                                logger.info('[DDL-ABORT] Download aborted by user - stopping.')
+                                break
                             if chunk:
                                 f.write(chunk)
                                 bytes_written += len(chunk)
@@ -1705,9 +1717,19 @@ class GC(object):
                                 if bytes_written >= flush_interval:
                                     f.flush()
                                     bytes_written = 0
-                        f.flush()  # Final flush at the end
-                        if hasattr(f, 'fileno') and f.fileno() >= 0:
-                            os.fsync(f.fileno())
+                        if not download_aborted:
+                            f.flush()  # Final flush at the end
+                            if hasattr(f, 'fileno') and f.fileno() >= 0:
+                                os.fsync(f.fileno())
+
+                if download_aborted:
+                    mylar.DDL_LOCK = False
+                    return {
+                        "success": False,
+                        "filename": filename,
+                        "path": None,
+                        "link_type": link_type,
+                    }
 
         except requests.exceptions.Timeout as e:
             logger.error('[ERROR] download has timed out due to inactivity...: %s', e)
@@ -1727,8 +1749,23 @@ class GC(object):
                "path": None,
                "link_type": link_type}
         else:
+            # Mark as Completed as soon as download finishes, before extraction.
+            # Prevents watchdog / Restart Queue from re-queuing during long zip extraction.
+            myDB.upsert(
+                'ddl_info',
+                {'status': 'Completed', 'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')},
+                {'id': id},
+            )
             mylar.DDL_LOCK = False
-            return self.zip_zip(id, dst_path, filename)
+            result = self.zip_zip(id, dst_path, filename)
+            if result.get('success') is not True:
+                # Extraction failed - revert status so helpers can mark Failed / retry
+                myDB.upsert(
+                    'ddl_info',
+                    {'status': 'Downloading', 'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')},
+                    {'id': id},
+                )
+            return result
         finally:
             # Always reset DDL_LOCK, even if something goes wrong
             if mylar.DDL_LOCK is True:

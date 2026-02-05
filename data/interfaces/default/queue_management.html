@@ -6,6 +6,7 @@
 <%def name="headerIncludes()">
         <div id="subhead_container">
                 <div id="subhead_menu">
+                      <a id="menu_link_restart_pp" href="#" title="Restart post-processing worker (keeps queued items)" onclick="doAjaxCall('restart_pp_queue',$(this),'table')" data-success="Post-processing restarted">Restart PP</a>
                       <a id="menu_link_refresh" href="#" title="Restart stalled queue" onclick="doAjaxCall('ddl_requeue?mode=restart_queue',$(this),'table')" data-success="Restarted Queue">Restart Queue</a>
                       <a id="menu_link_refresh" href="#" title="Clear the queue of all Qeueued entries" onclick="ajaxcallit('clear_queue')" data-success="Qeueue successfully cleared">Clear Queue</a>
                       <a id="menu_link_refresh" href="#" title="Clear all Failed entries from history" onclick="ajaxcallit('clear_failed')" data-success="Failed items cleared">Clear Failed</a>
