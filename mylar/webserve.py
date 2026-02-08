@@ -4337,9 +4337,11 @@ class WebInterface(object):
             'pack_issuelist': issueid_info,
         }
         link_type = 'GC-Main'
+        # Display name with issue range so multiple packs are distinguishable (e.g. "Suicide Squad (2011) 0-15")
+        series_display = '%s%s %s' % (ComicName, (' (%s)' % ComicYear) if ComicYear else '', issue_range)
         ctrlval = {'id': pack_id}
         vals = {
-            'series': ComicName,
+            'series': series_display,
             'year': ComicYear,
             'size': '',
             'issues': issue_range,
@@ -4357,7 +4359,7 @@ class WebInterface(object):
         mylar.DDL_QUEUE.put({
             'link': url,
             'mainlink': '',
-            'series': ComicName,
+            'series': series_display,
             'year': ComicYear,
             'size': '',
             'comicid': ComicID,
@@ -4432,6 +4434,7 @@ class WebInterface(object):
     def restart_pp_queue(self):
         """Restart the post-processing worker thread without losing queued items."""
         try:
+            mylar.APILOCK = False  # Reset lock in case it was stuck from a crashed/hung PostProcessor
             mylar.queue_schedule('pp_queue', 'shutdown')
             mylar.queue_schedule('pp_queue', 'start')
             logger.info('[RESTART-PP] Post-processing queue worker restarted successfully')
@@ -4632,7 +4635,7 @@ class WebInterface(object):
                     ) and all(
                         [
                             mylar.CONFIG.DDL_AUTORESUME is True,
-                            mode == 'resume',
+                            mode in ('resume', 'restart_queue'),
                             item['status'] != 'Completed'
                         ]
                     ):
@@ -4643,8 +4646,11 @@ class WebInterface(object):
                         logger.warn('[DDL-REQUEUE] Unable to retrieve previous filesize (file was deleted/moved maybe).'
                                     ' Resume unavailable - will restart download.')
                         filesize = 0
-                    logger.fdebug('resume set to resume at: %s bytes' % filesize)
-                    resume = filesize
+                    if filesize > 0:
+                        logger.fdebug('resume set to resume at: %s bytes' % filesize)
+                        resume = filesize
+                    else:
+                        resume = None
                 elif mode == 'abort':
                     mylar.DDL_ABORT_REQUESTED = True  # Signal download loop to stop immediately
                     myDB.upsert("ddl_info", {'status': 'Failed'}, {'id': id})
@@ -4663,11 +4669,11 @@ class WebInterface(object):
                 
                 # Add item to DDL_QUEUE
                 try:
-                    # When restarting a single item, allow re-adding by removing from DDL_QUEUED first
-                    if mode == 'restart' and item['id'] in mylar.DDL_QUEUED:
+                    # When restarting or resuming a single item, allow re-adding by removing from DDL_QUEUED first
+                    if (mode == 'restart' or mode == 'resume') and item['id'] in mylar.DDL_QUEUED:
                         try:
                             mylar.DDL_QUEUED.remove(item['id'])
-                            logger.debug('[DDL-REQUEUE] Removed item ID %s from DDL_QUEUED for restart' % item['id'])
+                            logger.debug('[DDL-REQUEUE] Removed item ID %s from DDL_QUEUED for %s' % (item['id'], mode))
                         except ValueError:
                             pass
                     # Check if item is already in queue or downloading (skip duplicate unless we just removed it)
@@ -4678,24 +4684,43 @@ class WebInterface(object):
                     # Reconstruct comicinfo/packinfo for manual direct-download pack items so worker and PP have full data
                     comicinfo = None
                     packinfo = None
-                    if item.get('pack') and str(item.get('id', '')).startswith('manual-') and item.get('comicid') and item.get('issues'):
+                    issueid_info = None
+                    if item.get('pack') and item.get('comicid') and item.get('issues'):
                         try:
                             first_issue = (item['issues'].strip().split('-')[0] or '0').strip().lstrip('#')
                             issueid_info = helpers.issue_find_ids(item['series'], item['comicid'], item['issues'], first_issue, item['id'])
                             if issueid_info.get('valid') and issueid_info.get('issues'):
                                 issueid = issueid_info['issues'][0]['issueid']
-                                comicinfo = [{
-                                    'ComicID': item['comicid'],
-                                    'ComicName': item['series'],
-                                    'ComicYear': item.get('year') or '',
-                                    'pack': True,
-                                    'pack_numbers': item['issues'],
-                                    'pack_issuelist': issueid_info,
-                                    'IssueID': issueid,
-                                    'oneoff': False,
-                                    'booktype': None,
-                                }]
-                                packinfo = {'pack': True, 'pack_numbers': item['issues'], 'pack_issuelist': issueid_info}
+                                # Mark pack issues as Snatched when resuming/restarting (same as queue_direct_ddl)
+                                if mode in ('resume', 'restart', 'requeue', 'restart_queue'):
+                                    nzbname = 'Direct Download %s (%s)' % (item['series'], item.get('issues', ''))
+                                    marked = 0
+                                    for isid in issueid_info['issues']:
+                                        try:
+                                            isschk = myDB.selectone("SELECT Status FROM issues WHERE IssueID=?", [isid['issueid']]).fetchone()
+                                            if isschk is None:
+                                                isschk = myDB.selectone("SELECT Status FROM annuals WHERE IssueID=?", [isid['issueid']]).fetchone()
+                                            if isschk and isschk['Status'] not in ('Downloaded', 'Archived'):
+                                                updater.nzblog(isid['issueid'], nzbname, item['series'], id=item['id'], prov='DDL(GetComics)', oneoff=False)
+                                                updater.foundsearch(item['comicid'], isid['issueid'], mode='want', provider='DDL(GetComics)')
+                                                marked += 1
+                                        except Exception as e:
+                                            logger.debug('[DDL-REQUEUE] Could not mark issue %s as Snatched: %s' % (isid.get('issueid'), e))
+                                    if marked > 0:
+                                        logger.info('[DDL-REQUEUE] Marked %s pack issues as Snatched for %s (upcoming display)' % (marked, item['series']))
+                                if str(item.get('id', '')).startswith('manual-'):
+                                    comicinfo = [{
+                                        'ComicID': item['comicid'],
+                                        'ComicName': item['series'],
+                                        'ComicYear': item.get('year') or '',
+                                        'pack': True,
+                                        'pack_numbers': item['issues'],
+                                        'pack_issuelist': issueid_info,
+                                        'IssueID': issueid,
+                                        'oneoff': False,
+                                        'booktype': None,
+                                    }]
+                                    packinfo = {'pack': True, 'pack_numbers': item['issues'], 'pack_issuelist': issueid_info}
                         except Exception as e:
                             logger.debug('[DDL-REQUEUE] Could not reconstruct comicinfo for %s: %s' % (item['id'], e))
                     mylar.DDL_QUEUE.put({'link': item['link'],
@@ -4717,6 +4742,10 @@ class WebInterface(object):
                     # Add to DDL_QUEUED to prevent duplicates
                     mylar.DDL_QUEUED.append(item['id'])
                     items_added += 1
+                    if mode in ('restart', 'resume', 'requeue') and item.get('status') in ('Failed', 'Completed'):
+                        ctrlval = {'id': item['id']}
+                        val = {'status': 'Queued', 'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}
+                        myDB.upsert('ddl_info', val, ctrlval)
                     if mode == 'restart_queue':
                         logger.debug('[DDL-RESTART-QUEUE] Added item to queue: %s (%s) [ID: %s] - Queue size: %s' % 
                                     (item['series'], item['year'], item['id'], mylar.DDL_QUEUE.qsize()))
@@ -4732,6 +4761,9 @@ class WebInterface(object):
             elif mode == 'restart':
                 logger.info('[DDL-RESTART] Successfully restarted %s [%s] for downloading..' % (seriesname, seriessize))
                 linemessage = 'Successfully restarted %s [%s]' % (seriesname, seriessize)
+            elif mode == 'resume':
+                logger.info('[DDL-RESUME] Successfully queued %s [%s] for resume (partial file on disk)..' % (seriesname, seriessize))
+                linemessage = 'Resume queued for %s [%s]' % (seriesname, seriessize)
             elif mode == 'requeue':
                 logger.info('[DDL-REQUEUE] Successfully requeued %s [%s] for downloading..' % (seriesname, seriessize))
                 linemessage = 'Successfully requeued %s [%s]' % (seriesname, seriessize)
@@ -7935,6 +7967,7 @@ class WebInterface(object):
                     "airdcpp_announce_hub": mylar.CONFIG.AIRDCPP_ANNOUNCE_HUB,
                     "airdcpp_announce_bots": mylar.CONFIG.AIRDCPP_ANNOUNCE_BOTS,
                     "ddl_prefer_upscaled": helpers.checked(mylar.CONFIG.DDL_PREFER_UPSCALED),
+                    "ddl_keep_pack_zip": helpers.checked(mylar.CONFIG.DDL_KEEP_PACK_ZIP),
                     "enable_external_server": helpers.checked(mylar.CONFIG.ENABLE_EXTERNAL_SERVER),
                     "external_server": mylar.CONFIG.EXTERNAL_SERVER,
                     "external_username": mylar.CONFIG.EXTERNAL_USERNAME,
@@ -8425,7 +8458,7 @@ class WebInterface(object):
                            'prowl_enabled', 'prowl_onsnatch', 'pushover_enabled', 'pushover_onsnatch', 'pushover_image', 'mattermost_enabled', 'mattermost_onsnatch', 'boxcar_enabled',
                            'boxcar_onsnatch', 'pushbullet_enabled', 'pushbullet_onsnatch', 'telegram_enabled', 'telegram_onsnatch', 'telegram_image', 'discord_enabled', 'discord_onsnatch', 'slack_enabled', 'slack_onsnatch',
                            'email_enabled', 'email_enc', 'email_ongrab', 'email_onpost', 'gotify_enabled', 'gotify_server_url', 'gotify_token', 'gotify_onsnatch', 'opds_enable', 'opds_authentication', 'opds_metainfo', 'opds_pagesize', 'enable_ddl',
-                           'enable_getcomics', 'enable_airdcpp', 'enable_external_server', 'ddl_prefer_upscaled', 'deluge_pause'] #enable_public
+                           'enable_getcomics', 'enable_airdcpp', 'enable_external_server', 'ddl_prefer_upscaled', 'ddl_keep_pack_zip', 'deluge_pause'] #enable_public
 
         for checked_config in checked_configs:
             if checked_config not in kwargs:
@@ -9852,6 +9885,7 @@ class WebInterface(object):
                                 'a_issueid': None,
                                 'pp_queue_count': pp_count})
          else:
+             auto_resume_count = getattr(mylar, 'DDL_AUTORESUME_COUNT', {}).get(active['id'], 0)
              filelocation = None
              if active['filename'] is not None:
                  # if this is resumed, we need to use the resume value which holds the filesize of the resume
@@ -9884,7 +9918,8 @@ class WebInterface(object):
                                                          'a_filename':  active['filename'],
                                                          'a_size':      active['size'],
                                                          'a_id':        active['id'],
-                                                         'pp_queue_count': pp_count})
+                                                         'pp_queue_count': pp_count,
+                                                         'auto_resume_count': auto_resume_count})
                              else:
                                  # No size info at all, return with 0% progress
                                  return json.dumps({'status':      'Downloading',
@@ -9894,7 +9929,8 @@ class WebInterface(object):
                                                      'a_filename':  active['filename'],
                                                      'a_size':      active['size'],
                                                      'a_id':        active['id'],
-                                                     'pp_queue_count': pp_count})
+                                                     'pp_queue_count': pp_count,
+                                                     'auto_resume_count': auto_resume_count})
                          
                          remote_filesize_int = int(float(str(remote_filesize).strip()))
                          if remote_filesize_int == 0:
@@ -9906,7 +9942,8 @@ class WebInterface(object):
                                                  'a_filename':  active['filename'],
                                                  'a_size':      active['size'],
                                                  'a_id':        active['id'],
-                                                 'pp_queue_count': pp_count})
+                                                 'pp_queue_count': pp_count,
+                                                 'auto_resume_count': auto_resume_count})
                          
                          cmath = int(float(filesize*100)/int(remote_filesize_int*100) * 100)
                          if filesize > remote_filesize_int and cmath > 102:
@@ -9933,14 +9970,15 @@ class WebInterface(object):
                                          'a_filename':  active['filename'],
                                          'a_size':      active['size'],
                                          'a_id':        active['id'],
-                                         'pp_queue_count': pp_count})
+                                         'pp_queue_count': pp_count,
+                                         'auto_resume_count': auto_resume_count})
                  # File doesn't exist - just show message, don't reset (ddl_watchdog handles stuck downloads)
                  statline = '%s does not exist.</br> This probably needs to be restarted (use the option in the GUI)' % filelocation
              else:
                  infoline = '%s (%s)' % (active['series'], active['year'])
                  # No filename assigned - just show message, don't reset (ddl_watchdog handles stuck downloads)
                  statline = 'No filename assigned for %s.</br> This was probably never started successfully - you should restart the download (use the option in the GUI)' % infoline
-             return json.dumps({'a_id': active['id'], 'status': statline, 'percent': 0, 'pp_queue_count': pp_count})
+             return json.dumps({'a_id': active['id'], 'status': statline, 'percent': 0, 'pp_queue_count': pp_count, 'auto_resume_count': auto_resume_count})
 
     check_ActiveDDL.exposed = True
 

@@ -177,6 +177,7 @@ APILOCK = False
 SEARCHLOCK = False
 DDL_LOCK = False
 DDL_ABORT_REQUESTED = False  # Set by Abort action; download loop checks this and stops
+DDL_AUTORESUME_COUNT = {}  # ddl_info id -> number of auto-resumes for active download
 DDL_STARTUP_LOADED = False
 CMTAGGER_PATH = None
 STATIC_COMICRN_VERSION = "1.01"
@@ -814,25 +815,25 @@ def queue_schedule(queuetype, mode):
                 'Succesfully started DDL Download Queuer....',
             )
     else:
-        if (queuetype == 'nzb_queue') or mode == 'shutdown':
+        if (queuetype == 'nzb_queue' or queuetype == 'all'):
             if all([mode!= 'shutdown', mylar.CONFIG.POST_PROCESSING is True]) and ( all([mylar.CONFIG.NZB_DOWNLOADER == 0, mylar.CONFIG.SAB_CLIENT_POST_PROCESSING is True]) or all([mylar.CONFIG.NZB_DOWNLOADER == 1, mylar.CONFIG.NZBGET_CLIENT_POST_PROCESSING is True]) ):
                 return
             shutdown(mylar.NZBPOOL, mylar.NZB_QUEUE, "NZB auto-complete queue")
 
-        if (queuetype == 'snatched_queue') or mode == 'shutdown':
+        if (queuetype == 'snatched_queue' or queuetype == 'all'):
             if all([mode != 'shutdown', mylar.CONFIG.ENABLE_TORRENTS is True, mylar.CONFIG.AUTO_SNATCH is True, OS_DETECT != 'Windows']) and any([mylar.CONFIG.TORRENT_DOWNLOADER == 2, mylar.CONFIG.TORRENT_DOWNLOADER == 4]):
                 return
             shutdown(mylar.SNPOOL, mylar.SNATCHED_QUEUE, "auto-snatch")
 
-        if (queuetype == 'search_queue') or mode == 'shutdown':
+        if (queuetype == 'search_queue' or queuetype == 'all'):
             shutdown(mylar.SEARCHPOOL, mylar.SEARCH_QUEUE, 'search queue')
 
-        if (queuetype == 'pp_queue') or mode == 'shutdown':
+        if (queuetype == 'pp_queue' or queuetype == 'all'):
             if all([mylar.CONFIG.POST_PROCESSING is True, mode != 'shutdown']):
                 return
             shutdown(mylar.PPPOOL, mylar.PP_QUEUE, 'post-processing queue')
 
-        if (queuetype == 'ddl_queue') or mode == 'shutdown':
+        if (queuetype == 'ddl_queue' or queuetype == 'all'):
             if all([mylar.CONFIG.ENABLE_DDL is True, mode != 'shutdown']):
                 return
             shutdown(mylar.DDLPOOL, mylar.DDL_QUEUE, 'DDL download queue')

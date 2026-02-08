@@ -44,7 +44,7 @@ _CONFIG_DEFINITIONS = OrderedDict({
     'LAUNCH_BROWSER' : (bool, 'General', False),
     'WANTED_TAB_OFF': (bool, 'General', False),
     'ENABLE_RSS': (bool, 'General', False),
-    'SEARCH_DELAY' : (int, 'General', 1),
+    'SEARCH_DELAY' : (int, 'General', 10),
     'GRABBAG_DIR': (str, 'General', None),
     'HIGHCOUNT': (int, 'General', 0),
     'MAINTAINSERIESFOLDER': (bool, 'General', False),
@@ -368,6 +368,7 @@ _CONFIG_DEFINITIONS = OrderedDict({
     'DDL_QUERY_DELAY': (int, 'DDL', 15),
     'DDL_LOCATION': (str, 'DDL', None),
     'DDL_AUTORESUME': (bool, 'DDL', True),
+    'DDL_KEEP_PACK_ZIP': (bool, 'DDL', False),
     'DDL_PREFER_UPSCALED': (bool, 'DDL', True),
     'DDL_PRIORITY_ORDER': (str, 'DDL', []),
     'ENABLE_FLARESOLVERR': (bool, 'DDL', False),
@@ -1364,9 +1365,9 @@ class Config(object):
             logger.fdebug('Search interval too low. Resetting to 30 minute minimum')
             self.SEARCH_INTERVAL = 30
 
-        if self.SEARCH_DELAY < 1:
-            logger.fdebug("Minimum search delay set for 1 minute to avoid hammering.")
-            self.SEARCH_DELAY = 1
+        if self.SEARCH_DELAY < 10:
+            logger.fdebug("Minimum search delay set to 10 seconds to avoid hammering.")
+            self.SEARCH_DELAY = 10
 
         if self.RSS_CHECKINTERVAL < 20:
             logger.fdebug("Minimum RSS Interval Check delay set for 20 minutes to avoid hammering.")

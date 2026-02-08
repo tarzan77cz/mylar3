@@ -153,7 +153,11 @@
                             document.getElementById("series").innerHTML = obj['a_series'];
                             document.getElementById("filename").innerHTML = obj['a_filename'];
                             document.getElementById("size").innerHTML = obj['a_size'];
-                            document.getElementById("status").innerHTML = status;
+                            var statusText = status;
+                            if (obj['auto_resume_count'] != null && obj['auto_resume_count'] > 0) {
+                                statusText = status + ' (auto-resumed ' + obj['auto_resume_count'] + 'x)';
+                            }
+                            document.getElementById("status").innerHTML = statusText;
                             qmm = document.getElementById("btn_menu");
                             if (qmm.style.display == "inline-block"){
                                 document.getElementById("arestartddl").style.display = "none";
@@ -339,9 +343,9 @@
                                     var resumeline = "('ddl_requeue?mode=resume&id="+String(full[5])+"',$(this));"
                                     var removeline = "('ddl_requeue?mode=remove&id="+String(full[5])+"',$(this));"
                                     tbl_options = '';
-                                    if (val == 'Completed' || val == 'Failed' || val == 'Downloading'){
+                                    if (val == 'Completed' || val == 'Downloading'){
                                         tbl_options += '<span title="Restart"></span><a href="#" onclick="doAjaxCall'+restartline+'">Restart</a>';
-                                    } else if (val == 'Incomplete') {
+                                    } else if (val == 'Failed' || val == 'Incomplete') {
                                         tbl_options += '<span title="Restart"></span><a href="#" onclick="doAjaxCall'+restartline+'">Restart</a><span title="Resume"></span><a href="#" onclick="doAjaxCall'+resumeline+'"><span class="ui-icon ui-icon-plus"></span>Resume</a>';
                                     } else if (val == 'Queued') {
                                         tbl_options += '<span title="Start"></span><a href="#" onclick="doAjaxCall'+restartline+'">Start</a>';

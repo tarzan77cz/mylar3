@@ -16,6 +16,8 @@
 
 
 import requests
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 import urllib.parse
 import os
 import sys
@@ -313,6 +315,9 @@ class GC(object):
 
     def loadsite(self, id, link):
 
+        if not link or not str(link).strip().startswith('http'):
+            raise ValueError("Invalid or empty mainlink URL - cannot load GetComics page for alternate links")
+
         title = os.path.join(mylar.CONFIG.CACHE_DIR, 'html_cache', 'getcomics-' + id)
         logger.fdebug('now loading info from local html to resolve via url: %s' % link)
 
@@ -328,7 +333,7 @@ class GC(object):
             try:
                 t = self.session.get(
                     link,
-                    verify=True,
+                    verify=False,
                     headers=self.headers,
                     stream=True,
                     timeout=(30,30)
@@ -1545,70 +1550,107 @@ class GC(object):
         mylar.DDL_QUEUED.append(id)
         filename = None
         self.cookie_receipt()
+
+        MAX_AUTO_RESUME_ATTEMPTS = 6
+        RETRY_DELAY = 30
+        RETRIABLE_EXCEPTIONS = (requests.exceptions.Timeout, requests.exceptions.ConnectionError, requests.exceptions.ChunkedEncodingError)
+
         try:
-            with requests.Session() as s:
-                if resume is not None:
-                    logger.info(
-                        '[DDL-RESUME] Attempting to resume from: %s bytes' % resume
-                    )
-                    self.headers['Range'] = 'bytes=%d-' % resume
-
-                t = self.session.get(
-                    link,
-                    verify=True,
-                    headers=self.headers,
-                    stream=True,
-                    timeout=(30, 120)
-                )
-
-                filename = os.path.basename(
-                    urllib.parse.unquote(t.url)
-                )
-                if 'GetComics.INFO' in filename:
-                    filename = re.sub('GetComics.INFO', '', filename, re.I).strip()
-
-                if filename is not None:
-                    file, ext = os.path.splitext(filename)
-                    filename = '%s[__%s__]%s' % (file, issueid, ext)
-
-                logger.fdebug('filename: %s' % filename)
-
-                if remote_filesize == 0:
-                    try:
-                        remote_filesize = int(t.headers['Content-length'])
-                        logger.fdebug('remote filesize: %s' % remote_filesize)
-                    except Exception as e:
-                        if 'run.php-urls' not in link:
-                            link = re.sub('run.php-url=', 'run.php-urls', link)
-                            link = re.sub('go.php-url=', 'run.php-urls', link)
-                            t = self.session.get(
-                                link,
-                                verify=True,
-                                headers=self.headers,
-                                stream=True,
-                                timeout=(30, 120)
+            for attempt in range(MAX_AUTO_RESUME_ATTEMPTS):
+                try:
+                    if resume is None:
+                        self.headers.pop('Range', None)
+                    with requests.Session() as s:
+                        if resume is not None:
+                            logger.info(
+                                '[DDL-RESUME] Attempting to resume from: %s bytes' % resume
                             )
-                            filename = os.path.basename(
-                                urllib.parse.unquote(t.url)
+                            self.headers['Range'] = 'bytes=%d-' % resume
+
+                        t = self.session.get(
+                            link,
+                            verify=False,
+                            headers=self.headers,
+                            stream=True,
+                            timeout=(30, 120)
+                        )
+
+                        filename = os.path.basename(
+                            urllib.parse.unquote(t.url)
+                        )
+                        if 'GetComics.INFO' in filename:
+                            filename = re.sub('GetComics.INFO', '', filename, re.I).strip()
+
+                        if filename is not None:
+                            file, ext = os.path.splitext(filename)
+                            filename = '%s[__%s__]%s' % (file, issueid, ext)
+
+                        logger.fdebug('filename: %s' % filename)
+
+                        # Resume: verify server supports Range (206). If 200, server returned full file - appending would corrupt.
+                        if resume is not None:
+                            status = t.status_code
+                            content_range = t.headers.get('Content-Range')
+                            content_len = t.headers.get('Content-Length')
+                            accept_ranges = t.headers.get('Accept-Ranges')
+                            logger.info(
+                                '[DDL-RESUME] Server response: status=%s, Content-Range=%s, Content-Length=%s, Accept-Ranges=%s'
+                                % (status, content_range, content_len, accept_ranges)
                             )
-                            if 'GetComics.INFO' in filename:
-                                filename = re.sub(
-                                    'GetComics.INFO', '', filename, re.I
-                                ).strip()
-                            try:
-                                remote_filesize = int(t.headers['Content-length'])
-                                logger.fdebug('remote filesize: %s' % remote_filesize)
-                            except Exception as e:
+                            if status == 206:
+                                logger.info('[DDL-RESUME] Server supports Range (206 Partial Content). Appending remaining bytes.')
+                            elif status == 200:
                                 logger.warn(
-                                    '[WARNING] Unable to retrieve remote file size - this'
-                                    ' is usually due to the page being behind a different'
-                                    ' click-bait/ad page. Error returned as : %s' % e
+                                    '[DDL-RESUME] Server returned 200 OK instead of 206 - Range not supported. '
+                                    'Discarding partial file and restarting from 0 to avoid corrupt archive.'
                                 )
+                                t.close()
+                                self.headers.pop('Range', None)
+                                resume = None
+                                dst_path = os.path.join(mylar.CONFIG.DDL_LOCATION, filename) if mylar.CONFIG.DDL_LOCATION and filename else None
+                                if dst_path and os.path.isfile(dst_path):
+                                    try:
+                                        os.remove(dst_path)
+                                        logger.info('[DDL-RESUME] Removed partial file: %s' % dst_path)
+                                    except OSError as e:
+                                        logger.warn('[DDL-RESUME] Could not remove partial file: %s' % e)
+                                logger.info('[DDL-RESUME] Retrying download from start (no resume)...')
+                                t = self.session.get(
+                                    link,
+                                    verify=False,
+                                    headers=self.headers,
+                                    stream=True,
+                                    timeout=(30, 120)
+                                )
+                                logger.fdebug('[DDL-RESUME] Retry response status: %s' % t.status_code)
+                            elif status == 416:
                                 logger.warn(
-                                    '[WARNING] Considering this particular download as'
-                                    ' invalid and will ignore this result.'
+                                    '[DDL-RESUME] Server returned 416 Range Not Satisfiable (file may have changed). '
+                                    'Restarting from 0.'
                                 )
-                                remote_filesize = 0
+                                t.close()
+                                self.headers.pop('Range', None)
+                                resume = None
+                                dst_path = os.path.join(mylar.CONFIG.DDL_LOCATION, filename) if mylar.CONFIG.DDL_LOCATION and filename else None
+                                if dst_path and os.path.isfile(dst_path):
+                                    try:
+                                        os.remove(dst_path)
+                                        logger.info('[DDL-RESUME] Removed partial file: %s' % dst_path)
+                                    except OSError as e:
+                                        logger.warn('[DDL-RESUME] Could not remove partial file: %s' % e)
+                                logger.info('[DDL-RESUME] Retrying download from start (no resume)...')
+                                t = self.session.get(
+                                    link,
+                                    verify=False,
+                                    headers=self.headers,
+                                    stream=True,
+                                    timeout=(30, 120)
+                                )
+                                logger.fdebug('[DDL-RESUME] Retry response status: %s' % t.status_code)
+                            else:
+                                logger.warn('[DDL-RESUME] Unexpected status %s. Aborting resume to be safe.' % status)
+                                t.close()
+                                self.headers.pop('Range', None)
                                 mylar.DDL_LOCK = False
                                 return {
                                     "success": False,
@@ -1617,112 +1659,239 @@ class GC(object):
                                     "link_type": link_type,
                                 }
 
+                        if remote_filesize == 0:
+                            try:
+                                remote_filesize = int(t.headers['Content-length'])
+                                logger.fdebug('remote filesize: %s' % remote_filesize)
+                            except Exception as e:
+                                if 'run.php-urls' not in link:
+                                    link = re.sub('run.php-url=', 'run.php-urls', link)
+                                    link = re.sub('go.php-url=', 'run.php-urls', link)
+                                    t = self.session.get(
+                                        link,
+                                        verify=False,
+                                        headers=self.headers,
+                                        stream=True,
+                                        timeout=(30, 120)
+                                    )
+                                    filename = os.path.basename(
+                                        urllib.parse.unquote(t.url)
+                                    )
+                                    if 'GetComics.INFO' in filename:
+                                        filename = re.sub(
+                                            'GetComics.INFO', '', filename, re.I
+                                        ).strip()
+                                    try:
+                                        remote_filesize = int(t.headers['Content-length'])
+                                        logger.fdebug('remote filesize: %s' % remote_filesize)
+                                    except Exception as e:
+                                        logger.warn(
+                                            '[WARNING] Unable to retrieve remote file size - this'
+                                            ' is usually due to the page being behind a different'
+                                            ' click-bait/ad page. Error returned as : %s' % e
+                                        )
+                                        logger.warn(
+                                            '[WARNING] Considering this particular download as'
+                                            ' invalid and will ignore this result.'
+                                        )
+                                        remote_filesize = 0
+                                        mylar.DDL_LOCK = False
+                                        return {
+                                            "success": False,
+                                            "filename": filename,
+                                            "path": None,
+                                            "link_type": link_type,
+                                        }
+
+                                else:
+                                    logger.warn(
+                                        '[WARNING] Unable to retrieve remote file size - this is'
+                                        ' usually due to the page being behind a different'
+                                        ' click-bait/ad page. Error returned as : %s' % e
+                                    )
+                                    logger.warn(
+                                        '[WARNING] Considering this particular download as invalid'
+                                        ' and will ignore this result.'
+                                    )
+                                    remote_filesize = 0
+                                    mylar.DDL_LOCK = False
+                                    return {
+                                        "success": False,
+                                        "filename": filename,
+                                        "path": None,
+                                        "link_type": link_type}
+
+                        # write the filename and size to the db for tracking/display (size from response when download starts)
+                        upsert_vals = {'filename': filename, 'remote_filesize': remote_filesize}
+                        if remote_filesize and int(remote_filesize) > 0:
+                            upsert_vals['size'] = helpers.human_size(int(remote_filesize))
+                        myDB.upsert(
+                            'ddl_info',
+                            upsert_vals,
+                            {'id': id},
+                        )
+
+                        if mylar.CONFIG.DDL_LOCATION is not None and not os.path.isdir(
+                            mylar.CONFIG.DDL_LOCATION
+                        ):
+                            checkdirectory = mylar.filechecker.validateAndCreateDirectory(
+                                mylar.CONFIG.DDL_LOCATION, True
+                            )
+                            if not checkdirectory:
+                                logger.warn(
+                                    '[ABORTING] Error trying to validate/create DDL download'
+                                    ' directory: %s.' % mylar.CONFIG.DDL_LOCATION
+                                )
+                                mylar.DDL_LOCK = False
+                                return {
+                                   "success": False,
+                                   "filename": filename,
+                                   "path": None,
+                                   "link_type": link_type}
+
+                        dst_path = os.path.join(mylar.CONFIG.DDL_LOCATION, filename)
+
+                        t.headers['Accept-encoding'] = 'gzip'
+                        chunk_size = 1048576  # 1MB chunks for better performance
+                        flush_interval = 1048576  # Flush every 1MB to keep file modification time updated for watchdog
+                        download_aborted = False
+
+                        if resume is not None:
+                            with open(dst_path, 'ab') as f:
+                                bytes_written = 0
+                                for chunk in t.iter_content(chunk_size=chunk_size):
+                                    if getattr(mylar, 'DDL_ABORT_REQUESTED', False):
+                                        mylar.DDL_ABORT_REQUESTED = False
+                                        download_aborted = True
+                                        logger.info('[DDL-ABORT] Download aborted by user - stopping.')
+                                        break
+                                    if chunk:
+                                        f.write(chunk)
+                                        bytes_written += len(chunk)
+                                        # Flush periodically to keep file modification time updated for watchdog
+                                        if bytes_written >= flush_interval:
+                                            f.flush()
+                                            bytes_written = 0
+                                if not download_aborted:
+                                    f.flush()  # Final flush at the end
+                                    if hasattr(f, 'fileno') and f.fileno() >= 0:
+                                        os.fsync(f.fileno())
+
                         else:
-                            logger.warn(
-                                '[WARNING] Unable to retrieve remote file size - this is'
-                                ' usually due to the page being behind a different'
-                                ' click-bait/ad page. Error returned as : %s' % e
-                            )
-                            logger.warn(
-                                '[WARNING] Considering this particular download as invalid'
-                                ' and will ignore this result.'
-                            )
-                            remote_filesize = 0
+                            if os.path.exists(dst_path):
+                                logger.fdebug('%s already exists - resume not enabled - let us hammer thine' % dst_path)
+                                try:
+                                    os.remove(dst_path)
+                                except Exception as e:
+                                    file, ext = os.path.splitext(filename)
+                                    filename = '%s.1%s' % (file, ext)
+                                    dst_path = os.path.join(mylar.CONFIG.DDL_LOCATION, filename)
+                                    logger.warn(
+                                        '[ERROR: %s] Unable to remove already existing file.'
+                                        ' Creating tmp file @%s so it can download.' % (e, filename)
+                                    )
+
+                            with open(dst_path, 'wb') as f:
+                                bytes_written = 0
+                                for chunk in t.iter_content(chunk_size=chunk_size):
+                                    if getattr(mylar, 'DDL_ABORT_REQUESTED', False):
+                                        mylar.DDL_ABORT_REQUESTED = False
+                                        download_aborted = True
+                                        logger.info('[DDL-ABORT] Download aborted by user - stopping.')
+                                        break
+                                    if chunk:
+                                        f.write(chunk)
+                                        bytes_written += len(chunk)
+                                        # Flush periodically to keep file modification time updated for watchdog
+                                        if bytes_written >= flush_interval:
+                                            f.flush()
+                                            bytes_written = 0
+                                if not download_aborted:
+                                    f.flush()  # Final flush at the end
+                                    if hasattr(f, 'fileno') and f.fileno() >= 0:
+                                        os.fsync(f.fileno())
+
+                        if download_aborted:
                             mylar.DDL_LOCK = False
                             return {
                                 "success": False,
                                 "filename": filename,
                                 "path": None,
-                                "link_type": link_type}
+                                "link_type": link_type,
+                            }
 
-                # write the filename to the db for tracking purposes...
-                myDB.upsert(
-                    'ddl_info',
-                    {'filename': filename, 'remote_filesize': remote_filesize},
-                    {'id': id},
-                )
+                        # Verify full download before marking complete (server may close connection early)
+                        try:
+                            current_size = os.path.getsize(dst_path)
+                        except OSError:
+                            current_size = 0
+                        if remote_filesize and current_size != remote_filesize:
+                            logger.warn(
+                                '[DDL] Incomplete download: %s (got %s bytes, expected %s). '
+                                'Not extracting. Status left as Downloading for retry/watchdog.'
+                                % (filename, current_size, remote_filesize)
+                            )
+                            mylar.DDL_LOCK = False
+                            return {
+                                "success": False,
+                                "filename": filename,
+                                "path": None,
+                                "link_type": link_type,
+                            }
 
-                if mylar.CONFIG.DDL_LOCATION is not None and not os.path.isdir(
-                    mylar.CONFIG.DDL_LOCATION
-                ):
-                    checkdirectory = mylar.filechecker.validateAndCreateDirectory(
-                        mylar.CONFIG.DDL_LOCATION, True
-                    )
-                    if not checkdirectory:
-                        logger.warn(
-                            '[ABORTING] Error trying to validate/create DDL download'
-                            ' directory: %s.' % mylar.CONFIG.DDL_LOCATION
+                        # Download succeeded - mark completed, extract, return
+                        myDB.upsert(
+                            'ddl_info',
+                            {'status': 'Completed', 'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')},
+                            {'id': id},
                         )
                         mylar.DDL_LOCK = False
-                        return {
-                           "success": False,
-                           "filename": filename,
-                           "path": None,
-                           "link_type": link_type}
-
-                dst_path = os.path.join(mylar.CONFIG.DDL_LOCATION, filename)
-
-                t.headers['Accept-encoding'] = 'gzip'
-                chunk_size = 1048576  # 1MB chunks for better performance
-                flush_interval = 1048576  # Flush every 1MB to keep file modification time updated for watchdog
-                download_aborted = False
-
-                if resume is not None:
-                    with open(dst_path, 'ab') as f:
-                        bytes_written = 0
-                        for chunk in t.iter_content(chunk_size=chunk_size):
-                            if getattr(mylar, 'DDL_ABORT_REQUESTED', False):
-                                mylar.DDL_ABORT_REQUESTED = False
-                                download_aborted = True
-                                logger.info('[DDL-ABORT] Download aborted by user - stopping.')
-                                break
-                            if chunk:
-                                f.write(chunk)
-                                bytes_written += len(chunk)
-                                # Flush periodically to keep file modification time updated for watchdog
-                                if bytes_written >= flush_interval:
-                                    f.flush()
-                                    bytes_written = 0
-                        if not download_aborted:
-                            f.flush()  # Final flush at the end
-                            if hasattr(f, 'fileno') and f.fileno() >= 0:
-                                os.fsync(f.fileno())
-
-                else:
-                    if os.path.exists(dst_path):
-                        logger.fdebug('%s already exists - resume not enabled - let us hammer thine' % dst_path)
-                        try:
-                            os.remove(dst_path)
-                        except Exception as e:
-                            file, ext = os.path.splitext(filename)
-                            filename = '%s.1%s' % (file, ext)
-                            dst_path = os.path.join(mylar.CONFIG.DDL_LOCATION, filename)
-                            logger.warn(
-                                '[ERROR: %s] Unable to remove already existing file.'
-                                ' Creating tmp file @%s so it can download.' % (e, filename)
+                        result = self.zip_zip(id, dst_path, filename)
+                        if result.get('success') is not True:
+                            myDB.upsert(
+                                'ddl_info',
+                                {'status': 'Downloading', 'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')},
+                                {'id': id},
                             )
+                        return result
 
-                    with open(dst_path, 'wb') as f:
-                        bytes_written = 0
-                        for chunk in t.iter_content(chunk_size=chunk_size):
-                            if getattr(mylar, 'DDL_ABORT_REQUESTED', False):
-                                mylar.DDL_ABORT_REQUESTED = False
-                                download_aborted = True
-                                logger.info('[DDL-ABORT] Download aborted by user - stopping.')
-                                break
-                            if chunk:
-                                f.write(chunk)
-                                bytes_written += len(chunk)
-                                # Flush periodically to keep file modification time updated for watchdog
-                                if bytes_written >= flush_interval:
-                                    f.flush()
-                                    bytes_written = 0
-                        if not download_aborted:
-                            f.flush()  # Final flush at the end
-                            if hasattr(f, 'fileno') and f.fileno() >= 0:
-                                os.fsync(f.fileno())
+                except RETRIABLE_EXCEPTIONS as e:
+                    # Store auto-resume count for ACTIVE display (attempt+1 = times we've had to retry)
+                    if not hasattr(mylar, 'DDL_AUTORESUME_COUNT'):
+                        mylar.DDL_AUTORESUME_COUNT = {}
+                    mylar.DDL_AUTORESUME_COUNT[id] = attempt + 1
+                    if attempt >= MAX_AUTO_RESUME_ATTEMPTS - 1:
+                        logger.error('[DDL-AUTO-RESUME] Max retries (%s) exceeded. Marking as failed.' % MAX_AUTO_RESUME_ATTEMPTS)
+                        logger.error('[ERROR] %s' % e)
+                        mylar.DDL_LOCK = False
+                        return {
+                            "success": False,
+                            "filename": filename,
+                            "path": None,
+                            "link_type": link_type,
+                        }
+                    resume = None
+                    if filename and mylar.CONFIG.DDL_LOCATION:
+                        _dst = os.path.join(mylar.CONFIG.DDL_LOCATION, filename)
+                        if os.path.exists(_dst):
+                            try:
+                                _size = os.path.getsize(_dst)
+                                if _size > 0:
+                                    resume = _size
+                            except OSError:
+                                pass
+                    if resume and resume > 0:
+                        logger.info('[DDL-AUTO-RESUME] Attempt %s/%s: %s. Waiting %ss then retrying with resume from %s bytes.' %
+                                    (attempt + 1, MAX_AUTO_RESUME_ATTEMPTS, e, RETRY_DELAY, resume))
+                    else:
+                        logger.info('[DDL-AUTO-RESUME] Attempt %s/%s: %s. Waiting %ss then retrying from start.' %
+                                    (attempt + 1, MAX_AUTO_RESUME_ATTEMPTS, e, RETRY_DELAY))
+                        self.headers.pop('Range', None)
+                    time.sleep(RETRY_DELAY)
+                    continue
 
-                if download_aborted:
+                except Exception as e:
+                    logger.error('[ERROR] %s' % e)
                     mylar.DDL_LOCK = False
                     return {
                         "success": False,
@@ -1731,42 +1900,9 @@ class GC(object):
                         "link_type": link_type,
                     }
 
-        except requests.exceptions.Timeout as e:
-            logger.error('[ERROR] download has timed out due to inactivity...: %s', e)
-            mylar.DDL_LOCK = False
-            return {
-               "success": False,
-               "filename": filename,
-               "path": None,
-               "link_type": link_type}
-
-        except Exception as e:
-            logger.error('[ERROR] %s' % e)
-            mylar.DDL_LOCK = False
-            return {
-               "success": False,
-               "filename": filename,
-               "path": None,
-               "link_type": link_type}
-        else:
-            # Mark as Completed as soon as download finishes, before extraction.
-            # Prevents watchdog / Restart Queue from re-queuing during long zip extraction.
-            myDB.upsert(
-                'ddl_info',
-                {'status': 'Completed', 'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')},
-                {'id': id},
-            )
-            mylar.DDL_LOCK = False
-            result = self.zip_zip(id, dst_path, filename)
-            if result.get('success') is not True:
-                # Extraction failed - revert status so helpers can mark Failed / retry
-                myDB.upsert(
-                    'ddl_info',
-                    {'status': 'Downloading', 'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')},
-                    {'id': id},
-                )
-            return result
         finally:
+            # Clear auto-resume count when download ends
+            getattr(mylar, 'DDL_AUTORESUME_COUNT', {}).pop(id, None)
             # Always reset DDL_LOCK, even if something goes wrong
             if mylar.DDL_LOCK is True:
                 logger.warn('[DDL-LOCK] Resetting DDL_LOCK in finally block - download may have been interrupted')
@@ -1793,13 +1929,24 @@ class GC(object):
                     )
                     return {"success": False, "filename": filename, "path": None}
                 else:
-                    try:
-                        os.remove(dst_path)
-                    except Exception as e:
-                        logger.warn(
-                            '[ERROR: %s] Unable to remove zip file from %s after'
-                            ' extraction.' % (e, dst_path)
-                        )
+                    keep_zip = False
+                    if getattr(mylar.CONFIG, 'DDL_KEEP_PACK_ZIP', False):
+                        try:
+                            _myDB = db.DBConnection()
+                            row = _myDB.selectone("SELECT pack FROM ddl_info WHERE id=?", [id]).fetchone()
+                            if row and row['pack']:
+                                keep_zip = True
+                                logger.info('[DDL] Keeping pack zip after extraction (DDL_KEEP_PACK_ZIP): %s' % os.path.basename(dst_path))
+                        except Exception:
+                            pass
+                    if not keep_zip:
+                        try:
+                            os.remove(dst_path)
+                        except Exception as e:
+                            logger.warn(
+                                '[ERROR: %s] Unable to remove zip file from %s after'
+                                ' extraction.' % (e, dst_path)
+                            )
                     filename = None
             else:
                 new_path = dst_path

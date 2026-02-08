@@ -4184,9 +4184,8 @@ def last_run_check(write=None, check=None, provider=None):
         writeout = myDB.upsert("provider_searches", vals, ctrls)
 
 def check_the_search_delay(manual=False):
-    # set a delay between searches here. Default is for 30 seconds...
-    # changing this to lower could result in a ban from your nzb source
-    # due to hammering.
+    # Delay between searches in seconds. Default 30 when manual or unset.
+    # Setting too low could result in a ban from your nzb source due to hammering.
     if (
         mylar.CONFIG.SEARCH_DELAY == 'None'
         or mylar.CONFIG.SEARCH_DELAY is None
@@ -4194,7 +4193,7 @@ def check_the_search_delay(manual=False):
     ):
         pause_the_search = 30  # in seconds
     elif str(mylar.CONFIG.SEARCH_DELAY).isdigit() and manual is False:
-        pause_the_search = int(mylar.CONFIG.SEARCH_DELAY) * 60
+        pause_the_search = int(mylar.CONFIG.SEARCH_DELAY)
     else:
         logger.warn(
             'Check Search Delay - invalid numerical given.'

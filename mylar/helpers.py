@@ -2284,7 +2284,14 @@ def reverse_the_pack_snatch(pack_id, comicid):
         myDB.upsert("issues", {"Status": "Wanted"}, {"IssueID": x})
     if reverselist:
         logger.info('[REVERSE UNO] Reversal completed for %s issues' % len(reverselist))
-        mylar.GLOBAL_MESSAGES = {'status': 'success', 'comicid': comicid, 'tables': 'both', 'message': 'Successfully changed status of %s issues to %s' % (len(reverselist), 'Wanted')}
+        comicname = None
+        seriesyear = None
+        if comicid:
+            comic = myDB.selectone('SELECT ComicName, ComicYear FROM comics WHERE ComicID=?', [comicid]).fetchone()
+            if comic:
+                comicname = comic['ComicName']
+                seriesyear = comic['ComicYear']
+        mylar.GLOBAL_MESSAGES = {'status': 'success', 'comicid': comicid, 'comicname': comicname, 'seriesyear': seriesyear, 'tables': 'both', 'message': 'Successfully changed status of %s issues to %s' % (len(reverselist), 'Wanted')}
 
 
 def conversion(value):
@@ -3316,6 +3323,21 @@ def ddl_load_queued_items():
                     except (KeyError, TypeError):
                         remote_filesize = 0
                     
+                    # Auto-resume: use partial file if DDL_AUTORESUME and GetComics link with existing partial
+                    resume = None
+                    if (mylar.CONFIG.DDL_AUTORESUME and mylar.CONFIG.DDL_LOCATION):
+                        try:
+                            lt = item['link_type']
+                            fn = item['filename']
+                            if lt in (None, 'GC-Main', 'GC-Mirror') and fn:
+                                fp = os.path.join(mylar.CONFIG.DDL_LOCATION, fn)
+                                size = os.stat(fp).st_size
+                                if size > 0:
+                                    resume = size
+                                    logger.fdebug('[DDL-STARTUP] Resume possible for %s: %s bytes' % (item['series'], size))
+                        except (OSError, TypeError, KeyError):
+                            pass
+                    
                     queue_item = {
                         'link': item['link'],
                         'mainlink': item['mainlink'],
@@ -3332,7 +3354,7 @@ def ddl_load_queued_items():
                         'packinfo': None,
                         'site': item['site'],
                         'remote_filesize': remote_filesize,
-                        'resume': None,
+                        'resume': resume,
                     }
                     
                     mylar.DDL_QUEUE.put(queue_item)
@@ -3557,13 +3579,41 @@ def ddl_downloader(queue):
                         except (ValueError, KeyError):
                             pass
                     elif not ltf:
-                        try:
-                            link_type_failure[item['id']].append(item['link_type'])
-                        except KeyError:
-                            link_type_failure[item['id']] = [item['link_type']]
-                        logger.fdebug('[%s] link_type_failure: %s' % (item['id'], link_type_failure))
-                        ggc = getcomics.GC(comicid=item['comicid'], issueid=item['issueid'], oneoff=item['oneoff'])
-                        ggc.parse_downloadresults(item['id'], item['mainlink'], item['comicinfo'], item['packinfo'], link_type_failure[item['id']])
+                        # Need valid mainlink to fetch alternate links; empty/invalid = no alternates, mark Failed
+                        mainlink = item.get('mainlink') or ''
+                        if not mainlink.strip().startswith('http'):
+                            logger.warn('[DDL-DOWNLOADER] No valid mainlink for alternate links (item %s). Marking as Failed.' % item['id'])
+                            nval = {'status': 'Failed', 'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}
+                            myDB.upsert('ddl_info', nval, ctrlval)
+                            if item.get('pack') or (item.get('id') and str(item['id']).startswith('manual-')):
+                                reverse_the_pack_snatch(item['id'], item['comicid'])
+                            ddl_cleanup(item['id'])
+                            try:
+                                if item['id'] in mylar.DDL_QUEUED:
+                                    mylar.DDL_QUEUED.remove(item['id'])
+                            except (ValueError, KeyError):
+                                pass
+                        else:
+                            try:
+                                link_type_failure[item['id']].append(item['link_type'])
+                            except KeyError:
+                                link_type_failure[item['id']] = [item['link_type']]
+                            logger.fdebug('[%s] link_type_failure: %s' % (item['id'], link_type_failure))
+                            try:
+                                ggc = getcomics.GC(comicid=item['comicid'], issueid=item['issueid'], oneoff=item['oneoff'])
+                                ggc.parse_downloadresults(item['id'], item['mainlink'], item['comicinfo'], item['packinfo'], link_type_failure[item['id']])
+                            except Exception as parse_err:
+                                logger.error('[DDL-DOWNLOADER] parse_downloadresults failed for %s: %s. Marking as Failed.' % (item['id'], parse_err))
+                                nval = {'status': 'Failed', 'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}
+                                myDB.upsert('ddl_info', nval, ctrlval)
+                                if item.get('pack') or (item.get('id') and str(item['id']).startswith('manual-')):
+                                    reverse_the_pack_snatch(item['id'], item['comicid'])
+                                ddl_cleanup(item['id'])
+                                try:
+                                    if item['id'] in mylar.DDL_QUEUED:
+                                        mylar.DDL_QUEUED.remove(item['id'])
+                                except (ValueError, KeyError):
+                                    pass
                     else:
                         # links_exhausted was returned, meaning all links were tried
                         failed_links = link_type_failure.get(item['id'], [item.get('link_type', 'Unknown')])
@@ -3647,6 +3697,21 @@ def ddl_downloader(queue):
                                 except (KeyError, TypeError):
                                     remote_filesize = 0
                                 
+                                # Auto-resume: use partial file if DDL_AUTORESUME and GetComics link with existing partial
+                                resume = None
+                                if (mylar.CONFIG.DDL_AUTORESUME and mylar.CONFIG.DDL_LOCATION):
+                                    try:
+                                        lt = db_item['link_type']
+                                        fn = db_item['filename']
+                                        if lt in (None, 'GC-Main', 'GC-Mirror') and fn:
+                                            fp = os.path.join(mylar.CONFIG.DDL_LOCATION, fn)
+                                            size = os.stat(fp).st_size
+                                            if size > 0:
+                                                resume = size
+                                                logger.fdebug('[DDL-AUTOLOAD] Resume possible for %s: %s bytes' % (db_item['series'], size))
+                                    except (OSError, TypeError, KeyError):
+                                        pass
+                                
                                 queue_item = {
                                     'link': db_item['link'],
                                     'mainlink': db_item['mainlink'],
@@ -3663,7 +3728,7 @@ def ddl_downloader(queue):
                                     'packinfo': None,
                                     'site': db_item['site'],
                                     'remote_filesize': remote_filesize,
-                                    'resume': None,
+                                    'resume': resume,
                                 }
                                 
                                 queue.put(queue_item)

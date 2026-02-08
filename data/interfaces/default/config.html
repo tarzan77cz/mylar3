@@ -354,8 +354,8 @@
                                   </div>
                                   <div class="row">
                                       <label>Search delay</label>
-                                      <input type="text" name="search_delay" value="${config['search_delay']}" size="4" />mins
-                                      <small>The amount of time to wait between each search request (minimum is 1 min)</small>
+                                      <input type="text" name="search_delay" value="${config['search_delay']}" size="4" />secs
+                                      <small>The amount of time to wait between each search request in seconds (minimum is 10 sec)</small>
                                   </div>
                             </div>
                          </fieldset>
@@ -910,6 +910,9 @@
                                        <div id="gc_options" style="display:none">
                                            <div class="row checkbox left clearfix" style="display:block;padding-left:1.5em;">
                                                 <input type="checkbox" id="ddl_prefer_upscaled" name="ddl_prefer_upscaled" value="1" ${config['ddl_prefer_upscaled']} /><label>Prefer HD-Upscale/HD-Digital <small>(if available></small></label>
+                                           </div>
+                                           <div class="row checkbox left clearfix" style="display:block;padding-left:1.5em;">
+                                                <input type="checkbox" id="ddl_keep_pack_zip" name="ddl_keep_pack_zip" value="1" ${config['ddl_keep_pack_zip']} /><label>Keep pack ZIP after extraction <small>(backup for recovering missing issues)</small></label>
                                            </div>
                                        </div>
                                        %if mylar.EXT_SERVER:
