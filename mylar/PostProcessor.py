@@ -240,6 +240,28 @@ class PostProcessor(object):
                 logger.warn('[DUPLICATE-CLEANUP] Successfully moved %s ... to ... %s' % (path_to_move, os.path.join(dump_folder, file_to_move)))
                 return True
 
+    def _remove_empty_dirs(self, top_dir):
+        """
+        Remove only directories that contain no files (at any depth).
+        Directories may contain other empty subdirectories - those are removed first (bottom-up).
+        If any file exists anywhere in the tree, that directory and its parents are not removed.
+        """
+        if not top_dir or not os.path.isdir(top_dir):
+            return
+        for root, dirs, files in os.walk(top_dir, topdown=False):
+            for d in dirs:
+                path = os.path.join(root, d)
+                try:
+                    if not os.listdir(path):
+                        os.rmdir(path)
+                except OSError:
+                    pass
+        try:
+            if not os.listdir(top_dir):
+                os.rmdir(top_dir)
+        except OSError:
+            pass
+
     def tidyup(self, odir=None, del_nzbdir=False, sub_path=None, cacheonly=False, filename=None):
         # del_nzbdir will remove the original directory location. Must be set to False for manual pp or else will delete manual dir that's provided (if empty).
         # move = cleanup/delete original location (self.nzb_folder) AND cache location (odir) if metatagging is enabled.
@@ -276,11 +298,12 @@ class PostProcessor(object):
                     # check to see if the directory is empty or not.
 
                 if all([mylar.CONFIG.FILE_OPTS == 'move', self.nzb_name == 'Manual Run', tmp_folder != self.nzb_folder]):
-                    if not os.listdir(tmp_folder):
+                    self._remove_empty_dirs(tmp_folder)
+                    if os.path.isdir(tmp_folder) and not os.listdir(tmp_folder):
                         logger.fdebug('%s Tidying up. Deleting sub-folder location : %s' % (self.module, tmp_folder))
                         shutil.rmtree(tmp_folder)
                         self._log("Removed temporary directory : %s" % tmp_folder)
-                    else:
+                    elif os.path.isdir(tmp_folder):
                         if filename is not None:
                             if os.path.isfile(os.path.join(tmp_folder,filename)):
                                 logger.fdebug('%s Attempting to remove file: %s' % (self.module, os.path.join(tmp_folder, filename)))
@@ -289,7 +312,8 @@ class PostProcessor(object):
                                 except Exception as e:
                                     logger.warn('%s [%s] Unable to remove file : %s' % (self.module, e, os.path.join(tmp_folder, filename)))
                                 else:
-                                    if not os.listdir(tmp_folder):
+                                    self._remove_empty_dirs(tmp_folder)
+                                    if os.path.isdir(tmp_folder) and not os.listdir(tmp_folder):
                                        logger.fdebug('%s Tidying up. Deleting original folder location : %s' % (self.module, tmp_folder))
                                        try:
                                            shutil.rmtree(tmp_folder)
@@ -298,7 +322,7 @@ class PostProcessor(object):
                                        else:
                                            logger.fdebug('%s Removed original folder location: %s' % (self.module, tmp_folder))
                                            self._log("Removed temporary directory : %s" % tmp_folder)
-                                    else:
+                                    elif os.path.isdir(tmp_folder):
                                         self._log('Failed to remove temporary directory: %s' % tmp_folder)
                                         logger.error('%s %s not empty. Skipping removal of directory - this will either be caught in further post-processing or it will have to be manually deleted.' % (self.module, tmp_folder))
                         else:
@@ -314,11 +338,12 @@ class PostProcessor(object):
                             logger.warn('%s [%s] Unable to remove file : %s' % (self.module, e, os.path.join(tmp_folder, filename)))
 
                 elif mylar.CONFIG.FILE_OPTS == 'move' and all([del_nzbdir is True, self.nzb_name != 'Manual Run']): #tmp_folder != self.nzb_folder]):
-                    if not os.listdir(tmp_folder):
+                    self._remove_empty_dirs(tmp_folder)
+                    if os.path.isdir(tmp_folder) and not os.listdir(tmp_folder):
                         logger.fdebug('%s Tidying up. Deleting original folder location : %s' % (self.module, tmp_folder))
                         shutil.rmtree(tmp_folder)
                         self._log("Removed temporary directory : %s" % tmp_folder)
-                    else:
+                    elif os.path.isdir(tmp_folder):
                         if filename is not None:
                             if os.path.isfile(os.path.join(tmp_folder,filename)):
                                 logger.fdebug('%s Attempting to remove file: %s' % (self.module, os.path.join(tmp_folder, filename)))
@@ -327,7 +352,8 @@ class PostProcessor(object):
                                 except Exception as e:
                                     logger.warn('%s [%s] Unable to remove file : %s' % (self.module, e, os.path.join(tmp_folder, filename)))
                                 else:
-                                    if not os.listdir(tmp_folder):
+                                    self._remove_empty_dirs(tmp_folder)
+                                    if os.path.isdir(tmp_folder) and not os.listdir(tmp_folder):
                                        if os.path.join(mylar.CONFIG.DDL_LOCATION, 'mega') == tmp_folder:
                                            logger.fdebug('%s Tidying up. %s sub-directory not being removed as is required for mega ddl' % (self.module, tmp_folder))
                                        else:
@@ -339,7 +365,7 @@ class PostProcessor(object):
                                            else:
                                                logger.fdebug('%s Removed original folder location: %s' % (self.module, tmp_folder))
                                                self._log("Removed temporary directory : " + tmp_folder)
-                                    else:
+                                    elif os.path.isdir(tmp_folder):
                                         self._log('Failed to remove temporary directory: ' + tmp_folder)
                                         logger.error('%s %s not empty. Skipping removal of directory - this will either be caught in further post-processing or it will have to be manually deleted.' % (self.module, tmp_folder))
                         else:
@@ -352,14 +378,16 @@ class PostProcessor(object):
                 for filename in os.listdir(odir):
                     filepath = os.path.join(odir, filename)
                     try:
-                        os.remove(filepath)
+                        if os.path.isfile(filepath):
+                            os.remove(filepath)
                     except OSError:
                         pass
-                if not os.listdir(odir):
+                self._remove_empty_dirs(odir)
+                if os.path.isdir(odir) and not os.listdir(odir):
                     logger.fdebug('%s Tidying up. Deleting temporary cache directory : %s' % (self.module, odir))
                     shutil.rmtree(odir)
                     self._log("Removed temporary directory : %s" % odir)
-                else:
+                elif os.path.isdir(odir):
                     self._log('Failed to remove temporary directory: %s' % odir)
                     logger.error('%s %s not empty. Skipping removal of temporary cache directory - this will either be caught in further post-processing or have to be manually deleted.' % (self.module, odir))
 
@@ -1335,6 +1363,11 @@ class PostProcessor(object):
                                                     datematch = 'True'
                                     elif datematch == 'False' and watchmatch['issue_year'] is None and lonevol is True:
                                         logger.fdebug('%s[LONE-VOLUME/NO YEAR][MATCH] Only Volume on watchlist matches, no year present in filename. Assuming match based on volume and title.' % module)
+                                        datematch = 'True'
+                                    elif (datematch == 'False' and watchmatch['issue_year'] is None
+                                          and self.ddl and self.comicid is not None and self.issueid is None
+                                          and cs['ComicID'] == self.comicid):
+                                        logger.fdebug('%s[DDL-PACK/NO YEAR][MATCH] Direct-download pack assigned to ComicID %s; matching without year in filename.' % (module, self.comicid))
                                         datematch = 'True'
 
                                     if datematch == 'True':
