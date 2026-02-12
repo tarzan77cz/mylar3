@@ -222,6 +222,7 @@ COMICINFO = ()
 CHECK_FOLDER_CACHE = None
 FOLDER_CACHE = None
 GLOBAL_MESSAGES = None
+MANUAL_PP_STATUS = {'running': False, 'phase': 'idle', 'file_log': []}
 SSE_KEY = None
 SESSION_ID = None
 START_UP = True

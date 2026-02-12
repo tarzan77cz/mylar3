@@ -72,53 +72,37 @@ class Api(object):
         return json.dumps(response)
 
     def _eventStreamResponse(self, results):
-        #data = 'retry: 200\ndata: ' + str( self.prog_output) + '\n\n'
-        #response = {
-        #    'success': True,
-        #    'data': results
-        #}
-        #{'status': mylar.GLOBAL_MESSAGES['status'], 'comicid': mylar.GLOBAL_MESSAGES['comicid'], 'tables': mylar.GLOBAL_MESSAGES['tables'], 'message': mylar.GLOBAL_MESSAGES['message']}
-        #logger.info('global_message: %s' % (results,))
-        if results['status'] is not None:
-            if results['event'] == 'addbyid':
-                try:
-                    if results['seriesyear']:
-                        data = '\nevent: addbyid\ndata: {\ndata: "status": "' + results['status'] + '",\ndata: "comicid": "' + results['comicid']+ '",\ndata: "message": "' + results['message'] + '",\ndata: "tables": "' + results['tables'] + '",\ndata: "comicname": "' + results['comicname'] + '",\ndata: "seriesyear": "' + results['seriesyear'] + '"\ndata: }\n\n'
-                    else:
-                        data = '\nevent: addbyid\ndata: {\ndata: "status": "' + results['status'] + '",\ndata: "comicid": "' + results['comicid']+ '",\ndata: "message": "' + results['message'] + '",\ndata: "tables": "' + results['tables'] + '",\ndata: "comicname": "' + results['comicname'] + '",\ndata: "seriesyear": "' + results['seriesyear'] + '"\ndata: }\n\n'
-                except Exception as e:
-                    #logger.warn('error: %s' % e)
-                    data = '\nevent: addbyid\ndata: {\ndata: "status": "' + results['status'] + '",\ndata: "comicid": "' + results['comicid']+ '",\ndata: "message": "' + results['message'] + '",\ndata: "tables": "' + results['tables'] + '"\ndata: }\n\n'
-            elif results['event'] == 'scheduler_message':
-                try:
-                    data = '\nevent: scheduler_message\ndata: {\ndata: "status": "' + results['status'] + '",\ndata: "message": "' + results['message'] + '"\ndata: }\n\n'
-                except Exception:
-                    data = '\nevent: scheduler_message\ndata: {\ndata: "status": "' + results['status'] + '",\ndata: "message": "' + results['message'] + '"\ndata: }\n\n'
-            elif results['event'] == 'config_check':
-                try:
-                    data = '\nevent: config_check\ndata: {\ndata: "status": "' + results['status'] + '",\ndata: "message": "' + results['message'] + '"\ndata: }\n\n'
-                except Exception:
-                    data = '\nevent: config_check\ndata: {\ndata: "status": "' + results['status'] + '",\ndata: "message": "' + results['message'] + '"\ndata: }\n\n'
-            elif results['event'] == 'shutdown':
-                try:
-                    data = '\nevent: shutdown\ndata: {\ndata: "status": "' + results['status'] + '",\ndata: "message": "' + results['message'] + '"\ndata: }\n\n'
-                except Exception:
-                    data = '\nevent: shutdown\ndata: {\ndata: "status": "' + results['status'] + '",\ndata: "message": "' + results['message'] + '"\ndata: }\n\n'
-            elif results['event'] == 'check_update':
-                try:
-                    data = '\nevent: check_update\ndata: {\ndata: "status": "' + results['status'] + '",\ndata: "current_version": "' + results['current_version'] + '",\ndata: "latest_version": "' + results['latest_version'] + '",\ndata: "commits_behind": "' + results['commits_behind'] + '",\ndata: "docker": "' + results['docker'] + '",\ndata: "message": "' + results['message'] + '"\ndata: }\n\n'
-                except Exception as e:
-                    data = '\nevent: check_update\ndata: {\ndata: "status": "' + results['status'] + '",\ndata: "message": "' + results['message'] + '"\ndata: }\n\n'
+        empty_data = '\ndata: \n\n'
+        try:
+            if not results or not isinstance(results, dict):
+                data = empty_data
             else:
-                try:
-                    data = '\ndata: {\ndata: "status": "' + results['status'] + '",\ndata: "comicid": "' + results['comicid']+ '",\ndata: "message": "' + results['message'] + '",\ndata: "tables": "' + results['tables'] + '",\ndata: "comicname": "' + results['comicname'] + '",\ndata: "seriesyear": "' + results['seriesyear'] + '"\ndata: }\n\n'
-                except Exception as e:
-                    #logger.warn('data_error: %s' % e)
-                    data = '\ndata: {\ndata: "status": "' + results['status'] + '",\ndata: "comicid": "' + results['comicid']+ '",\ndata: "message": "' + results['message'] + '",\ndata: "tables": "' + results['tables'] + '"\ndata: }\n\n'
+                def _s(key):
+                    v = results.get(key)
+                    return '' if v is None else str(v)
 
-            #data = 'retry: 5000\ndata: '+str(results['message'])+'\n\n' # + str(results['message']) + '\n\n'
-        else:
-            data = '\ndata: \n\n' #'data: END-OF-STREAM\n\n'
+                if results.get('status') is not None:
+                    try:
+                        if results.get('event') == 'addbyid':
+                            data = '\nevent: addbyid\ndata: {\ndata: "status": "' + _s('status') + '",\ndata: "comicid": "' + _s('comicid') + '",\ndata: "message": "' + _s('message') + '",\ndata: "tables": "' + _s('tables') + '",\ndata: "comicname": "' + _s('comicname') + '",\ndata: "seriesyear": "' + _s('seriesyear') + '"\ndata: }\n\n'
+                        elif results.get('event') == 'scheduler_message':
+                            data = '\nevent: scheduler_message\ndata: {\ndata: "status": "' + _s('status') + '",\ndata: "message": "' + _s('message') + '"\ndata: }\n\n'
+                        elif results.get('event') == 'config_check':
+                            data = '\nevent: config_check\ndata: {\ndata: "status": "' + _s('status') + '",\ndata: "message": "' + _s('message') + '"\ndata: }\n\n'
+                        elif results.get('event') == 'shutdown':
+                            data = '\nevent: shutdown\ndata: {\ndata: "status": "' + _s('status') + '",\ndata: "message": "' + _s('message') + '"\ndata: }\n\n'
+                        elif results.get('event') == 'check_update':
+                            data = '\nevent: check_update\ndata: {\ndata: "status": "' + _s('status') + '",\ndata: "current_version": "' + _s('current_version') + '",\ndata: "latest_version": "' + _s('latest_version') + '",\ndata: "commits_behind": "' + _s('commits_behind') + '",\ndata: "docker": "' + _s('docker') + '",\ndata: "message": "' + _s('message') + '"\ndata: }\n\n'
+                        else:
+                            data = '\ndata: {\ndata: "status": "' + _s('status') + '",\ndata: "comicid": "' + _s('comicid') + '",\ndata: "message": "' + _s('message') + '",\ndata: "tables": "' + _s('tables') + '",\ndata: "comicname": "' + _s('comicname') + '",\ndata: "seriesyear": "' + _s('seriesyear') + '"\ndata: }\n\n'
+                    except Exception as e:
+                        logger.warn('_eventStreamResponse error: %s' % e)
+                        data = empty_data
+                else:
+                    data = empty_data
+        except Exception as e:
+            logger.warn('_eventStreamResponse outer error: %s' % e)
+            data = empty_data
         cherrypy.response.headers['Content-Type'] = 'text/event-stream'
         cherrypy.response.headers['Cache-Control'] = 'no-cache'
         cherrypy.response.headers['Connection'] = 'keep-alive'
@@ -1278,43 +1262,51 @@ class Api(object):
 
     def _checkGlobalMessages(self, **kwargs):
         the_message = {'status': None, 'event': None, 'comicname': None, 'seriesyear': None, 'comicid': None, 'tables': None, 'message': None}
-        if mylar.GLOBAL_MESSAGES is not None:
-            try:
-                event = mylar.GLOBAL_MESSAGES['event']
-            except Exception:
-                event = None
-
-            if event is not None and any([event == 'shutdown', event == 'config_check']):
-                the_message = {'status': mylar.GLOBAL_MESSAGES['status'], 'event': event, 'message': mylar.GLOBAL_MESSAGES['message']}
-            elif event is not None and event == 'check_update':
-                the_message = {'status': mylar.GLOBAL_MESSAGES['status'], 'event': event, 'current_version': mylar.GLOBAL_MESSAGES['current_version'], 'latest_version': mylar.GLOBAL_MESSAGES['latest_version'], 'commits_behind': str(mylar.GLOBAL_MESSAGES['commits_behind']), 'docker': mylar.GLOBAL_MESSAGES['docker'], 'message': mylar.GLOBAL_MESSAGES['message']}
-            else:
-                the_message = {'status': mylar.GLOBAL_MESSAGES['status'], 'event': event, 'comicid': mylar.GLOBAL_MESSAGES['comicid'], 'tables': mylar.GLOBAL_MESSAGES['tables'], 'message': mylar.GLOBAL_MESSAGES['message']}
+        try:
+            gm = getattr(mylar, 'GLOBAL_MESSAGES', None)
+            if gm is not None and isinstance(gm, dict):
                 try:
-                    the_fields = {'comicname': mylar.GLOBAL_MESSAGES['comicname'], 'seriesyear': mylar.GLOBAL_MESSAGES['seriesyear']}
-                    the_message = dict(the_message, **the_fields)
+                    event = gm.get('event')
+                    status = gm.get('status')
+
+                    if event is not None and any([event == 'shutdown', event == 'config_check']):
+                        the_message = {'status': status, 'event': event, 'message': (gm.get('message') or '')}
+                    elif event is not None and event == 'check_update':
+                        the_message = {
+                            'status': status, 'event': event,
+                            'current_version': gm.get('current_version'), 'latest_version': gm.get('latest_version'),
+                            'commits_behind': str(gm.get('commits_behind', '')),
+                            'docker': gm.get('docker'), 'message': (gm.get('message') or '')
+                        }
+                    else:
+                        the_message = {
+                            'status': status, 'event': event,
+                            'comicid': gm.get('comicid'), 'tables': gm.get('tables'),
+                            'message': (gm.get('message') or '')
+                        }
+                        the_message['comicname'] = gm.get('comicname')
+                        the_message['seriesyear'] = gm.get('seriesyear')
+
+                    if status != 'mid-message-event':
+                        myDB = db.DBConnection()
+                        tmp_message = dict(the_message, **{'session_id': getattr(mylar, 'SESSION_ID', None)})
+                        if event != 'check_update':
+                            tmp_message.pop('tables', None)
+                        else:
+                            tmp_message.pop('current_version', None)
+                            tmp_message.pop('latest_version', None)
+                            tmp_message.pop('commits_behind', None)
+                            tmp_message.pop('docker', None)
+                        the_tmp_message = tmp_message.pop('message', '') or ''
+                        the_real_message = re.sub(r'\r\n|\n|</br>', '', the_tmp_message)
+                        tmp_message['message'] = the_real_message
+                        now = helpers.now()
+                        myDB.upsert("notifs", tmp_message, {'session_id': tmp_message.get('session_id'), 'date': now})
                 except Exception as e:
-                    logger.warn('error: %s' % e)
-            #logger.fdebug('the_message added: %s' % (the_message,))
-            if mylar.GLOBAL_MESSAGES['status'] != 'mid-message-event':
-                myDB = db.DBConnection()
-                tmp_message = dict(the_message, **{'session_id': mylar.SESSION_ID})
-                if event != 'check_update':
-                    try:
-                        tmp_message.pop('tables')
-                    except Exception:
-                        pass
-                else:
-                    tmp_message.pop('current_version')
-                    tmp_message.pop('latest_version')
-                    tmp_message.pop('commits_behind')
-                    tmp_message.pop('docker')
-                the_tmp_message = tmp_message.pop('message')
-                the_real_message = re.sub(r'\r\n|\n|</br>', '', the_tmp_message)
-                tmp_message = dict(tmp_message, **{'message': the_real_message})
-                #logger.fdebug('the_message re-added: %s' % (tmp_message,))
-                myDB.upsert( "notifs", tmp_message, {'date': helpers.now()} )
-            mylar.GLOBAL_MESSAGES = None
+                    logger.warn('checkGlobalMessages error: %s' % e)
+                mylar.GLOBAL_MESSAGES = None
+        except Exception as e:
+            logger.warn('checkGlobalMessages outer error: %s' % e)
         self.data = self._eventStreamResponse(the_message)
 
     def _listProviders(self, **kwargs):

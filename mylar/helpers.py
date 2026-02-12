@@ -3817,6 +3817,27 @@ def postprocess_main(queue):
         else:
             time.sleep(5)
 
+
+def is_issue_still_wanted(item):
+    """
+    Return True if the issue is still Status='Wanted' in the appropriate table
+    (storyarcs, issues, or annuals). Used to skip search queue items that are
+    no longer wanted (e.g. already Snatched/Skipped).
+    """
+    issueid = item.get('issueid')
+    if issueid is None:
+        return True
+    myDB = db.DBConnection()
+    if '_' in issueid:
+        row = myDB.selectone("SELECT 1 FROM storyarcs WHERE IssueArcID=? AND Status='Wanted'", [issueid]).fetchone()
+        return row is not None
+    row = myDB.selectone("SELECT 1 FROM issues WHERE IssueID=? AND Status='Wanted'", [issueid]).fetchone()
+    if row is not None:
+        return True
+    row = myDB.selectone("SELECT 1 FROM annuals WHERE IssueID=? AND Status='Wanted' AND NOT Deleted", [issueid]).fetchone()
+    return row is not None
+
+
 def search_queue(queue):
     while True:
         if mylar.SEARCHLOCK is True:
@@ -3837,6 +3858,12 @@ def search_queue(queue):
                     gumbo_line = False
 
             if gumbo_line:
+                if not item.get('manual'):
+                    if not is_issue_still_wanted(item):
+                        cn = item.get('comicname') or '?'
+                        inum = item.get('issuenumber') or item.get('issueid') or '?'
+                        logger.info('[SEARCH-QUEUE] Skipping search for %s #%s (no longer Wanted)' % (cn, inum))
+                        continue
                 logger.fdebug('[SEARCH-QUEUE] Now loading item from search queue: %s' % item)
                 if mylar.SEARCHLOCK is False:
                     arcid = None

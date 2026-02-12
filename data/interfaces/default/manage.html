@@ -166,7 +166,14 @@
                                         <input type="button" value="Interactive Manual Run!" onclick="interactive_paging()" style="float:center;"/></br>
 -->
                                         <input type="hidden" name="nzb_name" value='Manual Run' />
-
+                                        <div id="manual_pp_feedback" style="display:none; margin-top:12px; padding:8px; border:1px solid #ccc; max-height:1200px; overflow:auto; background:#2a2a2a; color:#e0e0e0;">
+                                            <div id="manual_pp_phase" style="font-weight:bold; margin-bottom:4px;"></div>
+                                            <div id="manual_pp_current" style="font-size:11px; margin-bottom:6px;"></div>
+                                            <ul id="manual_pp_log" style="font-size:11px; margin:4px 0; padding-left:20px; max-height:240px; overflow-y:auto;"></ul>
+                                            <div id="manual_pp_file_log_label" style="font-weight:bold; margin-top:8px; margin-bottom:4px;">Per-file status</div>
+                                            <ul id="manual_pp_file_log" style="font-size:11px; margin:4px 0; padding-left:20px; max-height:480px; overflow-y:auto; list-style:none;"></ul>
+                                            <div id="manual_pp_summary" style="margin-top:6px; font-weight:bold;"></div>
+                                        </div>
 <!--
                                        <input type="button" value="Interactive Manual Run!" onclick="interactive_process()" style="float:center;"></br>
 -->
@@ -480,6 +487,51 @@
                     }
                 });
 
+                var manual_pp_poll_interval = null;
+                function update_manual_pp_feedback() {
+                    $.get("manual_pp_status", function(data) {
+                        var s;
+                        try { s = typeof data === 'string' ? JSON.parse(data) : data; } catch (e) { return; }
+                        var phase = s.phase || 'idle';
+                        var running = s.running === true;
+                        var phaseLabels = { 'idle': '', 'scanning': 'Scanning folder...', 'matching': 'Matching files to watchlist...', 'processing': 'Processing ' + (s.current_index || 0) + '/' + (s.current_total || 0), 'done': 'Done.' };
+                        $('#manual_pp_phase').text(phaseLabels[phase] || phase);
+                        if (s.current_comic || s.current_file) {
+                            $('#manual_pp_current').text((s.current_comic || '') + (s.current_issue ? ' #' + s.current_issue : '') + (s.current_file ? ' – ' + s.current_file : '')).show();
+                        } else {
+                            $('#manual_pp_current').text('').hide();
+                        }
+                        var log = s.log || [];
+                        var logHtml = '';
+                        for (var i = 0; i < log.length; i++) {
+                            var r = log[i];
+                            var line = (r.comic || '') + (r.issue ? ' #' + r.issue : '') + ' – ' + (r.result === 'ok' ? 'OK' : r.result === 'fail' ? 'Failed' : r.result || '');
+                            logHtml += '<li>' + line + '</li>';
+                        }
+                        $('#manual_pp_log').html(logHtml);
+                        var fileLog = s.file_log || [];
+                        var fileLogHtml = '';
+                        var statusLabels = { 'checking': '…', 'sent': 'Sent', 'ok': 'OK', 'fail': 'Failed', 'crc_failed': 'CRC failed', 'no_match': 'No match', 'skipped': 'Skipped' };
+                        for (var j = 0; j < fileLog.length; j++) {
+                            var e = fileLog[j];
+                            var fname = e.file || e.series || '?';
+                            if (e.series && e.issue) fname = e.series + ' #' + e.issue;
+                            else if (e.file) fname = e.file;
+                            var st = e.status || '';
+                            var label = statusLabels[st] || st;
+                            var reason = (e.reason && e.reason.trim()) ? ' – ' + e.reason : '';
+                            var cls = (st === 'ok' ? 'color:#6ab86a' : st === 'fail' || st === 'crc_failed' ? 'color:#c47070' : 'color:#e0e0e0');
+                            fileLogHtml += '<li style="' + cls + '">' + fname + ': ' + label + reason + '</li>';
+                        }
+                        $('#manual_pp_file_log').html(fileLogHtml);
+                        if (fileLog.length) $('#manual_pp_file_log_label').show(); else $('#manual_pp_file_log_label').hide();
+                        if (s.summary) $('#manual_pp_summary').text(s.summary).show(); else $('#manual_pp_summary').hide();
+                        if (!running && manual_pp_poll_interval) {
+                            clearInterval(manual_pp_poll_interval);
+                            manual_pp_poll_interval = null;
+                        }
+                    });
+                }
                 $('#manual_process').click(function () {
                     var imagechk = document.getElementById("manualpp_statusicon");
                     var statuschk = document.getElementById("manual_status");
@@ -502,6 +554,16 @@
                                 nzb_folder.setAttribute("size", varlength);
                                 $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+obj['message']+"</div>");
                                 $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
+                                $('#manual_pp_feedback').show();
+                                $('#manual_pp_phase').text('Starting...');
+                                $('#manual_pp_current').text('').hide();
+                                $('#manual_pp_log').html('');
+                                $('#manual_pp_file_log').html('');
+                                $('#manual_pp_file_log_label').hide();
+                                $('#manual_pp_summary').text('').hide();
+                                if (manual_pp_poll_interval) clearInterval(manual_pp_poll_interval);
+                                manual_pp_poll_interval = setInterval(update_manual_pp_feedback, 1500);
+                                update_manual_pp_feedback();
                             } else {
                                 imagechk.src = "";
                                 imagechk.src = "images/x_red.png";

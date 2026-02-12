@@ -2136,8 +2136,8 @@ class GC(object):
                     series = '%s'.strip() % (title[:f_iss-1])
                     #logger.fdebug('changed_title: %s' % series)
             #logger.fdebug('title: %s' % title)
-            issues = r'%s' % issues
-            title = re.sub(issues, '', title).strip()
+            issues_pattern = re.escape(issues)
+            title = re.sub(issues_pattern, '', title).strip()
             # kill any brackets in the issue line here.
             #logger.fdebug('issues-before: %s' % issues)
             issues = re.sub(r'[\(\)\[\]]', '', issues).strip()
@@ -2149,7 +2149,7 @@ class GC(object):
 
             crap = re.findall(r"\(.*?\)", title)
             for c in crap:
-                title = re.sub(c, '', title).strip()
+                title = re.sub(re.escape(c), '', title).strip()
             if crap:
                 title= re.sub(r'[\(\)\[\]]', '', title).strip()
 

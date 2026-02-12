@@ -459,13 +459,23 @@ class PostProcessor(object):
                         logger.fdebug('%s Manual Run initiated' % module)
                     #Manual postprocessing on a folder.
                     #first we get a parsed results list  of the files being processed, and then poll against the sql to get a short list of hits.
+                    if self.nzb_name == 'Manual Run':
+                        mylar.MANUAL_PP_STATUS.update({
+                            'running': True, 'phase': 'scanning', 'summary': '', 'log': [], 'file_log': [],
+                            'total_files': 0, 'total_matched': 0, 'current_index': 0, 'current_total': 0,
+                            'current_comic': '', 'current_issue': '', 'current_file': '', 'processed': 0, 'failed': 0
+                        })
                     flc = filechecker.FileChecker(self.nzb_folder, justparse=True, pp_mode=True)
                     filelist = flc.listFiles()
                     if filelist['comiccount'] == 0: # is None:
+                        if self.nzb_name == 'Manual Run':
+                            mylar.MANUAL_PP_STATUS.update({'phase': 'done', 'running': False, 'summary': 'No files found.'})
                         logger.warn('There were no files located - check the debugging logs if you think this is in error.')
                         self.valreturn.append({"self.log": self.log,
                                                "mode": 'stop'})
                         return self.queue.put(self.valreturn)
+                    if self.nzb_name == 'Manual Run':
+                        mylar.MANUAL_PP_STATUS.update({'phase': 'matching', 'total_files': filelist['comiccount']})
                     logger.info('I have located %s files that I should be able to post-process. Continuing...' % filelist['comiccount'])
                 else:
                     if all([self.comicid is None, '_' not in self.issueid]):
@@ -508,10 +518,26 @@ class PostProcessor(object):
                 oneoff_issuelist = []
                 manual_list = []
                 for fl in filelist['comiclist']:
+                    file_log_idx = None
+                    matched_this_file = False
+                    current_file_reject_reason = None
+                    if self.nzb_name == 'Manual Run':
+                        flog = mylar.MANUAL_PP_STATUS.get('file_log') or []
+                        flog.append({'file': fl.get('comicfilename') or '', 'series': fl.get('series_name') or '', 'issue': fl.get('issue_number') or '', 'status': 'checking', 'reason': ''})
+                        if len(flog) > 200:
+                            flog = flog[-200:]
+                        mylar.MANUAL_PP_STATUS['file_log'] = flog
+                        file_log_idx = len(flog) - 1
+
                     if all([fl['series_name'] is not None, fl['series_name'] != '']) and mylar.CONFIG.IGNORE_COVERS is True:
                         cvchk = re.sub('[\s\s+\_\.]', '', fl['series_name']).lower()
                         if any(['coveronly' in cvchk, 'coversonly' in cvchk]):
                             logger.fdebug('Cover only detected. Ignoring result.')
+                            if self.nzb_name == 'Manual Run' and file_log_idx is not None:
+                                flog = mylar.MANUAL_PP_STATUS.get('file_log') or []
+                                if len(flog) > file_log_idx:
+                                    flog[file_log_idx].update({'status': 'skipped', 'reason': 'Cover only'})
+                                    mylar.MANUAL_PP_STATUS['file_log'] = flog
                             continue
 
                     if os.path.isfile(fl['comiclocation']):
@@ -527,9 +553,20 @@ class PostProcessor(object):
                         condition_check = helpers.check_file_condition(full_filename)
                         if condition_check['status'] is False:
                             logger.warn(f"CRC Check: File {full_filename} failed condition check ({condition_check['quality']}).  Ignoring file.")
+                            if self.nzb_name == 'Manual Run' and file_log_idx is not None:
+                                flog = mylar.MANUAL_PP_STATUS.get('file_log') or []
+                                if len(flog) > file_log_idx:
+                                    flog[file_log_idx].update({'status': 'crc_failed', 'reason': condition_check.get('quality', 'CRC check failed')})
+                                    mylar.MANUAL_PP_STATUS['file_log'] = flog
                             continue
                     else:
                         logger.warn(f"Could not find file {full_filename}.  Skipping condition check.")
+                        if self.nzb_name == 'Manual Run' and file_log_idx is not None:
+                            flog = mylar.MANUAL_PP_STATUS.get('file_log') or []
+                            if len(flog) > file_log_idx:
+                                flog[file_log_idx].update({'status': 'skipped', 'reason': 'File not found'})
+                                mylar.MANUAL_PP_STATUS['file_log'] = flog
+                            continue
 
                     self.matched = False
                     as_d = filechecker.FileChecker()
@@ -846,6 +883,13 @@ class PostProcessor(object):
                                         tmp_oneoff['ComicLocation'] = clocation
 
                             if tmp_manual_list:
+                                if self.nzb_name == 'Manual Run' and file_log_idx is not None:
+                                    tmp_manual_list['file_log_index'] = file_log_idx
+                                    flog = mylar.MANUAL_PP_STATUS.get('file_log') or []
+                                    if len(flog) > file_log_idx:
+                                        flog[file_log_idx].update({'status': 'sent', 'reason': ''})
+                                        mylar.MANUAL_PP_STATUS['file_log'] = flog
+                                    matched_this_file = True
                                 manual_list.append(tmp_manual_list)
                             elif tmp_the_arc:
                                 manual_arclist.append(tmp_the_arc)
@@ -880,6 +924,8 @@ class PostProcessor(object):
                         #check for Ended status and 100% completion of issues.
                         if wv['ComicPublished'] is None:
                             logger.fdebug('Publication Run cannot be generated - probably due to an incomplete Refresh. Manually refresh the following series and try again: %s (%s)' % (wv['ComicName'], wv['ComicYear']))
+                            if self.nzb_name == 'Manual Run':
+                                current_file_reject_reason = 'Publication data incomplete for series'
                             continue
                         if (wv['Status'] == 'Paused' and any(
                                 [
@@ -901,9 +947,13 @@ class PostProcessor(object):
                                     logger.fdebug('Series is 100%s complete, but specific issue %s matched up to a %s status. Let\'s Go!' % ('%', tmp_iss, dbcheck[0]))
                                 else:
                                     logger.fdebug('Series is 100%s complete, however status is not Wanted (or Snatched), but %s. Set to Wanted for this to post-process on the next run.' % ('%', dbcheck[0]))
+                                    if self.nzb_name == 'Manual Run':
+                                        current_file_reject_reason = 'Series complete; issue not Wanted/Snatched'
                                     continue
                             else:
                                 logger.warn('%s [%s] is either Paused or in an Ended status with 100%s completion. Ignoring for match.' % (wv['ComicName'], wv['ComicYear'], '%'))
+                                if self.nzb_name == 'Manual Run':
+                                    current_file_reject_reason = 'Series Paused or Ended (100% complete)'
                                 continue
                         wv_comicname = wv['ComicName']
                         wv_dynamicname = wv['DynamicComicName']
@@ -1309,6 +1359,8 @@ class PostProcessor(object):
 
                                     if all([second_check is False, cs['WatchValues']['Type'] != 'TPB', cs['WatchValues']['Type'] != 'GN', cs['WatchValues']['Type'] != 'HC', cs['WatchValues']['Type'] != 'One-Shot']):
                                         logger.fdebug('%s %s in filename don\'t match up to what\'s in the dB for %s [%s]. This is a wrong match. Continuing...' % (watchmatch['series_name'], watchmatch['justthedigits'], cs['ComicName'], cs['ComicID']))
+                                        if self.nzb_name == 'Manual Run':
+                                            current_file_reject_reason = 'No match (name/issue)'
                                         continue
 
                                     if any([watch_values['ComicVersion'] is None, watch_values['ComicVersion'] == 'None']):
@@ -1354,6 +1406,8 @@ class PostProcessor(object):
                                             datematch = 'True'
                                         else:
                                             logger.fdebug('%s[ISSUE-VERIFY][Issue Year FAILURE] Issue Year of %s does NOT match the year found in the filename of : %s' % (module, watch_issueyear, watchmatch['issue_year']))
+                                            if self.nzb_name == 'Manual Run':
+                                                current_file_reject_reason = 'Issue year mismatch'
                                             logger.fdebug('%s[ISSUE-VERIFY] Checking against complete date to see if month published could allow for different publication year.' % module)
                                             if issyr is not None:
                                                 if int(issyr) != int(watchmatch['issue_year']):
@@ -1399,24 +1453,36 @@ class PostProcessor(object):
                                             elif 'Special' in isc['ComicName']:
                                                 annualtype = 'Special'
 
-                                        manual_list.append({"ComicLocation":   clocation,
-                                                            "ComicID":         cs['ComicID'],
-                                                            "IssueID":         isc['IssueID'],
-                                                            "IssueNumber":     isc['Issue_Number'],
-                                                            "AnnualType":      annualtype,
-                                                            "ComicName":       cs['ComicName'],
-                                                            "AgeRating":       cs['WatchValues']['AgeRating'],
-                                                            "Series":          watchmatch['series_name'],
-                                                            "SeriesYear":      cs['WatchValues']['SeriesYear'],
-                                                            "AltSeries":       watchmatch['alt_series'],
-                                                            "One-Off":         False,
-                                                            "ForcedMatch":     False})
+                                        ml_entry = {"ComicLocation":   clocation,
+                                                    "ComicID":         cs['ComicID'],
+                                                    "IssueID":         isc['IssueID'],
+                                                    "IssueNumber":     isc['Issue_Number'],
+                                                    "AnnualType":      annualtype,
+                                                    "ComicName":       cs['ComicName'],
+                                                    "AgeRating":       cs['WatchValues']['AgeRating'],
+                                                    "Series":          watchmatch['series_name'],
+                                                    "SeriesYear":      cs['WatchValues']['SeriesYear'],
+                                                    "AltSeries":       watchmatch['alt_series'],
+                                                    "One-Off":         False,
+                                                    "ForcedMatch":     False}
+                                        if self.nzb_name == 'Manual Run' and file_log_idx is not None:
+                                            ml_entry['file_log_index'] = file_log_idx
+                                            flog = mylar.MANUAL_PP_STATUS.get('file_log') or []
+                                            if len(flog) > file_log_idx:
+                                                flog[file_log_idx].update({'status': 'sent', 'reason': ''})
+                                                mylar.MANUAL_PP_STATUS['file_log'] = flog
+                                            matched_this_file = True
+                                        manual_list.append(ml_entry)
                                         break
                                     else:
                                         logger.fdebug('%s[NON-MATCH: %s-%s] Incorrect series - not populating..continuing post-processing' % (module, cs['ComicName'], cs['ComicID']))
+                                        if self.nzb_name == 'Manual Run':
+                                            current_file_reject_reason = current_file_reject_reason or 'No match (year/volume or name)'
                                         continue
                                 else:
                                     logger.fdebug('%s[NON-MATCH: %s-%s] Incorrect series - not populating..continuing post-processing' % (module, cs['ComicName'], cs['ComicID']))
+                                    if self.nzb_name == 'Manual Run':
+                                        current_file_reject_reason = current_file_reject_reason or 'No match (year/volume or name)'
                                     continue
 
                         if datematch == 'True':
@@ -1429,7 +1495,24 @@ class PostProcessor(object):
                             if re.sub('\|', '', xseries) == re.sub('\|', '', xfile):
                                 logger.fdebug('%s[DEFINITIVE-NAME MATCH] Definitive name match exactly to : %s [%s]' % (module, watchmatch['series_name'], cs['ComicID']))
                                 if len(manual_list) > 1:
-                                    manual_list = [item for item in manual_list if all([item['IssueID'] == isc['IssueID'], item['AnnualType'] is not None]) or all([item['IssueID'] == isc['IssueID'], item['ComicLocation'] == clocation]) or all([item['IssueID'] != isc['IssueID'], item['ComicLocation'] != clocation])]
+                                    # When multiple files in the pack match the same issue (e.g. comic + covers), keep the larger file
+                                    try:
+                                        size_current = os.path.getsize(clocation) if os.path.isfile(clocation) else 0
+                                    except (OSError, TypeError):
+                                        size_current = 0
+                                    existing_same_issue = next((item for item in manual_list if item['IssueID'] == isc['IssueID'] and item.get('ComicLocation') != clocation), None)
+                                    if existing_same_issue:
+                                        try:
+                                            size_existing = os.path.getsize(existing_same_issue['ComicLocation']) if os.path.isfile(existing_same_issue.get('ComicLocation') or '') else 0
+                                        except (OSError, TypeError):
+                                            size_existing = 0
+                                        if size_current < size_existing:
+                                            logger.fdebug('%s[PACK-DEDUPE] Same issue has larger file in pack; keeping larger (%s bytes) over current (%s bytes).' % (module, size_existing, size_current))
+                                            manual_list.pop()
+                                        else:
+                                            manual_list = [item for item in manual_list if all([item['IssueID'] == isc['IssueID'], item['AnnualType'] is not None]) or all([item['IssueID'] == isc['IssueID'], item['ComicLocation'] == clocation]) or all([item['IssueID'] != isc['IssueID'], item['ComicLocation'] != clocation])]
+                                    else:
+                                        manual_list = [item for item in manual_list if all([item['IssueID'] == isc['IssueID'], item['AnnualType'] is not None]) or all([item['IssueID'] == isc['IssueID'], item['ComicLocation'] == clocation]) or all([item['IssueID'] != isc['IssueID'], item['ComicLocation'] != clocation])]
                                 self.matched = True
                             else:
                                 continue #break
@@ -1439,6 +1522,12 @@ class PostProcessor(object):
                             break
                         elif self.matched is True:
                             logger.warn('%s[MATCH: %s - %s] We matched by name for this series, but cannot find a corresponding issue number in the series list.' % (module, cs['ComicName'], cs['ComicID']))
+
+                    if self.nzb_name == 'Manual Run' and not matched_this_file and file_log_idx is not None:
+                        flog = mylar.MANUAL_PP_STATUS.get('file_log') or []
+                        if len(flog) > file_log_idx:
+                            flog[file_log_idx].update({'status': 'no_match', 'reason': current_file_reject_reason or 'No match on watchlist'})
+                            mylar.MANUAL_PP_STATUS['file_log'] = flog
 
                     #we should setup for manual post-processing of story-arc issues here
                     #we can also search by ComicID to just grab those particular arcs as an alternative as well (not done)
@@ -2292,6 +2381,7 @@ class PostProcessor(object):
                 issuenumOG = None
                 if len(manual_list) == 0 and len(manual_arclist) == 0:
                     if self.nzb_name == 'Manual Run':
+                        mylar.MANUAL_PP_STATUS.update({'phase': 'done', 'running': False, 'summary': 'No matches for Manual Run.'})
                         logger.info('%s No matches for Manual Run ... exiting.' % module)
                     if mylar.APILOCK is True:
                         mylar.APILOCK = False
@@ -2321,6 +2411,8 @@ class PostProcessor(object):
                         dspcname = None
                         dspcyear = None
                 i = 0
+                if self.nzb_name == 'Manual Run':
+                    mylar.MANUAL_PP_STATUS.update({'phase': 'processing', 'total_matched': len(manual_list)})
 
                 for ml in manual_list:
                     i+=1
@@ -2329,6 +2421,13 @@ class PostProcessor(object):
                     issuenumOG = ml['IssueNumber']
                     dspcname = ml['ComicName']
                     dspcyear = ml['SeriesYear']
+                    if self.nzb_name == 'Manual Run':
+                        current_file = os.path.basename(ml['ComicLocation']) if ml.get('ComicLocation') else ''
+                        mylar.MANUAL_PP_STATUS.update({
+                            'current_index': i, 'current_total': len(manual_list),
+                            'current_comic': dspcname or '', 'current_issue': str(issuenumOG) if issuenumOG else '',
+                            'current_file': current_file
+                        })
                     #check to see if file is still being written to.
                     waiting = True
                     while waiting is True:
@@ -2355,7 +2454,21 @@ class PostProcessor(object):
 
                     if any([dupthis['action'] == "write", dupthis['action'] == 'dupe_src']):
                         stat = ' [%s/%s]' % (i, len(manual_list))
+                        failed_before = self.failed_files
                         self.Process_next(comicid, issueid, issuenumOG, ml, stat)
+                        if self.nzb_name == 'Manual Run':
+                            log_entry = {'comic': dspcname or '', 'issue': str(issuenumOG) if issuenumOG else '', 'result': 'fail' if self.failed_files > failed_before else 'ok'}
+                            log_list = mylar.MANUAL_PP_STATUS.get('log') or []
+                            log_list.append(log_entry)
+                            if len(log_list) > 100:
+                                log_list = log_list[-100:]
+                            mylar.MANUAL_PP_STATUS['log'] = log_list
+                            if ml.get('file_log_index') is not None:
+                                flog = mylar.MANUAL_PP_STATUS.get('file_log') or []
+                                idx = ml['file_log_index']
+                                if len(flog) > idx:
+                                    flog[idx].update({'status': 'ok' if self.failed_files <= failed_before else 'fail', 'reason': '' if self.failed_files <= failed_before else 'Post-processing failed'})
+                                    mylar.MANUAL_PP_STATUS['file_log'] = flog
                         dupthis = None
 
                 m_event = None
@@ -2418,6 +2531,13 @@ class PostProcessor(object):
 
                 if m_event is not None:
                     d_line['event'] = m_event
+
+                if self.nzb_name == 'Manual Run':
+                    mylar.MANUAL_PP_STATUS.update({
+                        'phase': 'done', 'running': False, 'summary': global_line,
+                        'processed': i, 'failed': self.failed_files,
+                        'current_comic': '', 'current_issue': '', 'current_file': ''
+                    })
 
                 mylar.GLOBAL_MESSAGES = d_line
 
@@ -3063,7 +3183,7 @@ class PostProcessor(object):
                 if pcheck == "fail":
                     self._log("Unable to write metadata successfully - check mylar.log file. Attempting to continue without tagging...")
                     logger.fdebug('%s Unable to write metadata successfully - check mylar.log file. Attempting to continue without tagging...' %module)
-                    self.failed_files +=1
+                    # Do not increment failed_files: we continue and complete move/rename/DB update successfully.
                     #we need to set this to the cbz file since not doing it will result in nothing getting moved.
                     #not sure how to do this atm
                 elif any([pcheck == "unrar error", pcheck == "corrupt"]):

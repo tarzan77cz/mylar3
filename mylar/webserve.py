@@ -749,9 +749,14 @@ class WebInterface(object):
 
         #let's cheat. :)
         #comicskip = myDB.select('SELECT * from comics order by ComicSortName COLLATE NOCASE')
-        skipno = len(mylar.COMICSORT['SortOrder'])
-        lastno = mylar.COMICSORT['LastOrderNo']
-        lastid = mylar.COMICSORT['LastOrderID']
+        sort_order = []
+        if mylar.COMICSORT:
+            so = mylar.COMICSORT.get('SortOrder')
+            if so is not None and isinstance(so, list):
+                sort_order = so
+        skipno = len(sort_order)
+        lastno = mylar.COMICSORT.get('LastOrderNo') if mylar.COMICSORT else None
+        lastid = mylar.COMICSORT.get('LastOrderID') if mylar.COMICSORT else None
         series = {}
 
         if skipno == 0:
@@ -761,14 +766,14 @@ class WebInterface(object):
             series['Next'] = None
         i = 0
         try:
-            cskip = mylar.COMICSORT['SortOrder'][0]
-        except Exception:
+            cskip = sort_order[0]
+        except (IndexError, TypeError):
             series['Current'] = None
             series['Previous'] = None
             series['Next'] = None
         else:
             while (i < skipno):
-                cskip = mylar.COMICSORT['SortOrder'][i]
+                cskip = sort_order[i]
                 if cskip['ComicID'] == ComicID:
                     cursortnum = cskip['ComicOrder']
                     series['Current'] = cskip['ComicID']
@@ -776,17 +781,17 @@ class WebInterface(object):
                         # if first record, set the Previous record to the LAST record.
                         previous = lastid
                     else:
-                        previous = mylar.COMICSORT['SortOrder'][i -1]['ComicID']
+                        previous = sort_order[i - 1]['ComicID']
 
                     # if last record, set the Next record to the FIRST record.
                     if cursortnum == lastno:
-                        next = mylar.COMICSORT['SortOrder'][0]['ComicID']
+                        next = sort_order[0]['ComicID']
                     else:
-                        next = mylar.COMICSORT['SortOrder'][i +1]['ComicID']
+                        next = sort_order[i + 1]['ComicID']
                     series['Previous'] = previous
                     series['Next'] = next
                     break
-                i+=1
+                i += 1
 
         if mylar.CONFIG.DEFAULT_DATES == 'store_date':
             default_dates = 'Show Store Date'
@@ -2023,6 +2028,11 @@ class WebInterface(object):
         if not failed:
             PostProcess = PostProcessor.PostProcessor(nzb_name, nzb_folder, queue=queue)
             if nzb_name == 'Manual Run' or nzb_name == 'Manual+Run':
+                mylar.MANUAL_PP_STATUS.update({
+                    'running': True, 'phase': 'scanning', 'summary': '', 'log': [], 'file_log': [],
+                    'total_files': 0, 'total_matched': 0, 'current_index': 0, 'current_total': 0,
+                    'current_comic': '', 'current_issue': '', 'current_file': '', 'processed': 0, 'failed': 0
+                })
                 threading.Thread(target=PostProcess.Process).start()
             else:
                 thread_ = threading.Thread(target=PostProcess.Process, name="Post-Processing")
@@ -2095,6 +2105,23 @@ class WebInterface(object):
                     break
         return
     post_process.exposed = True
+
+    def manual_pp_status(self):
+        """Return current manual post-processing status for UI feedback."""
+        default = {'running': False, 'phase': 'idle', 'total_files': 0, 'total_matched': 0,
+                   'current_index': 0, 'current_total': 0, 'current_comic': '', 'current_issue': '',
+                   'current_file': '', 'log': [], 'file_log': [], 'summary': '', 'processed': 0, 'failed': 0}
+        status = getattr(mylar, 'MANUAL_PP_STATUS', None)
+        if not status or not isinstance(status, dict):
+            return json.dumps(default)
+        out = dict(default)
+        out.update((k, status[k]) for k in default if k in status)
+        if 'log' in status and isinstance(status['log'], list):
+            out['log'] = list(status['log'])
+        if 'file_log' in status and isinstance(status['file_log'], list):
+            out['file_log'] = list(status['file_log'])
+        return json.dumps(out)
+    manual_pp_status.exposed = True
 
     def pauseSeries(self, ComicID):
         logger.info("Pausing comic: " + ComicID)
