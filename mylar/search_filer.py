@@ -581,21 +581,23 @@ class search_check(object):
                 ' is not necessary: %s' % cleantitle
             )
         # only send it to parser if it's not a DDL + pack (already parsed)
-        if pack is True and 'DDL' in entry['site']:
+        if pack is True and 'DDL' in entry.get('site', ''):
             logger.fdebug('parsing pack...')
+            # DDL entries may have 'series' or only 'title' depending on source
+            series_name = entry.get('series') or entry.get('title') or thisentry
             ffc = filechecker.FileChecker()
-            dnr = ffc.dynamic_replace(entry['series'])
-            parsed_comic = {'booktype': entry['gc_booktype'],
-                            'comicfilename': entry['filename'],
-                            'series_name': entry['series'],
-                            'series_name_decoded': entry['series'],
+            dnr = ffc.dynamic_replace(series_name)
+            parsed_comic = {'booktype': entry.get('gc_booktype', 'issue'),
+                            'comicfilename': entry.get('filename') or series_name,
+                            'series_name': series_name,
+                            'series_name_decoded': series_name,
                             'issueid': None,
                             'dynamic_name': dnr['mod_seriesname'],
-                            'issues': entry['issues'],
+                            'issues': entry.get('issues'),
                             'series_volume': None,
                             'alt_series': None,
                             'alt_issue': None,
-                            'issue_year': entry['year'],
+                            'issue_year': entry.get('year'),
                             'issue_number': None,
                             'scangroup': None,
                             'reading_order': None,

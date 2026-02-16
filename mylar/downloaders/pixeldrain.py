@@ -40,7 +40,7 @@ class PixelDrain(object):
                 'https': mylar.CONFIG.HTTPS_PROXY
             })
 
-    def ddl_download(self, link, id, issueid):
+    def ddl_download(self, link, id, issueid, resume=None, remote_filesize=0):
         self.id = id
         self.url = link
         if self.dl_location is not None and not os.path.isdir(
@@ -110,9 +110,9 @@ class PixelDrain(object):
         logger.fdebug(file_info)
 
         logger.fdebug('[PixelDrain] now threading the send')
-        return self.pixel_ddl(file_id, file_info, issueid)
+        return self.pixel_ddl(file_id, file_info, issueid, resume=resume)
 
-    def pixel_ddl(self, file_id, fileinfo, issueid):
+    def pixel_ddl(self, file_id, fileinfo, issueid, resume=None):
         filename = fileinfo['filename']
         file, ext = os.path.splitext(os.path.basename( filename ) )
         filename = '%s[__%s__]%s' % (file, issueid, ext)
@@ -127,21 +127,74 @@ class PixelDrain(object):
             {'id': self.id},
         )
 
+        chunk_size = 1048576  # 1MB chunks for better performance
+        flush_interval = 1048576  # Flush every 1MB to keep file modification time updated for watchdog
+        request_headers = dict(self.headers)
+        if resume and int(resume) > 0:
+            request_headers['Range'] = 'bytes=%d-' % int(resume)
+            logger.info('[PixelDrain] Resuming from byte %s' % resume)
+        open_mode = 'ab' if (resume and int(resume) > 0) else 'wb'
+
         try:
             response = self.session.get(
                     'https://pixeldrain.com/api/file/'+file_id,
                     verify=True,
-                    headers=self.headers,
+                    headers=request_headers,
                     stream=True,
                     timeout=(30,30)
                 )
 
+            if resume and int(resume) > 0:
+                if response.status_code == 200:
+                    response.close()
+                    logger.warn('[PixelDrain] Server returned 200 (Range not supported). Restarting from 0.')
+                    try:
+                        if os.path.isfile(filepath):
+                            os.remove(filepath)
+                    except OSError:
+                        pass
+                    request_headers.pop('Range', None)
+                    response = self.session.get(
+                        'https://pixeldrain.com/api/file/'+file_id,
+                        verify=True,
+                        headers=request_headers,
+                        stream=True,
+                        timeout=(30,30)
+                    )
+                    open_mode = 'wb'
+                elif response.status_code == 416:
+                    response.close()
+                    logger.warn('[PixelDrain] Server returned 416 Range Not Satisfiable. Restarting from 0.')
+                    try:
+                        if os.path.isfile(filepath):
+                            os.remove(filepath)
+                    except OSError:
+                        pass
+                    request_headers.pop('Range', None)
+                    response = self.session.get(
+                        'https://pixeldrain.com/api/file/'+file_id,
+                        verify=True,
+                        headers=request_headers,
+                        stream=True,
+                        timeout=(30,30)
+                    )
+                    open_mode = 'wb'
+                elif response.status_code != 206:
+                    response.close()
+                    logger.warn('[PixelDrain] Unexpected status %s for resume. Failing.' % response.status_code)
+                    return {"success": False, "filename": filename, "path": None, "link_type_failure": 'GC-Pixel'}
+
             logger.fdebug('[PixelDrain] now writing....')
-            with open(filepath, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=1024):
+            with open(filepath, open_mode) as f:
+                bytes_written = 0
+                for chunk in response.iter_content(chunk_size=chunk_size):
                     if chunk:
                         f.write(chunk)
-                        f.flush()
+                        bytes_written += len(chunk)
+                        if bytes_written >= flush_interval:
+                            f.flush()
+                            bytes_written = 0
+                f.flush()
 
         except Exception as e:
             logger.warn('[PixelDrain][ERROR] %s' % e)

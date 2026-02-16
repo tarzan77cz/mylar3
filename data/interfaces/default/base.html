@@ -26,6 +26,22 @@
 	
 	<script src="js/libs/modernizr-2.8.3.min.js"></script>
 	<script src="js/libs/jquery-1.7.2.min.js"></script>
+	<script>
+		// Suppress alert/confirm popups; log to console instead (no dialogs)
+		(function(){
+			window.alert = function(msg) {
+				if (typeof console !== 'undefined' && console.error) {
+					console.error('[Mylar]', msg);
+				}
+			};
+			window.confirm = function(msg) {
+				if (typeof console !== 'undefined' && console.warn) {
+					console.warn('[Mylar confirm]', msg);
+				}
+				return true;
+			};
+		})();
+	</script>
 </head>
 <body>
         <%
@@ -247,7 +263,7 @@
                 } else {
                     if (document.getElementById("page_name").value != 'series_detail' && data.comicid != cid && data.status != 'mid-message-event') {
                         console.log('addbyid:'+data.status, data.comicid, data.table, data.message);
-                        $('#ajaxMsg').removeClass();
+                        $('#ajaxMsg').stop(true, true).removeClass();
                         var dspline = '</br></br><input type="button" value="View Series" onclick="location.href=\'comicDetails?ComicID='+data.comicid+'\';"/>';
                         $('#ajaxMsg').html("<div class='msg'>"+data.message+dspline+"</div>");
                         $('#ajaxMsg').addClass('success').fadeIn().delay(5000).fadeOut();
@@ -255,7 +271,7 @@
                             title_loadings(data.comicname, data.seriesyear, data.comicid, data.message);
                         }
                     } else if (data.status != 'mid-message-event'){
-                        $('#ajaxMsg').removeClass();
+                        $('#ajaxMsg').stop(true, true).removeClass();
                         $('#ajaxMsg').html("<div class='msg'>"+data.message+"</div>");
                         $('#ajaxMsg').addClass('success').fadeIn().delay(5000).fadeOut();
                         if (data.comicname != null || data.comicname != 'None'){
@@ -270,7 +286,7 @@
             if (e.data){
                 var data = JSON.parse(e.data);
                 console.log('scheduler:'+data.status,data.message);
-                $('#ajaxMsg').removeClass();
+                $('#ajaxMsg').stop(true, true).removeClass();
                 $('#ajaxMsg').html("<div class='msg'>"+data.message+"</div>");
                 if (data.status == 'success'){
                     $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
@@ -354,7 +370,7 @@
                     var data = JSON.parse(e.data);
                     console.log(data.status, data.comicid, data.tables, data.message);
                     if (data.status != 'mid-message-event'){
-                        $('#ajaxMsg').removeClass();
+                        $('#ajaxMsg').stop(true, true).removeClass();
                         $('#ajaxMsg').html("<div class='msg'><center>"+data.message+"</center></div>");
                     }
                     var cid = retrieve_comicid();
@@ -574,7 +590,7 @@
                  data: { session_id:  "${mylar.SESSION_ID}" },
                  success: function(response) {
                     obj = JSON.parse(response);
-                    $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+obj['message']+"</div>");
+                    $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+obj['message']+"</div>");
                     if (obj['status'] == 'success'){
                         $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
                     } else {

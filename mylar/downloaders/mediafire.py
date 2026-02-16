@@ -40,7 +40,7 @@ class MediaFire(object):
             if m:
                 return m.groups()[0]
 
-    def ddl_download(self, url, id, issueid):
+    def ddl_download(self, url, id, issueid, resume=None, partial_filename=None, remote_filesize=0):
         url_origin = url
 
         while True:
@@ -53,7 +53,7 @@ class MediaFire(object):
                 )
 
             if 'Content-Disposition' in t.headers:
-                # This is the file
+                # This is the file - final_url is where we can download from
                 break
 
             # Need to redirect with confiramtion
@@ -63,22 +63,30 @@ class MediaFire(object):
                 #link no longer valid
                 return {"success": False, "filename": None, "path": None, "link_type_failure": 'GC-Media'}
 
-        m = re.search(
-            'filename="(.*)"', t.headers['Content-Disposition']
-        )
-        filename = m.groups()[0]
-        filename = filename.encode('iso8859').decode('utf-8')
-
-        file, ext = os.path.splitext(filename)
-        filename = '%s[__%s__]%s' % (file, issueid, ext)
-
-        try:
-            filesize = int(t.headers['Content-Length'])
-        except Exception:
-            filesize = 0
-
-        fileinfo = {'filename': filename,
-                    'filesize': filesize}
+        final_url = t.url
+        if resume and partial_filename:
+            t.close()
+            try:
+                filesize = int(t.headers.get('Content-Length', 0) or remote_filesize)
+            except Exception:
+                filesize = int(remote_filesize) if remote_filesize else 0
+            filename = partial_filename
+            fileinfo = {'filename': filename, 'filesize': filesize}
+        else:
+            m = re.search(
+                'filename="(.*)"', t.headers['Content-Disposition']
+            )
+            filename = m.groups()[0]
+            filename = filename.encode('iso8859').decode('utf-8')
+            file, ext = os.path.splitext(filename)
+            filename = '%s[__%s__]%s' % (file, issueid, ext)
+            try:
+                filesize = int(t.headers['Content-Length'])
+            except Exception:
+                filesize = 0
+            fileinfo = {'filename': filename, 'filesize': filesize}
+            if not resume:
+                t.close()
 
         logger.fdebug('Downloading...')
         logger.fdebug('%s [%s bytes]' % (filename, filesize))
@@ -86,40 +94,92 @@ class MediaFire(object):
         logger.fdebug('To: %s' % os.path.join(self.dl_location, filename))
 
         myDB = db.DBConnection()
-        ## write the filename to the db for tracking purposes...
         logger.fdebug('[Writing to db: %s' % (filename))
         myDB.upsert(
             'ddl_info',
             {'filename': str(filename), 'remote_filesize': str(filesize), 'size': helpers.human_size(filesize)},
             {'id': id},
         )
-        return self.mediafire_dl(url, id, fileinfo, issueid)
+        return self.mediafire_dl(final_url, id, fileinfo, issueid, resume=resume)
 
-    def mediafire_dl(self, url, id, fileinfo, issueid):
+    def mediafire_dl(self, url, id, fileinfo, issueid, resume=None):
         filepath = os.path.join(self.dl_location, fileinfo['filename'])
 
         myDB = db.DBConnection()
         myDB.upsert(
             'ddl_info',
-            {'tmp_filename': fileinfo['filename']},  # tmp_filename should be all that's needed to be updated at this point...
+            {'tmp_filename': fileinfo['filename']},
             {'id': id},
         )
+
+        chunk_size = 1048576  # 1MB chunks for better performance
+        flush_interval = 1048576  # Flush every 1MB to keep file modification time updated for watchdog
+        request_headers = dict(self.headers)
+        if resume and int(resume) > 0:
+            request_headers['Range'] = 'bytes=%d-' % int(resume)
+            logger.info('[MediaFire] Resuming from byte %s' % resume)
+        open_mode = 'ab' if (resume and int(resume) > 0) else 'wb'
 
         try:
             response = self.session.get(
                     url,
                     verify=True,
-                    headers=self.headers,
+                    headers=request_headers,
                     stream=True,
                     timeout=(30,30)
                 )
 
+            if resume and int(resume) > 0:
+                if response.status_code == 200:
+                    response.close()
+                    logger.warn('[MediaFire] Server returned 200 (Range not supported). Restarting from 0.')
+                    try:
+                        if os.path.isfile(filepath):
+                            os.remove(filepath)
+                    except OSError:
+                        pass
+                    request_headers.pop('Range', None)
+                    response = self.session.get(
+                        url,
+                        verify=True,
+                        headers=request_headers,
+                        stream=True,
+                        timeout=(30,30)
+                    )
+                    open_mode = 'wb'
+                elif response.status_code == 416:
+                    response.close()
+                    logger.warn('[MediaFire] Server returned 416 Range Not Satisfiable. Restarting from 0.')
+                    try:
+                        if os.path.isfile(filepath):
+                            os.remove(filepath)
+                    except OSError:
+                        pass
+                    request_headers.pop('Range', None)
+                    response = self.session.get(
+                        url,
+                        verify=True,
+                        headers=request_headers,
+                        stream=True,
+                        timeout=(30,30)
+                    )
+                    open_mode = 'wb'
+                elif response.status_code != 206:
+                    response.close()
+                    logger.warn('[MediaFire] Unexpected status %s for resume. Failing.' % response.status_code)
+                    return {"success": False, "filename": fileinfo['filename'], "path": None, "link_type_failure": 'GC-Media'}
+
             logger.fdebug('[MediaFire] now writing....')
-            with open(filepath, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=4096):
+            with open(filepath, open_mode) as f:
+                bytes_written = 0
+                for chunk in response.iter_content(chunk_size=chunk_size):
                     if chunk:
                         f.write(chunk)
-                        f.flush()
+                        bytes_written += len(chunk)
+                        if bytes_written >= flush_interval:
+                            f.flush()
+                            bytes_written = 0
+                f.flush()
 
         except Exception as e:
             logger.fdebug('[MediaFire][ERROR] %s' % e)
@@ -130,7 +190,7 @@ class MediaFire(object):
         try:
             filesize = os.stat(filepath).st_size
         except FileNotFoundError:
-            return {"success": false, "filenme": None, "path": None}
+            return {"success": False, "filename": None, "path": None}
         else:
             logger.fdebug('[MediaFire] download completed - downloaded %s / %s' % (filesize, fileinfo['filesize']))
 

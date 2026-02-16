@@ -529,10 +529,14 @@
                         if (!running && manual_pp_poll_interval) {
                             clearInterval(manual_pp_poll_interval);
                             manual_pp_poll_interval = null;
+                            $('#manual_process').prop('disabled', false);
                         }
                     });
                 }
                 $('#manual_process').click(function () {
+                    var btn = $('#manual_process');
+                    if (btn.prop('disabled')) return;
+                    btn.prop('disabled', true);
                     var imagechk = document.getElementById("manualpp_statusicon");
                     var statuschk = document.getElementById("manual_status");
                     var nzb_folder = document.getElementById("nzb_folder");
@@ -541,10 +545,30 @@
                         function(data){
                             if (data.error != undefined) {
                                 alert(data.error);
+                                btn.prop('disabled', false);
                                 return;
                             }
-                            var obj = JSON.parse(data);
-                            $('#ajaxMsg').removeClass();
+                            var obj;
+                            if (typeof data === 'object' && data !== null) {
+                                obj = data;
+                            } else {
+                                var str = typeof data === 'string' ? data : String(data);
+                                try {
+                                    obj = JSON.parse(str);
+                                } catch (e) {
+                                    var start = str.indexOf('{');
+                                    if (start !== -1) {
+                                        var depth = 0, end = -1;
+                                        for (var i = start; i < str.length; i++) {
+                                            if (str[i] === '{') depth++;
+                                            else if (str[i] === '}') { depth--; if (depth === 0) { end = i; break; } }
+                                        }
+                                        if (end !== -1) obj = JSON.parse(str.substring(start, end + 1));
+                                    }
+                                    if (!obj) { console.error('post_process parse error:', e); btn.prop('disabled', false); return; }
+                                }
+                            }
+                            $('#ajaxMsg').stop(true, true).removeClass();
                             if (obj['status'] == 'success'){
                                 imagechk.src = "";
                                 imagechk.src = "images/success.png";
@@ -552,7 +576,7 @@
                                 statuschk.innerHTML = obj['message'];
                                 varlength = 135 - obj['message'].length;
                                 nzb_folder.setAttribute("size", varlength);
-                                $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+obj['message']+"</div>");
+                                $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+obj['message']+"</div>");
                                 $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
                                 $('#manual_pp_feedback').show();
                                 $('#manual_pp_phase').text('Starting...');
@@ -564,18 +588,42 @@
                                 if (manual_pp_poll_interval) clearInterval(manual_pp_poll_interval);
                                 manual_pp_poll_interval = setInterval(update_manual_pp_feedback, 1500);
                                 update_manual_pp_feedback();
+                            } else if (obj['status'] == 'IN PROGRESS') {
+                                imagechk.src = "";
+                                imagechk.src = "images/x_red.png";
+                                imagechk.style.visibility = "visible";
+                                statuschk.innerHTML = obj['message'];
+                                $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+obj['message']+"</div>");
+                                $('#ajaxMsg').addClass('error').fadeIn().delay(3000).fadeOut();
+                                $('#manual_pp_feedback').show();
+                                $('#manual_pp_phase').text('Running...');
+                                if (manual_pp_poll_interval) clearInterval(manual_pp_poll_interval);
+                                manual_pp_poll_interval = setInterval(update_manual_pp_feedback, 1500);
+                                update_manual_pp_feedback();
                             } else {
                                 imagechk.src = "";
                                 imagechk.src = "images/x_red.png";
                                 imagechk.style.visibility = "visible";
                                 statuschk.innerHTML = obj['message'];
-                                $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+obj['message']+"</div>");
+                                $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+obj['message']+"</div>");
                                 $('#ajaxMsg').addClass('error').fadeIn().delay(3000).fadeOut();
+                                btn.prop('disabled', false);
                             }
                     });
                 });
 
                 jQuery( "#tabs" ).tabs();
+                $.get("manual_pp_status", function(data) {
+                    var s;
+                    try { s = typeof data === 'string' ? JSON.parse(data) : data; } catch (e) { return; }
+                    if (s.running === true) {
+                        $('#manual_process').prop('disabled', true);
+                        $('#manual_pp_feedback').show();
+                        if (manual_pp_poll_interval) clearInterval(manual_pp_poll_interval);
+                        manual_pp_poll_interval = setInterval(update_manual_pp_feedback, 1500);
+                        update_manual_pp_feedback();
+                    }
+                });
 		initActions();
                 startTime();
 	};

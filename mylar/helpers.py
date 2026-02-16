@@ -2920,7 +2920,7 @@ def ddl_watchdog():
             if downloading_items:
                 for downloading_item in downloading_items:
                     try:
-                        filename = downloading_item['filename']
+                        filename = downloading_item.get('tmp_filename') or downloading_item.get('filename')
                         try:
                             remote_filesize_str = downloading_item['remote_filesize']
                         except (KeyError, TypeError):
@@ -3019,8 +3019,9 @@ def ddl_watchdog():
                         else:
                             # File doesn't exist but status is Downloading - check if it's stuck
                             # Pack: zip may have been extracted and deleted - if extracted folder exists, mark Completed
+                            # sqlite3.Row does not support .get(); use bracket access
                             try:
-                                is_pack = downloading_item.get('pack') in (1, True, '1')
+                                is_pack = downloading_item['pack'] in (1, True, '1')
                             except (KeyError, TypeError):
                                 is_pack = False
                             if is_pack and filename and str(filename).lower().endswith('.zip') and mylar.CONFIG.DDL_LOCATION:
@@ -3145,9 +3146,9 @@ def ddl_watchdog():
                 
                 if downloading_item:
                     # Check if file exists and get its size
-                    # sqlite3.Row doesn't support .get(), use dictionary access with try/except
+                    # Use tmp_filename (actual file during download) with fallback to filename
                     try:
-                        filename = downloading_item['filename']
+                        filename = downloading_item.get('tmp_filename') or downloading_item.get('filename')
                     except (KeyError, TypeError):
                         filename = None
                     if filename and mylar.CONFIG.DDL_LOCATION:
@@ -3212,8 +3213,9 @@ def ddl_watchdog():
                         else:
                             # File doesn't exist but status is Downloading - might be stuck
                             # Pack: zip may have been extracted and deleted - if extracted folder exists, mark Completed
+                            # sqlite3.Row does not support .get(); use bracket access
                             try:
-                                is_pack = downloading_item.get('pack') in (1, True, '1')
+                                is_pack = downloading_item['pack'] in (1, True, '1')
                             except (KeyError, TypeError):
                                 is_pack = False
                             if is_pack and filename and str(filename).lower().endswith('.zip') and mylar.CONFIG.DDL_LOCATION:
@@ -3323,13 +3325,13 @@ def ddl_load_queued_items():
                     except (KeyError, TypeError):
                         remote_filesize = 0
                     
-                    # Auto-resume: use partial file if DDL_AUTORESUME and GetComics link with existing partial
+                    # Auto-resume: use partial file if DDL_AUTORESUME and provider supports resume
                     resume = None
                     if (mylar.CONFIG.DDL_AUTORESUME and mylar.CONFIG.DDL_LOCATION):
                         try:
                             lt = item['link_type']
-                            fn = item['filename']
-                            if lt in (None, 'GC-Main', 'GC-Mirror') and fn:
+                            fn = item.get('tmp_filename') or item.get('filename')
+                            if lt in (None, 'GC-Main', 'GC-Mirror', 'GC-Pixel', 'GC-Media') and fn:
                                 fp = os.path.join(mylar.CONFIG.DDL_LOCATION, fn)
                                 size = os.stat(fp).st_size
                                 if size > 0:
@@ -3350,6 +3352,7 @@ def ddl_load_queued_items():
                         'id': item['id'],
                         'link_type': item['link_type'],
                         'filename': item['filename'],
+                        'tmp_filename': item.get('tmp_filename'),
                         'comicinfo': None,
                         'packinfo': None,
                         'site': item['site'],
@@ -3460,10 +3463,10 @@ def ddl_downloader(queue):
                     ddzstat = meganz.ddl_download(item['link'], None, item['id'], item['issueid'], item['link_type']) #item['filename'], item['id'])
                 elif item['link_type'] == 'GC-Media':
                     mediaf = mediafire.MediaFire()
-                    ddzstat = mediaf.ddl_download(item['link'], item['id'], item['issueid']) #item['filename'], item['id'])
+                    ddzstat = mediaf.ddl_download(item['link'], item['id'], item['issueid'], resume=item.get('resume'), partial_filename=(item.get('tmp_filename') or item.get('filename')), remote_filesize=remote_filesize)
                 elif item['link_type'] == 'GC-Pixel':
                     pdrain = pixeldrain.PixelDrain()
-                    ddzstat = pdrain.ddl_download(item['link'], item['id'], item['issueid']) #item['filename'], item['id'])
+                    ddzstat = pdrain.ddl_download(item['link'], item['id'], item['issueid'], resume=item.get('resume'), remote_filesize=remote_filesize)
                 else:
                     # Unknown link_type - mark as failed
                     logger.warn('[DDL-DOWNLOADER] Unknown link_type: %s for item %s. Marking as failed.' % (item['link_type'], item['id']))
@@ -3697,13 +3700,17 @@ def ddl_downloader(queue):
                                 except (KeyError, TypeError):
                                     remote_filesize = 0
                                 
-                                # Auto-resume: use partial file if DDL_AUTORESUME and GetComics link with existing partial
+                                # Auto-resume: use partial file if DDL_AUTORESUME and provider supports resume
                                 resume = None
                                 if (mylar.CONFIG.DDL_AUTORESUME and mylar.CONFIG.DDL_LOCATION):
                                     try:
                                         lt = db_item['link_type']
-                                        fn = db_item['filename']
-                                        if lt in (None, 'GC-Main', 'GC-Mirror') and fn:
+                                        # sqlite3.Row has no .get(); use bracket access
+                                        try:
+                                            fn = db_item['tmp_filename'] or db_item['filename']
+                                        except (KeyError, TypeError):
+                                            fn = db_item['filename'] if 'filename' in db_item.keys() else None
+                                        if lt in (None, 'GC-Main', 'GC-Mirror', 'GC-Pixel', 'GC-Media') and fn:
                                             fp = os.path.join(mylar.CONFIG.DDL_LOCATION, fn)
                                             size = os.stat(fp).st_size
                                             if size > 0:
@@ -3712,6 +3719,11 @@ def ddl_downloader(queue):
                                     except (OSError, TypeError, KeyError):
                                         pass
                                 
+                                # sqlite3.Row has no .get(); use bracket access for optional column
+                                try:
+                                    tmp_fn = db_item['tmp_filename']
+                                except (KeyError, TypeError):
+                                    tmp_fn = None
                                 queue_item = {
                                     'link': db_item['link'],
                                     'mainlink': db_item['mainlink'],
@@ -3724,6 +3736,7 @@ def ddl_downloader(queue):
                                     'id': db_item['id'],
                                     'link_type': db_item['link_type'],
                                     'filename': db_item['filename'],
+                                    'tmp_filename': tmp_fn,
                                     'comicinfo': None,
                                     'packinfo': None,
                                     'site': db_item['site'],
@@ -5414,6 +5427,9 @@ def check_file_condition(file_path):
     """
     if not os.path.isfile(file_path):
         return {'status': True, 'type' : 'unknown', 'quality': 'Asked to check something that does not exist or is a diretory.  Passing it for now.'}
+
+    if not mylar.CONFIG.CHECK_CBR_INTEGRITY:
+        return {'status': True, 'type': 'unknown', 'quality': 'Integrity check disabled by config.'}
 
     logger.fdebug(f'Checking file condition of {file_path}')
 

@@ -260,13 +260,19 @@
                  data: { action: action, issueids: checkboxesChecked },
                  success: function(response) {
                     obj = JSON.parse(response);
+                    $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+obj['message']+"</div>");
+                    if (obj['status'] == 'success'){
+                        $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
+                    } else {
+                        $('#ajaxMsg').addClass('error').fadeIn().delay(3000).fadeOut();
+                    }
                  },
                  error: function(data)
                      {
                        alert('ERROR'+data.responseText);
                      },
             })).done(function(data) {
-                 //reload_table();
+                 reload_table();
             });
         }
 

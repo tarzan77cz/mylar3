@@ -142,7 +142,7 @@
                 success: function (data) {
                    var obj = JSON.parse(data);
                    if (obj['status'] == 'success'){
-                       $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+obj['message']+"</div>");
+                       $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+obj['message']+"</div>");
                        $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
                    }
                 }
@@ -164,26 +164,26 @@
                    var obj = JSON.parse(data);
                    if ( !isNaN(all) ) {
                        if (data.error != undefined) {
-                           $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>Unable to delete specific log file</div>");
+                           $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>Unable to delete specific log file</div>");
                            $('#ajaxMsg').addClass('failure').fadeIn().delay(3000).fadeOut();
                        } else if ( obj['status'].indexOf("success") > -1 )  {
-                           $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>Successfully deleted log file</div>");
+                           $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>Successfully deleted log file</div>");
                            $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
                        } else {
-                           $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>Unable to delete specific log file</div>");
+                           $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>Unable to delete specific log file</div>");
                            $('#ajaxMsg').addClass('failure').fadeIn().delay(3000).fadeOut();
                        }
                    } else {
                        if (data.error != undefined) {
-                           $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>Unable to delete log files</div>");
+                           $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>Unable to delete log files</div>");
                            $('#ajaxMsg').addClass('failure').fadeIn().delay(3000).fadeOut();
                        } else if ( obj['status'].indexOf("success") > -1 )  {
                            $("#deleteConfirm").dialog("close");
                            $("#deleteConfirm").dialog('destroy').empty();
-                           $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>Successfully deleted log files</div>");
+                           $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>Successfully deleted log files</div>");
                            $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
                        } else {
-                           $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>Unable to delete log files</div>");
+                           $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>Unable to delete log files</div>");
                            $('#ajaxMsg').addClass('failure').fadeIn().delay(3000).fadeOut();
                        }
                    }

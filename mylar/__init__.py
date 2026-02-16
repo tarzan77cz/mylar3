@@ -174,6 +174,7 @@ COMMITS_BEHIND = None
 LOCAL_IP = None
 DOWNLOAD_APIKEY = None
 APILOCK = False
+MANUAL_PP_LOCK = False
 SEARCHLOCK = False
 DDL_LOCK = False
 DDL_ABORT_REQUESTED = False  # Set by Abort action; download loop checks this and stops

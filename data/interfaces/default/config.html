@@ -1883,7 +1883,7 @@
 
         function unblocktheProvider(i){
                 site = blocklist[i].provider;
-                $('#ajaxMsg').removeClass();
+                $('#ajaxMsg').stop(true, true).removeClass();
                 $.get("unblock_provider",
                        { site: site },
                        function(data) {
@@ -2788,7 +2788,7 @@ $("#enable_airdcpp").click(function(){
                                 return;
                             }
                             var obj = JSON.parse(data);
-                            $('#ajaxMsg').removeClass();
+                            $('#ajaxMsg').stop(true, true).removeClass();
                             $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+obj['status']+"</div>");
                             if ( obj['status'].indexOf("Successfully") > -1){
                                 imagechk.style.visibility = "hidden";
@@ -2814,7 +2814,7 @@ $("#enable_airdcpp").click(function(){
                             inkd = toNumber(numberWithCommas(inkd));
                             $('#status32p').val(obj['status']);
                             $('#inkdrops32p span').text('Inkdrops Available: '+inkd);
-                            $('#ajaxMsg').removeClass();
+                            $('#ajaxMsg').stop(true, true).removeClass();
                             $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+obj['status']+"</div>");
                             if ( data.indexOf("Successfully") > -1){
                                 imagechk.src = "";
@@ -2847,7 +2847,7 @@ $("#enable_airdcpp").click(function(){
                             vsab = numberWithDecimals(versionsab);
                             $('#sabstatus').val(obj['message']);
                             $('#sabversion span').text('SABnzbd version: '+versionsab);
-                            $('#ajaxMsg').removeClass();
+                            $('#ajaxMsg').stop(true, true).removeClass();
                             $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+obj['message']+"</div>");
                             if (obj['status']){
                                 imagechk.src = "";
@@ -2883,7 +2883,7 @@ $("#enable_airdcpp").click(function(){
                             var versionairdcpp = obj['version'];
                             $('#airdcppstatus').val(obj['message']);
                             $('#airdcppversion span').text('AirDC++ version: '+versionairdcpp);
-                            $('#ajaxMsg').removeClass();
+                            $('#ajaxMsg').stop(true, true).removeClass();
                             $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+obj['message']+"</div>");
                             if (obj['status']){
                                 imagechk.src = "";
@@ -2914,7 +2914,7 @@ $("#enable_airdcpp").click(function(){
                                 return;
                             }
                             $('#nzbgetstatus').val(data);
-                            $('#ajaxMsg').removeClass();
+                            $('#ajaxMsg').stop(true, true).removeClass();
                             $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+data+"</div>");
                             if ( data.indexOf("Successfully") > -1){
                                 imagechk.src = "";
@@ -3025,7 +3025,7 @@ $("#enable_airdcpp").click(function(){
                                 alert(data.error);
                                 return;
                             }
-                            $('#ajaxMsg').removeClass();
+                            $('#ajaxMsg').stop(true, true).removeClass();
                             $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+data+"</div>");
                             if ( data.indexOf("Successfully") > -1){
                                 imagechk.src = "";
@@ -3060,7 +3060,7 @@ $("#enable_airdcpp").click(function(){
                                 return;
                             }
                             //$('#rtorrentstatus').val(data);
-                            $('#ajaxMsg').removeClass();
+                            $('#ajaxMsg').stop(true, true).removeClass();
                             $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+data+"</div>");
                             if ( data.indexOf("Successfully") > -1){
                                 imagechk.src = "";
@@ -3087,7 +3087,7 @@ $("#enable_airdcpp").click(function(){
                                 alert(data.error);
                                 return;
                             }
-                            $('#ajaxMsg').removeClass();
+                            $('#ajaxMsg').stop(true, true).removeClass();
                             $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+data+"</div>");
                             if ( data.indexOf("Successfully") > -1){
                                 imagechk.src = "";
@@ -3130,7 +3130,7 @@ $("#enable_airdcpp").click(function(){
                                 alert(data.error);
                                 return;
                             }
-                            $('#ajaxMsg').removeClass();
+                            $('#ajaxMsg').stop(true, true).removeClass();
                             $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+data+"</div>");
                             if ( data.indexOf("Successfully") > -1){
                                 imagechk.src = "";
@@ -3160,7 +3160,7 @@ $("#enable_airdcpp").click(function(){
                                 alert(data.error);
                                 return;
                             }
-                            $('#ajaxMsg').removeClass();
+                            $('#ajaxMsg').stop(true, true).removeClass();
                             $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+data+"</div>");
                             if ( data.indexOf("Successfully") > -1){
                                 imagechk.src = "";
@@ -3185,7 +3185,7 @@ $("#enable_airdcpp").click(function(){
                                 alert(data.error);
                                 return;
                             }
-                            $('#ajaxMsg').removeClass();
+                            $('#ajaxMsg').stop(true, true).removeClass();
                             $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+data+"</div>");
                             if ( data.indexOf("Successfully") > -1){
                                 imagechk.src = "";
@@ -3213,7 +3213,7 @@ $("#enable_airdcpp").click(function(){
                                 return;
                             }
                             $('#pushoverstatus').val(data);
-                            $('#ajaxMsg').removeClass();
+                            $('#ajaxMsg').stop(true, true).removeClass();
                             $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+data+"</div>");
                             if ( data.indexOf("Successfully") > -1){
                                 imagechk.src = "";
@@ -3240,7 +3240,7 @@ $("#enable_airdcpp").click(function(){
                                 return;
                             }
                             $('#pushoverstatus').val(data);
-                            $('#ajaxMsg').removeClass();
+                            $('#ajaxMsg').stop(true, true).removeClass();
                             $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+data+"</div>");
                             if ( data.indexOf("Successfully") > -1){
                                imagechk.src = "";
@@ -3267,7 +3267,7 @@ $("#enable_airdcpp").click(function(){
                                 return;
                             }
                             $('#pbstatus').val(data);
-                            $('#ajaxMsg').removeClass();
+                            $('#ajaxMsg').stop(true, true).removeClass();
                             $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+data+"</div>");
                             if ( data.indexOf("Successfully") > -1){
                                imagechk.src = "";
@@ -3294,7 +3294,7 @@ $("#enable_airdcpp").click(function(){
                                 return;
                             }
                             $('#telegramstatus').val(data);
-                            $('#ajaxMsg').removeClass();
+                            $('#ajaxMsg').stop(true, true).removeClass();
                             $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+data+"</div>");
                             if ( data.indexOf("Successfully") > -1){
                                imagechk.src = "";
@@ -3320,7 +3320,7 @@ $("#enable_airdcpp").click(function(){
                                 return;
                             }
                             $('#slackstatus').val(data);
-                            $('#ajaxMsg').removeClass();
+                            $('#ajaxMsg').stop(true, true).removeClass();
                             $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+data+"</div>");
                             if ( data.indexOf("Successfully") > -1){
                                imagechk.src = "";
@@ -3365,7 +3365,7 @@ $("#enable_airdcpp").click(function(){
                                 return;
                             }
                             $('#mattermoststatus').val(data);
-                            $('#ajaxMsg').removeClass();
+                            $('#ajaxMsg').stop(true, true).removeClass();
                             $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+data+"</div>");
                             if ( data.indexOf("Successfully") > -1){
                                imagechk.src = "";
@@ -3391,7 +3391,7 @@ $("#enable_airdcpp").click(function(){
                                 return;
                             }
                             $('#discordstatus').val(data);
-                            $('#ajaxMsg').removeClass();
+                            $('#ajaxMsg').stop(true, true).removeClass();
                             $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+data+"</div>");
                             if ( data.indexOf("Successfully") > -1){
                                imagechk.src = "";
@@ -3423,7 +3423,7 @@ $("#enable_airdcpp").click(function(){
                                 return;
                             }
                             $('#emailstatus').val(data);
-                            $('#ajaxMsg').removeClass();
+                            $('#ajaxMsg').stop(true, true).removeClass();
                             $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+data+"</div>");
                             if ( data.indexOf("Successfully") > -1){
                                imagechk.src = "";
@@ -3450,7 +3450,7 @@ $("#enable_airdcpp").click(function(){
                                 return;
                             }
                             $('#gotifystatus').val(data);
-                            $('#ajaxMsg').removeClass();
+                            $('#ajaxMsg').stop(true, true).removeClass();
                             $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+data+"</div>");
                             if ( data.indexOf("Successfully") > -1){
                                imagechk.src = "";

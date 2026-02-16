@@ -802,7 +802,7 @@
                  data: { comicid: comicid, ReleaseComicID: annualid },
                  success: function(response) {
                     obj = JSON.parse(response);
-                    $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+obj['message']+"</div>");
+                    $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+obj['message']+"</div>");
                     if (obj['status'] == 'success'){
                         $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
                     } else {
@@ -840,19 +840,19 @@
                  data: { action: action, issueids: checkboxesChecked },
                  success: function(response) {
                     obj = JSON.parse(response);
-                    //$('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+obj['message']+"</div>");
-                    //if (obj['status'] == 'success'){
-                    //    $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
-                    //} else {
-                    //    $('#ajaxMsg').addClass('error').fadeIn().delay(3000).fadeOut();
-                    //}
+                    $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+obj['message']+"</div>");
+                    if (obj['status'] == 'success'){
+                        $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
+                    } else {
+                        $('#ajaxMsg').addClass('error').fadeIn().delay(3000).fadeOut();
+                    }
                  },
                  error: function(data)
                      {
                        alert('ERROR'+data.responseText);
                      },
             })).done(function(data) {
-                 //reload_table();
+                 reload_tables();
             });
         }
         function mark_the_annuals(){
@@ -872,7 +872,7 @@
                  data: { action: action, issueids: checkboxesChecked },
                  success: function(response) {
                     obj = JSON.parse(response);
-                    $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+obj['message']+"</div>");
+                    $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+obj['message']+"</div>");
                     if (obj['status'] == 'success'){
                         $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
                     } else {
@@ -895,7 +895,7 @@
                  data: { IssueID: issueid },
                  success: function(response) {
                     obj = JSON.parse(response);
-                    $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+obj['message']+"</div>");
+                    $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+obj['message']+"</div>");
                     if (obj['status'] == 'success'){
                         $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
                     } else {
@@ -924,7 +924,7 @@
                  data: { issueid: issueid },
                  success: function(response) {
                     obj = JSON.parse(response);
-                    $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+obj['message']+"</div>");
+                    $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+obj['message']+"</div>");
                     if (obj['status'] == 'success'){
                         $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
                         shizzlemedown(obj['filepath']);
@@ -946,7 +946,7 @@
                  data: { IssueID: issueid, ComicID: comicid , smode: smode, ReleaseComicID: rlscomicid },
                  success: function(response) {
                     obj = JSON.parse(response);
-                    $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+obj['message']+"</div>");
+                    $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+obj['message']+"</div>");
                     if (obj['status'] == 'success'){
                         $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
                     } else {
@@ -968,7 +968,7 @@
                  data: { IssueID: issueid, ComicID: comicid, ReleaseComicID: rlscomicid },
                  success: function(response) {
                     obj = JSON.parse(response);
-                    $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+obj['message']+"</div>");
+                    $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+obj['message']+"</div>");
                     if (obj['status'] == 'success'){
                         $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
                     } else {
@@ -990,7 +990,7 @@
                  data: { IssueID: issueid, mode: mode, ComicIssue: issuenumber, ComicID: comicid, manualsearch: msearch },
                  success: function(response) {
                     obj = JSON.parse(response);
-                    $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+obj['message']+"</div>");
+                    $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+obj['message']+"</div>");
                     if (obj['status'] == 'success'){
                         $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
                     } else {
@@ -1002,7 +1002,7 @@
                        alert('ERROR'+data.responseText);
                      },
             })).done(function(data) {
-                 //reload_table();
+                 reload_tables();
             });
         }                
 
@@ -1047,16 +1047,15 @@
         }
 
         function manual_rename(comicid){
-              $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>Mass Renaming files for series...</div>");
+              $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>Mass Renaming files for series...</div>");
               $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
-              $('#ajaxMsg').removeClass();
               $.when($.ajax({
                  type: "GET",
                  url: "manualRename",
                  data: { comicid: comicid },
                  success: function(response) {
                     obj = JSON.parse(response);
-                    $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>Successfully renamed series.</div>");
+                    $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>Successfully renamed series.</div>");
                     if (obj['status'] == 'success'){
                         $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
                     } else {
@@ -1111,9 +1110,8 @@
         }
 
         function group_metatag(comicid){
-              $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>Now metatagging complete series...</div>");
+              $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>Now metatagging complete series...</div>");
               $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
-              //$('#ajaxMsg').removeClass();
               $.when($.ajax({
                  type: "GET",
                  url: "group_metatag",
@@ -1132,7 +1130,7 @@
         }
 
         function metatag_the_issues(comicid, tabletype){
-            $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>Now metatagging selected items...</div>");
+            $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>Now metatagging selected items...</div>");
             $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
             if (tabletype == 'issues'){
                 var checks = document.getElementsByName("issueid[]");
@@ -1167,7 +1165,7 @@
         }
 
         function run_single_metatag(issueid, comicid, issuenumber){
-              $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>Now metatagging #"+issuenumber+"...</div>");
+              $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>Now metatagging #"+issuenumber+"...</div>");
               $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
               $.when($.ajax({
                  type: "GET",
@@ -1320,7 +1318,7 @@
 
         function getAvailableDownloads(issueid) {
                 ShowSpinner();
-                $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>Now searching...</div>");
+                $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>Now searching...</div>");
                 $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
                 $.getJSON("choose_specific_download", {issueid: issueid}, function(data) {
                         loader.remove();
@@ -1363,7 +1361,7 @@
                                alert(data.error);
                                return;
                            }
-                           $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>Successfully downloaded "+name+"</div>");
+                           $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>Successfully downloaded "+name+"</div>");
                            if ( data.indexOf("success") > -1){
                                $("#choose_specific_download_dialog").dialog.close();
                            }
@@ -1412,25 +1410,30 @@
                             alert('Please enter both issue range and direct download URL.');
                             return;
                         }
-                        $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>Queueing direct download...</div>");
+                        $('#direct_download_dialog').dialog('close');
+                        $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>Queueing direct download...</div>");
                         $('#ajaxMsg').addClass('success').fadeIn();
                         $.ajax({
                             type: "POST",
                             url: "queue_direct_ddl",
                             data: { ComicID: comicid, issue_range: issue_range, url: url },
                             success: function(response) {
-                                var obj = JSON.parse(response);
-                                if (obj.status === 'success') {
-                                    $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>" + obj.message + "</div>");
-                                    $('#ajaxMsg').addClass('success').fadeIn().delay(5000).fadeOut();
-                                    $('#direct_download_dialog').dialog('close');
-                                } else {
-                                    $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-alert'></span>" + (obj.message || 'Error') + "</div>");
+                                try {
+                                    var obj = JSON.parse(response);
+                                    if (obj.status === 'success') {
+                                        $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>" + obj.message + "</div>");
+                                        $('#ajaxMsg').addClass('success').fadeIn().delay(5000).fadeOut();
+                                    } else {
+                                        $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-alert'></span>" + (obj.message || 'Error') + "</div>");
+                                        $('#ajaxMsg').addClass('error').fadeIn().delay(5000).fadeOut();
+                                    }
+                                } catch (e) {
+                                    $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-alert'></span>Invalid response from server.</div>");
                                     $('#ajaxMsg').addClass('error').fadeIn().delay(5000).fadeOut();
                                 }
                             },
                             error: function(xhr) {
-                                $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-alert'></span>Error: " + (xhr.responseText || 'Request failed') + "</div>");
+                                $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-alert'></span>Error: " + (xhr.responseText || 'Request failed') + "</div>");
                                 $('#ajaxMsg').addClass('error').fadeIn().delay(5000).fadeOut();
                             }
                         });
@@ -1487,7 +1490,7 @@
                  data: { comicid: comicid },
                  success: function(response) {
                     obj = JSON.parse(response);
-                    $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+obj['message']+"</div>");
+                    $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+obj['message']+"</div>");
                     if (obj['status'] == 'success'){
                         $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
                     } else {
@@ -1547,7 +1550,7 @@
                      $("#cv_removed_dialog").dialog('close');
                      reload_tables();
                  }
-                 $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+obj['message']+"</div>");
+                 $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+obj['message']+"</div>");
                  if (obj['status'] == 'success'){
                      $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
                  } else {

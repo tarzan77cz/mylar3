@@ -441,7 +441,7 @@
                    setTimeout('$("#publisher_dialog").dialog("close")', 3000);
                    var obj = response;
                    var p_msg = "Successfully submitted Mass Add for "+obj['series_count']+" series across "+obj['publisher_count']+" publishers";
-                   $('#ajaxMsg').removeClass();
+                   $('#ajaxMsg').stop(true, true).removeClass();
                    $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+p_msg+"</div>");
                    $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
                 },

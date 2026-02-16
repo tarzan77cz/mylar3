@@ -217,26 +217,9 @@
                        return;
                    }
                    var objd = JSON.parse(data);
-                   if (qmode == 'restart') {
-                       $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+objd['message']+"</div>");
-                   } else if (qmode == 'resume') {
-                       $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+objd['message']+"</div>");
-                   } else if (qmode == 'abort') {
-                       $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+objd['message']+"</div>");
-                   } else if (qmode == 'remove') {
-                       $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+objd['message']+"</div>");
-                   } else if (qmode == 'restart-queue') {
-                       $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+objd['message']+"</div>");
-                   } else if (qmode == 'clear_queue') {
-                       $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+objd['message']+"</div>");
-                   } else if (qmode == 'clear_failed') {
-                       $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+objd['message']+"</div>");
-                   } else if (qmode == 'clear_completed') {
-                       $('#ajaxMsg').html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+objd['message']+"</div>");
-                   }
-
+                   $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+objd['message']+"</div>");
+                   $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
             });
-            $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
             $('#queue_table').DataTable().ajax.reload(null, false);
             updateStatusSummary();
         };
@@ -346,7 +329,11 @@
                                     if (val == 'Completed' || val == 'Downloading'){
                                         tbl_options += '<span title="Restart"></span><a href="#" onclick="doAjaxCall'+restartline+'">Restart</a>';
                                     } else if (val == 'Failed' || val == 'Incomplete') {
-                                        tbl_options += '<span title="Restart"></span><a href="#" onclick="doAjaxCall'+restartline+'">Restart</a><span title="Resume"></span><a href="#" onclick="doAjaxCall'+resumeline+'"><span class="ui-icon ui-icon-plus"></span>Resume</a>';
+                                        tbl_options += '<span title="Restart"></span><a href="#" onclick="doAjaxCall'+restartline+'">Restart</a>';
+                                        var linktype = full[8] || '';
+                                        if (['GC-Main', 'GC-Mirror', 'GC-Pixel', 'GC-Media'].indexOf(linktype) >= 0 || linktype === '') {
+                                            tbl_options += '<span title="Resume"></span><a href="#" onclick="doAjaxCall'+resumeline+'"><span class="ui-icon ui-icon-plus"></span>Resume</a>';
+                                        }
                                     } else if (val == 'Queued') {
                                         tbl_options += '<span title="Start"></span><a href="#" onclick="doAjaxCall'+restartline+'">Start</a>';
                                     }

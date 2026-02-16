@@ -2011,7 +2011,7 @@ class WebInterface(object):
                          # Write the config
                          logger.info('Now updating config...')
                          mylar.CONFIG.writeconfig(values={'manual_pp_folder': mylar.CONFIG.MANUAL_PP_FOLDER})
-                     yield json.dumps({'status': 'success', 'message': 'Successfully submitted %s for manual post-processing...' % (nzb_folder)})
+                     # Do not yield here for Manual Run - yield only after starting the thread so the response is a single chunk
 
         if pp_fail is True:
             return
@@ -2026,14 +2026,25 @@ class WebInterface(object):
         queue = queue.Queue()
         retry_outside = False
         if not failed:
+            if nzb_name == 'Manual Run' or nzb_name == 'Manual+Run':
+                if getattr(mylar, 'MANUAL_PP_LOCK', False) is True:
+                    yield json.dumps({'status': 'IN PROGRESS', 'message': 'Manual post-processing already in progress.'})
+                    return
+            elif mylar.APILOCK is True:
+                yield json.dumps({'status': 'IN PROGRESS', 'message': 'Post-processing already in progress.'})
+                return
             PostProcess = PostProcessor.PostProcessor(nzb_name, nzb_folder, queue=queue)
             if nzb_name == 'Manual Run' or nzb_name == 'Manual+Run':
+                mylar.MANUAL_PP_LOCK = True
                 mylar.MANUAL_PP_STATUS.update({
                     'running': True, 'phase': 'scanning', 'summary': '', 'log': [], 'file_log': [],
                     'total_files': 0, 'total_matched': 0, 'current_index': 0, 'current_total': 0,
                     'current_comic': '', 'current_issue': '', 'current_file': '', 'processed': 0, 'failed': 0
                 })
                 threading.Thread(target=PostProcess.Process).start()
+                # Yield single JSON and return so the client receives exactly one chunk (avoids JSON parse error)
+                yield json.dumps({'status': 'success', 'message': 'Successfully submitted %s for manual post-processing...' % (nzb_folder)})
+                return
             else:
                 thread_ = threading.Thread(target=PostProcess.Process, name="Post-Processing")
                 thread_.start()
@@ -4363,7 +4374,25 @@ class WebInterface(object):
             'pack_numbers': issue_range,
             'pack_issuelist': issueid_info,
         }
+        link = url
         link_type = 'GC-Main'
+        if '/dlds/' in url:
+            try:
+                parsed = urllib.parse.urlparse(url)
+                if parsed.netloc and ('getcomics.org' in parsed.netloc or 'getcomics.info' in parsed.netloc):
+                    r = requests.get(url, allow_redirects=True, timeout=15)
+                    final = urllib.parse.urlparse(r.url)
+                    if final.netloc == 'pixeldrain.com':
+                        order = getattr(mylar.CONFIG, 'DDL_PRIORITY_ORDER', None) or []
+                        if isinstance(order, str):
+                            order = json.loads(order) if order else []
+                        allowed = [p.lower() for p in order]
+                        if 'pixeldrain' in allowed:
+                            link_type = 'GC-Pixel'
+                            link = r.url
+                            logger.info('[QUEUE-DIRECT-DDL] Resolved dlds link to Pixeldrain; using GC-Pixel')
+            except Exception as e:
+                logger.fdebug('[QUEUE-DIRECT-DDL] dlds resolve failed, using GC-Main: %s' % e)
         # Display name with issue range so multiple packs are distinguishable (e.g. "Suicide Squad (2011) 0-15")
         series_display = '%s%s %s' % (ComicName, (' (%s)' % ComicYear) if ComicYear else '', issue_range)
         ctrlval = {'id': pack_id}
@@ -4374,7 +4403,7 @@ class WebInterface(object):
             'issues': issue_range,
             'issueid': issueid,
             'comicid': ComicID,
-            'link': url,
+            'link': link,
             'mainlink': '',
             'site': 'DDL(GetComics)',
             'pack': 1,
@@ -4384,7 +4413,7 @@ class WebInterface(object):
         }
         myDB.upsert('ddl_info', vals, ctrlval)
         mylar.DDL_QUEUE.put({
-            'link': url,
+            'link': link,
             'mainlink': '',
             'series': series_display,
             'year': ComicYear,
@@ -4462,6 +4491,7 @@ class WebInterface(object):
         """Restart the post-processing worker thread without losing queued items."""
         try:
             mylar.APILOCK = False  # Reset lock in case it was stuck from a crashed/hung PostProcessor
+            mylar.MANUAL_PP_LOCK = False  # Reset manual PP lock so the button can be used again
             mylar.queue_schedule('pp_queue', 'shutdown')
             mylar.queue_schedule('pp_queue', 'start')
             logger.info('[RESTART-PP] Post-processing queue worker restarted successfully')
@@ -4618,6 +4648,7 @@ class WebInterface(object):
         for x in items:
             if x is None:
                 continue
+            # x is sqlite3.Row: use x['col'], never x.get()
             OneOff = False
             comic = myDB.selectone(
                 "SELECT * from comics WHERE ComicID=? AND ComicName != 'None'",
@@ -4631,6 +4662,10 @@ class WebInterface(object):
                 if comic is None:
                     OneOff = True
 
+            try:
+                x_tmp_filename = x['tmp_filename']
+            except KeyError:
+                x_tmp_filename = None
             itemlist.append({'link': x['link'],
                              'mainlink': x['mainlink'],
                              'series': x['series'],
@@ -4641,6 +4676,7 @@ class WebInterface(object):
                              'pack': x['pack'],
                              'oneoff': OneOff,
                              'filename': x['filename'],
+                             'tmp_filename': x_tmp_filename,
                              'remote_filesize': x['remote_filesize'],
                              'comicid': x['comicid'],
                              'issueid': x['issueid'],
@@ -4657,7 +4693,9 @@ class WebInterface(object):
                         [
                             item['link_type'] is None,
                             item['link_type'] == 'GC-Main',
-                            item['link_type'] == 'GC-Mirror'
+                            item['link_type'] == 'GC-Mirror',
+                            item['link_type'] == 'GC-Pixel',
+                            item['link_type'] == 'GC-Media'
                         ]
                     ) and all(
                         [
@@ -4668,7 +4706,8 @@ class WebInterface(object):
                     ):
                     logger.fdebug('Attempting to resume....')
                     try:
-                        filesize = os.stat(os.path.join(mylar.CONFIG.DDL_LOCATION, item['filename'])).st_size
+                        partial_path = os.path.join(mylar.CONFIG.DDL_LOCATION, item.get('tmp_filename') or item['filename'])
+                        filesize = os.stat(partial_path).st_size
                     except Exception as e:
                         logger.warn('[DDL-REQUEUE] Unable to retrieve previous filesize (file was deleted/moved maybe).'
                                     ' Resume unavailable - will restart download.')
@@ -4761,6 +4800,7 @@ class WebInterface(object):
                                          'id': item['id'],
                                          'link_type': item['link_type'],
                                          'filename': item['filename'],
+                                         'tmp_filename': item.get('tmp_filename'),
                                          'comicinfo': comicinfo,
                                          'packinfo': packinfo,
                                          'site': item['site'],
@@ -9914,18 +9954,20 @@ class WebInterface(object):
          else:
              auto_resume_count = getattr(mylar, 'DDL_AUTORESUME_COUNT', {}).get(active['id'], 0)
              filelocation = None
-             if active['filename'] is not None:
-                 # if this is resumed, we need to use the resume value which holds the filesize of the resume
-                 filelocation = os.path.join(mylar.CONFIG.DDL_LOCATION, active['filename'])
-                 #logger.fdebug('b4-checking file existance: %s' % filelocation)
-                 if all(['External' in active['site'], active['link_type'] == 'DDL-Ext']):
-                     filelocation = active['tmp_filename']
-                 elif 'DDL' in active['site'] and any([active['link_type'] == 'GC-Mega', active['link_type'] == 'GC-Pixel']):
-                     filelocation = active['tmp_filename']
-                 else:
+             # active is sqlite3.Row: use row['col'], never row.get()
+             if active['filename'] is not None or active['tmp_filename']:
+                 # Use tmp_filename (actual path on disk) for providers that write under that name; else filename
+                 if all(['External' in active['site'], active['link_type'] == 'DDL-Ext']) and active['tmp_filename']:
+                     filelocation = os.path.join(mylar.CONFIG.DDL_LOCATION, active['tmp_filename'])
+                 elif 'DDL' in active['site'] and any([active['link_type'] == 'GC-Mega', active['link_type'] == 'GC-Pixel', active['link_type'] == 'GC-Media']) and active['tmp_filename']:
+                     filelocation = os.path.join(mylar.CONFIG.DDL_LOCATION, active['tmp_filename'])
+                 elif active['filename']:
                      filelocation = os.path.join(mylar.CONFIG.DDL_LOCATION, active['filename'])
+                 else:
+                     filelocation = None
                  #logger.fdebug('after-checking file existance: %s' % filelocation)
-                 if os.path.exists(filelocation) is True:
+                 a_filename = active['tmp_filename'] or active['filename']
+                 if filelocation and os.path.exists(filelocation) is True:
                      filesize = os.stat(filelocation).st_size
                      #logger.fdebug('filesize: %s / remote: %s' % (filesize, active['remote_filesize']))
                      try:
@@ -9939,25 +9981,25 @@ class WebInterface(object):
                                  except:
                                      # If we can't parse size, return with 0% progress
                                      return json.dumps({'status':      'Downloading',
-                                                         'percent':     '0%',
-                                                         'a_series':    active['series'],
-                                                         'a_year':      active['year'],
-                                                         'a_filename':  active['filename'],
-                                                         'a_size':      active['size'],
-                                                         'a_id':        active['id'],
-                                                         'pp_queue_count': pp_count,
-                                                         'auto_resume_count': auto_resume_count})
+                                                        'percent':     '0%',
+                                                        'a_series':    active['series'],
+                                                        'a_year':      active['year'],
+                                                        'a_filename':  a_filename,
+                                                        'a_size':      active['size'],
+                                                        'a_id':        active['id'],
+                                                        'pp_queue_count': pp_count,
+                                                        'auto_resume_count': auto_resume_count})
                              else:
                                  # No size info at all, return with 0% progress
                                  return json.dumps({'status':      'Downloading',
-                                                     'percent':     '0%',
-                                                     'a_series':    active['series'],
-                                                     'a_year':      active['year'],
-                                                     'a_filename':  active['filename'],
-                                                     'a_size':      active['size'],
-                                                     'a_id':        active['id'],
-                                                     'pp_queue_count': pp_count,
-                                                     'auto_resume_count': auto_resume_count})
+                                                    'percent':     '0%',
+                                                    'a_series':    active['series'],
+                                                    'a_year':      active['year'],
+                                                    'a_filename':  a_filename,
+                                                    'a_size':      active['size'],
+                                                    'a_id':        active['id'],
+                                                    'pp_queue_count': pp_count,
+                                                    'auto_resume_count': auto_resume_count})
                          
                          remote_filesize_int = int(float(str(remote_filesize).strip()))
                          if remote_filesize_int == 0:
@@ -9966,17 +10008,16 @@ class WebInterface(object):
                                                  'percent':     '0%',
                                                  'a_series':    active['series'],
                                                  'a_year':      active['year'],
-                                                 'a_filename':  active['filename'],
+                                                 'a_filename':  a_filename,
                                                  'a_size':      active['size'],
                                                  'a_id':        active['id'],
                                                  'pp_queue_count': pp_count,
                                                  'auto_resume_count': auto_resume_count})
-                         
                          cmath = int(float(filesize*100)/int(remote_filesize_int*100) * 100)
                          if filesize > remote_filesize_int and cmath > 102:
                              logger.fdebug('size calc is incorrect ... correcting...')
                              try:
-                                 _size_str = (active.get('size') or '')[:-1].strip()
+                                 _size_str = (active['size'] or '')[:-1].strip()
                                  remote_filesize_parsed = helpers.human2bytes(re.sub('/s', '', _size_str))
                                  remote_filesize_int = int(remote_filesize_parsed)
                                  if remote_filesize_int > 0:
@@ -9991,16 +10032,16 @@ class WebInterface(object):
                      #logger.fdebug('ACTIVE DDL: %s  %s%s  [%s]' % (active['filename'], cmath, '%', 'Downloading'))
                      #logger.fdebug('size: %s' % active['size'])
                      return json.dumps({'status':      'Downloading',
-                                         'percent':     "%s%s" % (cmath, '%'),
-                                         'a_series':    active['series'],
-                                         'a_year':      active['year'],
-                                         'a_filename':  active['filename'],
-                                         'a_size':      active['size'],
-                                         'a_id':        active['id'],
-                                         'pp_queue_count': pp_count,
-                                         'auto_resume_count': auto_resume_count})
+                                        'percent':     "%s%s" % (cmath, '%'),
+                                        'a_series':    active['series'],
+                                        'a_year':      active['year'],
+                                        'a_filename':  a_filename,
+                                        'a_size':      active['size'],
+                                        'a_id':        active['id'],
+                                        'pp_queue_count': pp_count,
+                                        'auto_resume_count': auto_resume_count})
                  # File doesn't exist - just show message, don't reset (ddl_watchdog handles stuck downloads)
-                 statline = '%s does not exist.</br> This probably needs to be restarted (use the option in the GUI)' % filelocation
+                 statline = '%s does not exist.</br> This probably needs to be restarted (use the option in the GUI)' % (filelocation or '')
              else:
                  infoline = '%s (%s)' % (active['series'], active['year'])
                  # No filename assigned - just show message, don't reset (ddl_watchdog handles stuck downloads)

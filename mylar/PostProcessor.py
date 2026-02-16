@@ -62,9 +62,6 @@ class PostProcessor(object):
         if queue:
             self.queue = queue
 
-        if mylar.APILOCK is True:
-            return {'status':  'IN PROGRESS'}
-
         if apicall is True:
             self.apicall = True
             mylar.APILOCK = True
@@ -397,6 +394,14 @@ class PostProcessor(object):
 
 
     def Process(self):
+        is_manual_run = self.nzb_name in ('Manual Run', 'Manual+Run')
+        try:
+            return self._process_body()
+        finally:
+            if is_manual_run:
+                mylar.MANUAL_PP_LOCK = False
+
+    def _process_body(self):
             module = self.module
             self._log('nzb name: %s' % self.nzb_name)
             self._log('nzb folder: %s' % self.nzb_folder)

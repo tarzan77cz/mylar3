@@ -136,6 +136,7 @@ function showMsg(msg,loader,timeout,ms) {
 	} else {
 		feedback.removeAttr("style");
 	}
+	feedback.stop(true, true).removeClass();
 	feedback.fadeIn();
 	var message = $("<div class='msg'>" + msg + "</div>");
 	if (loader) {
@@ -164,6 +165,7 @@ function doAjaxCall(url,elem,reload,form,method) {
 		feedback.removeAttr("style");
 	}
 
+	feedback.stop(true, true).removeClass();
 	feedback.fadeIn();
 	// Get Form data
 	var formID = "#"+url;
@@ -219,6 +221,7 @@ function doAjaxCall(url,elem,reload,form,method) {
 	  data: dataString,
 	  beforeSend: function(jqXHR, settings) {
 	  	// Start loader etc.
+	  	feedback.empty();
 	  	feedback.prepend(loader);
 	  },
 	  error: function(jqXHR, textStatus, errorThrown)  {
