@@ -2920,13 +2920,17 @@ def ddl_watchdog():
             if downloading_items:
                 for downloading_item in downloading_items:
                     try:
-                        filename = downloading_item.get('tmp_filename') or downloading_item.get('filename')
-                        try:
-                            remote_filesize_str = downloading_item['remote_filesize']
-                        except (KeyError, TypeError):
-                            remote_filesize_str = None
+                        filename = downloading_item['tmp_filename']
                     except (KeyError, TypeError):
                         filename = None
+                    if not filename:
+                        try:
+                            filename = downloading_item['filename']
+                        except (KeyError, TypeError):
+                            filename = None
+                    try:
+                        remote_filesize_str = downloading_item['remote_filesize']
+                    except (KeyError, TypeError):
                         remote_filesize_str = None
                     
                     if filename and mylar.CONFIG.DDL_LOCATION:
@@ -3146,11 +3150,16 @@ def ddl_watchdog():
                 
                 if downloading_item:
                     # Check if file exists and get its size
-                    # Use tmp_filename (actual file during download) with fallback to filename
+                    # Use tmp_filename (actual file during download) with fallback to filename (sqlite3.Row has no .get())
                     try:
-                        filename = downloading_item.get('tmp_filename') or downloading_item.get('filename')
+                        filename = downloading_item['tmp_filename']
                     except (KeyError, TypeError):
                         filename = None
+                    if not filename:
+                        try:
+                            filename = downloading_item['filename']
+                        except (KeyError, TypeError):
+                            filename = None
                     if filename and mylar.CONFIG.DDL_LOCATION:
                         filepath = os.path.join(mylar.CONFIG.DDL_LOCATION, filename)
                         

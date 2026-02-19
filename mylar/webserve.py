@@ -38,6 +38,7 @@ from mako import exceptions
 import traceback
 
 import time
+import queue as queue_module
 import random
 import threading
 import csv
@@ -4493,6 +4494,18 @@ class WebInterface(object):
             mylar.APILOCK = False  # Reset lock in case it was stuck from a crashed/hung PostProcessor
             mylar.MANUAL_PP_LOCK = False  # Reset manual PP lock so the button can be used again
             mylar.queue_schedule('pp_queue', 'shutdown')
+            # Drain 'exit' from queue - if old thread was frozen it never consumed it,
+            # and the new thread would wrongly exit when it gets 'exit'
+            drained = []
+            while True:
+                try:
+                    item = mylar.PP_QUEUE.get_nowait()
+                    if item != 'exit':
+                        drained.append(item)
+                except queue_module.Empty:
+                    break
+            for item in drained:
+                mylar.PP_QUEUE.put(item)
             mylar.queue_schedule('pp_queue', 'start')
             logger.info('[RESTART-PP] Post-processing queue worker restarted successfully')
             return json.dumps({'status': True, 'message': 'Post-processing queue restarted'})

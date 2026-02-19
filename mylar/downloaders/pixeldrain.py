@@ -129,78 +129,114 @@ class PixelDrain(object):
 
         chunk_size = 1048576  # 1MB chunks for better performance
         flush_interval = 1048576  # Flush every 1MB to keep file modification time updated for watchdog
-        request_headers = dict(self.headers)
-        if resume and int(resume) > 0:
-            request_headers['Range'] = 'bytes=%d-' % int(resume)
-            logger.info('[PixelDrain] Resuming from byte %s' % resume)
-        open_mode = 'ab' if (resume and int(resume) > 0) else 'wb'
+        MAX_AUTO_RESUME_ATTEMPTS = 6
+        RETRY_DELAY = 30
+        RETRIABLE_EXCEPTIONS = (requests.exceptions.Timeout, requests.exceptions.ConnectionError, requests.exceptions.ChunkedEncodingError)
 
         try:
-            response = self.session.get(
-                    'https://pixeldrain.com/api/file/'+file_id,
-                    verify=True,
-                    headers=request_headers,
-                    stream=True,
-                    timeout=(30,30)
-                )
+            for attempt in range(MAX_AUTO_RESUME_ATTEMPTS):
+                try:
+                    request_headers = dict(self.headers)
+                    if resume and int(resume) > 0:
+                        request_headers['Range'] = 'bytes=%d-' % int(resume)
+                        logger.info('[PixelDrain] Resuming from byte %s' % resume)
+                    open_mode = 'ab' if (resume and int(resume) > 0) else 'wb'
 
-            if resume and int(resume) > 0:
-                if response.status_code == 200:
-                    response.close()
-                    logger.warn('[PixelDrain] Server returned 200 (Range not supported). Restarting from 0.')
-                    try:
-                        if os.path.isfile(filepath):
-                            os.remove(filepath)
-                    except OSError:
-                        pass
-                    request_headers.pop('Range', None)
                     response = self.session.get(
-                        'https://pixeldrain.com/api/file/'+file_id,
-                        verify=True,
-                        headers=request_headers,
-                        stream=True,
-                        timeout=(30,30)
-                    )
-                    open_mode = 'wb'
-                elif response.status_code == 416:
-                    response.close()
-                    logger.warn('[PixelDrain] Server returned 416 Range Not Satisfiable. Restarting from 0.')
-                    try:
-                        if os.path.isfile(filepath):
-                            os.remove(filepath)
-                    except OSError:
-                        pass
-                    request_headers.pop('Range', None)
-                    response = self.session.get(
-                        'https://pixeldrain.com/api/file/'+file_id,
-                        verify=True,
-                        headers=request_headers,
-                        stream=True,
-                        timeout=(30,30)
-                    )
-                    open_mode = 'wb'
-                elif response.status_code != 206:
-                    response.close()
-                    logger.warn('[PixelDrain] Unexpected status %s for resume. Failing.' % response.status_code)
+                            'https://pixeldrain.com/api/file/'+file_id,
+                            verify=True,
+                            headers=request_headers,
+                            stream=True,
+                            timeout=(30, 120)
+                        )
+
+                    if resume and int(resume) > 0:
+                        if response.status_code == 200:
+                            response.close()
+                            logger.warn('[PixelDrain] Server returned 200 (Range not supported). Restarting from 0.')
+                            try:
+                                if os.path.isfile(filepath):
+                                    os.remove(filepath)
+                            except OSError:
+                                pass
+                            request_headers.pop('Range', None)
+                            response = self.session.get(
+                                'https://pixeldrain.com/api/file/'+file_id,
+                                verify=True,
+                                headers=request_headers,
+                                stream=True,
+                                timeout=(30, 120)
+                            )
+                            open_mode = 'wb'
+                        elif response.status_code == 416:
+                            response.close()
+                            logger.warn('[PixelDrain] Server returned 416 Range Not Satisfiable. Restarting from 0.')
+                            try:
+                                if os.path.isfile(filepath):
+                                    os.remove(filepath)
+                            except OSError:
+                                pass
+                            request_headers.pop('Range', None)
+                            response = self.session.get(
+                                'https://pixeldrain.com/api/file/'+file_id,
+                                verify=True,
+                                headers=request_headers,
+                                stream=True,
+                                timeout=(30, 120)
+                            )
+                            open_mode = 'wb'
+                        elif response.status_code != 206:
+                            response.close()
+                            logger.warn('[PixelDrain] Unexpected status %s for resume. Failing.' % response.status_code)
+                            return {"success": False, "filename": filename, "path": None, "link_type_failure": 'GC-Pixel'}
+
+                    logger.fdebug('[PixelDrain] now writing....')
+                    with open(filepath, open_mode) as f:
+                        bytes_written = 0
+                        for chunk in response.iter_content(chunk_size=chunk_size):
+                            if chunk:
+                                f.write(chunk)
+                                bytes_written += len(chunk)
+                                if bytes_written >= flush_interval:
+                                    f.flush()
+                                    bytes_written = 0
+                        f.flush()
+                    break
+
+                except RETRIABLE_EXCEPTIONS as e:
+                    if not hasattr(mylar, 'DDL_AUTORESUME_COUNT'):
+                        mylar.DDL_AUTORESUME_COUNT = {}
+                    mylar.DDL_AUTORESUME_COUNT[self.id] = attempt + 1
+                    if attempt >= MAX_AUTO_RESUME_ATTEMPTS - 1:
+                        logger.error('[DDL-AUTO-RESUME] Max retries (%s) exceeded. Marking as failed.' % MAX_AUTO_RESUME_ATTEMPTS)
+                        logger.error('[PixelDrain][ERROR] %s' % e)
+                        return {"success": False, "filename": filename, "path": None, "link_type_failure": 'GC-Pixel'}
+                    resume = None
+                    if filename and self.dl_location:
+                        _dst = os.path.join(self.dl_location, filename)
+                        if os.path.exists(_dst):
+                            try:
+                                _size = os.path.getsize(_dst)
+                                if _size > 0:
+                                    resume = _size
+                            except OSError:
+                                pass
+                    if resume and resume > 0:
+                        logger.info('[DDL-AUTO-RESUME] Attempt %s/%s: %s. Waiting %ss then retrying with resume from %s bytes.' %
+                                    (attempt + 1, MAX_AUTO_RESUME_ATTEMPTS, e, RETRY_DELAY, resume))
+                    else:
+                        logger.info('[DDL-AUTO-RESUME] Attempt %s/%s: %s. Waiting %ss then retrying from start.' %
+                                    (attempt + 1, MAX_AUTO_RESUME_ATTEMPTS, e, RETRY_DELAY))
+                    time.sleep(RETRY_DELAY)
+                    continue
+
+                except Exception as e:
+                    logger.warn('[PixelDrain][ERROR] %s' % e)
+                    if 'EBLOCKED' in str(e):
+                        logger.warn('[PixelDrain] Content has been removed - we should move on to the next one at this point.')
                     return {"success": False, "filename": filename, "path": None, "link_type_failure": 'GC-Pixel'}
-
-            logger.fdebug('[PixelDrain] now writing....')
-            with open(filepath, open_mode) as f:
-                bytes_written = 0
-                for chunk in response.iter_content(chunk_size=chunk_size):
-                    if chunk:
-                        f.write(chunk)
-                        bytes_written += len(chunk)
-                        if bytes_written >= flush_interval:
-                            f.flush()
-                            bytes_written = 0
-                f.flush()
-
-        except Exception as e:
-            logger.warn('[PixelDrain][ERROR] %s' % e)
-            if 'EBLOCKED' in str(e):
-                logger.warn('[PixelDrain] Content has been removed - we should move on to the next one at this point.')
-            return {"success": False, "filename": filename, "path": None, "link_type_failure": 'GC-Pixel'}
+        finally:
+            getattr(mylar, 'DDL_AUTORESUME_COUNT', {}).pop(self.id, None)
 
         logger.fdebug('[PixelDrain] download completed - donwloaded %s / %s' % (os.stat(filepath).st_size, filesize))
 

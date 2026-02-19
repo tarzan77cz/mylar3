@@ -21,6 +21,7 @@ import urllib
 import re
 import shutil
 import sys
+import time
 import requests
 import mylar
 from mylar import db, helpers, logger, search, search_filer
@@ -114,78 +115,114 @@ class MediaFire(object):
 
         chunk_size = 1048576  # 1MB chunks for better performance
         flush_interval = 1048576  # Flush every 1MB to keep file modification time updated for watchdog
-        request_headers = dict(self.headers)
-        if resume and int(resume) > 0:
-            request_headers['Range'] = 'bytes=%d-' % int(resume)
-            logger.info('[MediaFire] Resuming from byte %s' % resume)
-        open_mode = 'ab' if (resume and int(resume) > 0) else 'wb'
+        MAX_AUTO_RESUME_ATTEMPTS = 6
+        RETRY_DELAY = 30
+        RETRIABLE_EXCEPTIONS = (requests.exceptions.Timeout, requests.exceptions.ConnectionError, requests.exceptions.ChunkedEncodingError)
 
         try:
-            response = self.session.get(
-                    url,
-                    verify=True,
-                    headers=request_headers,
-                    stream=True,
-                    timeout=(30,30)
-                )
+            for attempt in range(MAX_AUTO_RESUME_ATTEMPTS):
+                try:
+                    request_headers = dict(self.headers)
+                    if resume and int(resume) > 0:
+                        request_headers['Range'] = 'bytes=%d-' % int(resume)
+                        logger.info('[MediaFire] Resuming from byte %s' % resume)
+                    open_mode = 'ab' if (resume and int(resume) > 0) else 'wb'
 
-            if resume and int(resume) > 0:
-                if response.status_code == 200:
-                    response.close()
-                    logger.warn('[MediaFire] Server returned 200 (Range not supported). Restarting from 0.')
-                    try:
-                        if os.path.isfile(filepath):
-                            os.remove(filepath)
-                    except OSError:
-                        pass
-                    request_headers.pop('Range', None)
                     response = self.session.get(
-                        url,
-                        verify=True,
-                        headers=request_headers,
-                        stream=True,
-                        timeout=(30,30)
-                    )
-                    open_mode = 'wb'
-                elif response.status_code == 416:
-                    response.close()
-                    logger.warn('[MediaFire] Server returned 416 Range Not Satisfiable. Restarting from 0.')
-                    try:
-                        if os.path.isfile(filepath):
-                            os.remove(filepath)
-                    except OSError:
-                        pass
-                    request_headers.pop('Range', None)
-                    response = self.session.get(
-                        url,
-                        verify=True,
-                        headers=request_headers,
-                        stream=True,
-                        timeout=(30,30)
-                    )
-                    open_mode = 'wb'
-                elif response.status_code != 206:
-                    response.close()
-                    logger.warn('[MediaFire] Unexpected status %s for resume. Failing.' % response.status_code)
-                    return {"success": False, "filename": fileinfo['filename'], "path": None, "link_type_failure": 'GC-Media'}
+                            url,
+                            verify=True,
+                            headers=request_headers,
+                            stream=True,
+                            timeout=(30, 120)
+                        )
 
-            logger.fdebug('[MediaFire] now writing....')
-            with open(filepath, open_mode) as f:
-                bytes_written = 0
-                for chunk in response.iter_content(chunk_size=chunk_size):
-                    if chunk:
-                        f.write(chunk)
-                        bytes_written += len(chunk)
-                        if bytes_written >= flush_interval:
-                            f.flush()
-                            bytes_written = 0
-                f.flush()
+                    if resume and int(resume) > 0:
+                        if response.status_code == 200:
+                            response.close()
+                            logger.warn('[MediaFire] Server returned 200 (Range not supported). Restarting from 0.')
+                            try:
+                                if os.path.isfile(filepath):
+                                    os.remove(filepath)
+                            except OSError:
+                                pass
+                            request_headers.pop('Range', None)
+                            response = self.session.get(
+                                url,
+                                verify=True,
+                                headers=request_headers,
+                                stream=True,
+                                timeout=(30, 120)
+                            )
+                            open_mode = 'wb'
+                        elif response.status_code == 416:
+                            response.close()
+                            logger.warn('[MediaFire] Server returned 416 Range Not Satisfiable. Restarting from 0.')
+                            try:
+                                if os.path.isfile(filepath):
+                                    os.remove(filepath)
+                            except OSError:
+                                pass
+                            request_headers.pop('Range', None)
+                            response = self.session.get(
+                                url,
+                                verify=True,
+                                headers=request_headers,
+                                stream=True,
+                                timeout=(30, 120)
+                            )
+                            open_mode = 'wb'
+                        elif response.status_code != 206:
+                            response.close()
+                            logger.warn('[MediaFire] Unexpected status %s for resume. Failing.' % response.status_code)
+                            return {"success": False, "filename": fileinfo['filename'], "path": None, "link_type_failure": 'GC-Media'}
 
-        except Exception as e:
-            logger.fdebug('[MediaFire][ERROR] %s' % e)
-            if 'EBLOCKED' in str(e):
-                logger.fdebug('[MediaFire] Content has been removed - we should move on to the next one at this point.')
-            return {"success": False, "filename": None, "path": None, "link_type_failure": 'GC-Media'}
+                    logger.fdebug('[MediaFire] now writing....')
+                    with open(filepath, open_mode) as f:
+                        bytes_written = 0
+                        for chunk in response.iter_content(chunk_size=chunk_size):
+                            if chunk:
+                                f.write(chunk)
+                                bytes_written += len(chunk)
+                                if bytes_written >= flush_interval:
+                                    f.flush()
+                                    bytes_written = 0
+                        f.flush()
+                    break
+
+                except RETRIABLE_EXCEPTIONS as e:
+                    if not hasattr(mylar, 'DDL_AUTORESUME_COUNT'):
+                        mylar.DDL_AUTORESUME_COUNT = {}
+                    mylar.DDL_AUTORESUME_COUNT[id] = attempt + 1
+                    if attempt >= MAX_AUTO_RESUME_ATTEMPTS - 1:
+                        logger.error('[DDL-AUTO-RESUME] Max retries (%s) exceeded. Marking as failed.' % MAX_AUTO_RESUME_ATTEMPTS)
+                        logger.error('[MediaFire][ERROR] %s' % e)
+                        return {"success": False, "filename": fileinfo['filename'], "path": None, "link_type_failure": 'GC-Media'}
+                    resume = None
+                    if fileinfo['filename'] and self.dl_location:
+                        _dst = os.path.join(self.dl_location, fileinfo['filename'])
+                        if os.path.exists(_dst):
+                            try:
+                                _size = os.path.getsize(_dst)
+                                if _size > 0:
+                                    resume = _size
+                            except OSError:
+                                pass
+                    if resume and resume > 0:
+                        logger.info('[DDL-AUTO-RESUME] Attempt %s/%s: %s. Waiting %ss then retrying with resume from %s bytes.' %
+                                    (attempt + 1, MAX_AUTO_RESUME_ATTEMPTS, e, RETRY_DELAY, resume))
+                    else:
+                        logger.info('[DDL-AUTO-RESUME] Attempt %s/%s: %s. Waiting %ss then retrying from start.' %
+                                    (attempt + 1, MAX_AUTO_RESUME_ATTEMPTS, e, RETRY_DELAY))
+                    time.sleep(RETRY_DELAY)
+                    continue
+
+                except Exception as e:
+                    logger.fdebug('[MediaFire][ERROR] %s' % e)
+                    if 'EBLOCKED' in str(e):
+                        logger.fdebug('[MediaFire] Content has been removed - we should move on to the next one at this point.')
+                    return {"success": False, "filename": None, "path": None, "link_type_failure": 'GC-Media'}
+        finally:
+            getattr(mylar, 'DDL_AUTORESUME_COUNT', {}).pop(id, None)
 
         try:
             filesize = os.stat(filepath).st_size
