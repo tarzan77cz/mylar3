@@ -21,6 +21,52 @@
 			padding-right: 4px;
 			box-sizing: border-box;
 		}
+		/* Sticky: everything above #wanted_table; same background as body + high z-index so table scrolls UNDER */
+		#subhead {
+			position: sticky;
+			top: 58px;
+			z-index: 100;
+			background: var(--body-bg, #fff);
+		}
+		.wanted-sticky {
+			position: sticky;
+			top: 98px;
+			z-index: 99;
+			background: var(--body-bg, #fff);
+			clear: both;
+		}
+		.wanted-markissue-row {
+			clear: both;
+			margin-bottom: 0.4em;
+		}
+		.wanted-dt-controls {
+			clear: both;
+			margin-top: 1.2em;
+			display: flex;
+			flex-wrap: wrap;
+			align-items: center;
+			gap: 1em 1.5em;
+		}
+		.wanted-dt-controls .dataTables_length,
+		.wanted-dt-controls .dataTables_filter,
+		.wanted-dt-controls .dataTables_paginate {
+			float: none;
+			width: auto;
+			margin-bottom: 0;
+		}
+		#wanted_table_length { order: 1; }
+		#wanted_table_filter { order: 2; margin-left: auto; }
+		#wanted_table_paginate { order: 3; }
+		#markissue {
+			position: static;
+			float: none;
+			display: inline-block;
+			margin-right: 1em;
+		}
+		#markissue.markissue-none select#mark_issues {
+			opacity: 0.6;
+			pointer-events: none;
+		}
 	</style>
 	<div id="subhead_container">
 		<div id="subhead_menu">
@@ -32,39 +78,46 @@
 
 <%def name="body()">
         <input type="hidden" id="page_name" value="upcoming" />
-	<div class="title">
-		<h1 class="clearfix"><img src="${icons['icon_wanted']}" alt="Wanted Issues"/>Wanted Issues (<span id="wanted_count"></span>)</h1>
+	<div class="wanted-sticky">
+		<div class="title">
+			<h1 class="clearfix"><img src="${icons['icon_wanted']}" alt="Wanted Issues"/>Wanted Issues (<span id="wanted_count"></span>)</h1>
+		</div>
+
+		<span style="vertical-align: middle;"><small>Tier-1 cutoff length: <span id="cutoff">${mylar.CONFIG.SEARCH_TIER_CUTOFF}</span> days</small></span>
+
+		<div id="checkboxControls" name="checkboxControls" style="float: right; vertical-align: middle; margin: 5px 3px 3px 3px;">
+		 <div style="padding-bottom: 5px;">
+		     <label for="Wanted" class="checkbox inline Wanted" id="wantedlabel" style="display:none;"><input type="checkbox" name="Wanted" id="Wanted" checked="checked" /> Wanted: <b><span id="wantedcount"></span></b></label>
+		     <label for="Tier1" class="checkbox inline Tier1" id="tier1label" style="display:none;"><input type="checkbox" name="Tier1" id="Tier1" checked="checked" />Tier-1: <b><span id="tier1count"></span></b></label>
+		     <label for="Tier2" class="checkbox inline Tier2" id="tier2label" style="display:none;"><input type="checkbox" name="Tier2" id="Tier2" checked="checked" />Tier-2: <b><span id="tier2count"></span></b></label>
+		     <label for="Snatched" class="checkbox inline Snatched" id="snatchedlabel" style="display:none;"><input type="checkbox" name="Snatched" id="Snatched" checked="checked" /> Snatched: <b><span id="snatchedcount"></span></b></label>
+		     <label for="Storyarcs" class="checkbox inline Storyarcs" id="storyarcslabel" style="display:none;"><input type="checkbox" name="Storyarcs" id="Storyarcs" checked="checked" /> StoryArcs: <b><span id="storyarcscount"></span></b></label>
+		     <label for="Failed" class="checkbox inline Failed" id="failedlabel" style="display:none;"><input type="checkbox" name="Failed" id="Failed" checked="checked" /> Failed: <b><span id="failedcount"></span></b></label>
+		 </div>
+		</div>
+
+		<small style="float: right; vertical-align: middle;">Date shown in SearchTier is when the issue was added to the Wanted list</small>
+
+		<div class="wanted-markissue-row">
+			<div id="markissue" class="markissue-none">Mark selected issues as
+				<select name="action" id="mark_issues" onChange="mark_the_issues()" data-success="selected issues marked">
+					<option disabled="disabled" selected="selected">Choose...</option>
+					<option value="Wanted">Wanted</option>
+					<option value="Skipped">Skipped</option>
+					<option value="Downloaded">Downloaded</option>
+					<option value="Archived">Archived</option>
+					<option value="Ignored">Ignored</option>
+					<option value="OppositeTier">Opposite Tier</option>
+				</select>
+				<input type="hidden" value="Go">
+			</div>
+		</div>
+
+		<div id="wanted_table_sticky_controls" class="wanted-dt-controls"></div>
 	</div>
-
-        <span style="vertical-align: middle;"><small>Tier-1 cutoff length: <span id="cutoff">${mylar.CONFIG.SEARCH_TIER_CUTOFF}</span> days</small></span>
-
-        <div id="checkboxControls" name="checkboxControls" style="float: right; vertical-align: middle; margin: 5px 3px 3px 3px;">
-         <div style="padding-bottom: 5px;">
-             <label for="Wanted" class="checkbox inline Wanted" id="wantedlabel" style="display:none;"><input type="checkbox" name="Wanted" id="Wanted" checked="checked" /> Wanted: <b><span id="wantedcount"></span></b></label>
-             <label for="Tier1" class="checkbox inline Tier1" id="tier1label" style="display:none;"><input type="checkbox" name="Tier1" id="Tier1" checked="checked" />Tier-1: <b><span id="tier1count"></span></b></label>
-             <label for="Tier2" class="checkbox inline Tier2" id="tier2label" style="display:none;"><input type="checkbox" name="Tier2" id="Tier2" checked="checked" />Tier-2: <b><span id="tier2count"></span></b></label>
-             <label for="Snatched" class="checkbox inline Snatched" id="snatchedlabel" style="display:none;"><input type="checkbox" name="Snatched" id="Snatched" checked="checked" /> Snatched: <b><span id="snatchedcount"></span></b></label>
-             <label for="Storyarcs" class="checkbox inline Storyarcs" id="storyarcslabel" style="display:none;"><input type="checkbox" name="Storyarcs" id="Storyarcs" checked="checked" /> StoryArcs: <b><span id="storyarcscount"></span></b></label>
-             <label for="Failed" class="checkbox inline Failed" id="failedlabel" style="display:none;"><input type="checkbox" name="Failed" id="Failed" checked="checked" /> Failed: <b><span id="failedcount"></span></b></label>
-         </div>
-        </div>
 
         <div class="table_wrapper" id="wanted_table_wrapper">
           <form action="mark_the_issues" method="get" id="markissues" name="markissues">
-            <div style="position:absolute;float:left;display:none;" id="markissue">Mark selected issues as
-                <select name="action" id="mark_issues" onChange="mark_the_issues()" data-success="selected issues marked">
-                                <option disabled="disabled" selected="selected">Choose...</option>
-                                <option value="Wanted">Wanted</option>
-                                <option value="Skipped">Skipped</option>
-                                <option value="Downloaded">Downloaded</option>
-                                <option value="Archived">Archived</option>
-                                <option value="Ignored">Ignored</option>
-                                <option value="OppositeTier">Opposite Tier</option>
-                </select>
-                <input type="hidden" value="Go">
-            </div>
-
-            <small style="float: right; vertical-align: middle;">Date shown in SearchTier is when the issue was added to the Wanted list</small>
 	    <table class="display select" id="wanted_table">
 		<thead>
 			<tr>
@@ -309,6 +362,7 @@
             var checks = document.getElementsByName("issueid[]");
             cc = document.getElementById("markissue");
             fc = document.getElementById("menu_link_scan");
+            var dropdown = document.getElementById("mark_issues");
             var checkfound = false;
             for (var i=0; i<checks.length; i++) {
                 if (checks[i].checked) {
@@ -317,14 +371,49 @@
                 }
             }
             if (checkfound == true){
-                cc.style.display = "block";
+                cc.classList.remove("markissue-none");
+                if (dropdown) dropdown.disabled = false;
                 fc.onclick = function(){ search_the_issues() };
                 fc.getElementsByClassName('ui-button-text')[0].innerText = "Force Check Selected";
             } else {
-                cc.style.display = "none";
+                cc.classList.add("markissue-none");
+                if (dropdown) dropdown.disabled = true;
                 fc.onclick = function(){ doAjaxCall('forceSearch',this) };
                 fc.getElementsByClassName('ui-button-text')[0].innerText = "Force Check Tier-1";
             }
+        }
+
+        var UPCOMING_STORAGE_KEY = 'mylar_upcoming';
+
+        function saveUpcomingCheckboxes() {
+            try {
+                var el = function(id) { return document.getElementById(id); };
+                var o = {};
+                if (el('Wanted')) o.Wanted = el('Wanted').checked;
+                if (el('Tier1')) o.Tier1 = el('Tier1').checked;
+                if (el('Tier2')) o.Tier2 = el('Tier2').checked;
+                if (el('Snatched')) o.Snatched = el('Snatched').checked;
+                if (el('Storyarcs')) o.Storyarcs = el('Storyarcs').checked;
+                if (el('Failed')) o.Failed = el('Failed').checked;
+                localStorage.setItem(UPCOMING_STORAGE_KEY + '_checkboxes', JSON.stringify(o));
+            } catch (e) {}
+        }
+
+        function loadUpcomingCheckboxes() {
+            try {
+                var s = localStorage.getItem(UPCOMING_STORAGE_KEY + '_checkboxes');
+                // console.log("Loading checkboxes from storage:", s);
+                if (!s) return;
+                var o = JSON.parse(s);
+                var el = function(id) { return document.getElementById(id); };
+                if (o.Wanted !== undefined && el('Wanted')) el('Wanted').checked = o.Wanted;
+                if (o.Tier1 !== undefined && el('Tier1')) el('Tier1').checked = o.Tier1;
+                if (o.Tier2 !== undefined && el('Tier2')) el('Tier2').checked = o.Tier2;
+                if (o.Snatched !== undefined && el('Snatched')) el('Snatched').checked = o.Snatched;
+                if (o.Storyarcs !== undefined && el('Storyarcs')) el('Storyarcs').checked = o.Storyarcs;
+                if (o.Failed !== undefined && el('Failed')) el('Failed').checked = o.Failed;
+                // console.log("Checkboxes loaded. Snatched is now:", el('Snatched') ? el('Snatched').checked : 'not found');
+            } catch (e) { console.error("Error loading checkboxes:", e); }
         }
 
         function retrieve_filters() {
@@ -419,18 +508,17 @@
                     update_filters();
                     // reset the mark_issues dropdown so it won't keep the last selection
                     dropdown = document.getElementById("mark_issues");
-                    dropdown.selectedIndex = 0;
-                    document.getElementById("markissue").style.display = "none";
+                    if (dropdown) dropdown.selectedIndex = 0;
                     document.getElementById("wanted-select-all").checked = false;
+                    count_checks();
                 },
                 "sDom": '<"clear"f><"clear"lp><"clear">rt<"clear"ip>',
 		"destroy": true,
 		"processing": true,
 		"serverSide": true,
                 "ajax": {
-                    "data": function (d) {
-                        d.filters = retrieve_filters();
-                    }
+                    "url": 'loadupcoming',
+                    "type": 'GET'
                 },
 		"ajaxSource": 'loadupcoming',
                 "columnDefs": [
@@ -546,6 +634,15 @@
                 "aaSorting": [[3, 'desc']],
                 "displayLength": 25,
                 "stateSave": true,
+                "stateSaveCallback": function(settings, data) {
+                    try { localStorage.setItem(UPCOMING_STORAGE_KEY + '_dt_state', JSON.stringify(data)); } catch (e) {}
+                },
+                "stateLoadCallback": function(settings, callback) {
+                    try {
+                        var s = localStorage.getItem(UPCOMING_STORAGE_KEY + '_dt_state');
+                        callback(s ? JSON.parse(s) : null);
+                    } catch (e) { callback(null); }
+                },
                 "lengthMenu": [[10, 15, 25, 50, 100, 200, -1], [10, 15, 25, 50, 100, 200, 'All' ]],
                 "language": {
                      "search":"Filter:",
@@ -578,18 +675,34 @@
                      return nRow;
                 },
                 "drawCallback": function (o) {
-                     // Jump to top of page
-                     $('#wanted_table div.dataTables_scrollBody').scrollTop(pageScrollPos);
+                     var $sb = $('#wanted_table div.dataTables_scrollBody');
+                     if ($sb.length) $sb.scrollTop(pageScrollPos);
+                     var $sticky = $('#wanted_table_sticky_controls');
+                     if ($sticky.length) {
+                         var $l = $('#wanted_table_length'), $f = $('#wanted_table_filter'), $p = $('#wanted_table_paginate');
+                         if ($l.length && $l.parent()[0] !== $sticky[0]) $l.appendTo($sticky);
+                         if ($f.length && $f.parent()[0] !== $sticky[0]) $f.appendTo($sticky);
+                         if ($p.length && $p.parent()[0] !== $sticky[0]) $p.appendTo($sticky);
+                     }
+                     count_checks();
                 },
                 "serverData": function ( sSource, aoData, fnCallback ) {
                     /* Add some extra data to the sender */
-                    aoData.push({"name": "filters", "value": retrieve_filters() });
+                    var f = retrieve_filters();
+                    // console.log("Sending filters:", f);
+                    aoData.push({"name": "filters", "value": f });
                     $.getJSON(sSource, aoData, function (json) {
                             fnCallback(json)
                     });
                 },
-                "fnInitComplete": function(oSettings, json)
-                {
+                "fnInitComplete": function(oSettings, json) {
+                    var $sticky = $('#wanted_table_sticky_controls');
+                    if ($sticky.length) {
+                        var $l = $('#wanted_table_length'), $f = $('#wanted_table_filter'), $p = $('#wanted_table_paginate');
+                        if ($l.length) $l.appendTo($sticky);
+                        if ($f.length) $f.appendTo($sticky);
+                        if ($p.length) $p.appendTo($sticky);
+                    }
                 },
             });
 	};
@@ -606,6 +719,9 @@
     }
 
 	$(document).ready(function() {
+            // Defer table init to next tick so checkbox state is committed before first AJAX request
+            setTimeout(function() {
+            loadUpcomingCheckboxes();
             initThisPage();
             var tables = $('table.display').DataTable();
             wantedRefreshTimer = setInterval(doWantedRefresh, WANTED_REFRESH_INTERVAL_MS);
@@ -615,6 +731,7 @@
             $(document).on("change", '#checkboxControls input[type="checkbox"]', function() {
             //$('#checkboxControls input[type="checkbox"]').onchange(function(){
                 tables.ajax.reload();
+                saveUpcomingCheckboxes();
             });
 
             // wanted table
@@ -831,6 +948,7 @@
                 
                 return false;
             });
+            }, 100); // end setTimeout
 	});
 	</script>
 </%def>

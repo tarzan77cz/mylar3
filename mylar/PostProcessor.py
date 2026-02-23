@@ -902,8 +902,11 @@ class PostProcessor(object):
                                 oneoff_issuelist.append(tmp_oneoff)
                             continue
 
-                        tmpsql = "SELECT * FROM comics WHERE DynamicComicName IN ({seq}) COLLATE NOCASE".format(seq=','.join('?' * len(loopchk)))
-                        comicseries = myDB.select(tmpsql, tuple(loopchk))
+                        if self.comicid is not None:
+                            comicseries = myDB.select('SELECT * FROM comics WHERE ComicID=?', [self.comicid])
+                        else:
+                            tmpsql = "SELECT * FROM comics WHERE DynamicComicName IN ({seq}) COLLATE NOCASE".format(seq=','.join('?' * len(loopchk)))
+                            comicseries = myDB.select(tmpsql, tuple(loopchk))
 
                     if not comicseries or orig_seriesname != mod_seriesname:
                         if any(['special' in orig_seriesname.lower(), 'annual' in orig_seriesname.lower()]) and all([mylar.CONFIG.ANNUALS_ON, orig_seriesname != mod_seriesname]):

@@ -200,7 +200,7 @@ def libraryScan(dir=None, append=False, ComicID=None, ComicName=None, cron=None,
 
         if ' the ' in watchcomic.lower():
             #drop the 'the' from the watchcomic title for proper comparisons.
-            watchcomic = watchcomic[-4:]
+            watchcomic = re.sub(r'\s+the\s+', ' ', watchcomic, flags=re.I).strip()
 
         alt_chk = "no" # alt-checker flag (default to no)
 

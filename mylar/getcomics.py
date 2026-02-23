@@ -211,8 +211,13 @@ class GC(object):
                         else:
                             sf_count = len([m.start() for m in re.finditer('(?=%s)', sf)])
                             if sf_count == 0:
-                                # this is the injected search format above that's already replaced values
+                                # this is the injected search format above that's already replaced values (pack priority)
                                 queryline = sf
+                                # Normalize for GetComics: replace & etc., strip "and"/"the", collapse spaces
+                                queryline = re.sub(r'[\&\:\?\,\/\-]', '', queryline)
+                                queryline = re.sub(r"\band\b", '', queryline, flags=re.I)
+                                queryline = re.sub(r"\bthe\b", '', queryline, flags=re.I)
+                                queryline = re.sub(r'\s+', ' ', queryline).strip()
                             elif sf_count == 2:
                                 queryline = sf % (self.query['comicname'], sf_issue)
                             elif sf_count == 3:
@@ -2228,6 +2233,10 @@ class GC(object):
                 if annuals:
                     logger.fdebug('annuals: %s' % annuals)
                 logger.fdebug('issues: %s' % issues)
+
+            # Strip "Vol. N" / "Volume N" from end of series for matchIT (e.g. "Hokum and Hex Vol. 1" -> "Hokum and Hex")
+            series = re.sub(r'\s+Vol(?:ume)?\.?\s*\d+\s*$', '', series, flags=re.I).strip()
+            series = re.sub(r'\s+', ' ', series).strip()
 
             return {'title': title,
                     'filename': filename,

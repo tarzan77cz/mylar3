@@ -990,6 +990,13 @@ class FileChecker(object):
         issue_number_position = len(split_file)
         if len(possible_issuenumbers) > 0:
             logger.fdebug('possible_issuenumbers: %s' % possible_issuenumbers)
+            # When year is known, prefer issue numbers before the year (avoids picking trailing IDs e.g. "Family Man 01 (1995) c2c (DC) 21199.cbz")
+            if yearposition is not None and len(possible_issuenumbers) > 1:
+                before_year = [p for p in possible_issuenumbers if p['position'] < yearposition]
+                if len(before_year) > 0:
+                    preferred = max(before_year, key=operator.itemgetter('position'))
+                    possible_issuenumbers = [preferred]
+                    logger.fdebug('Year present: preferring issue number before year: %s at position %s' % (preferred['number'], preferred['position']))
             if len(possible_issuenumbers) >= 1:
                 p = 1
                 if '-' not in split_file[0]:
@@ -1512,7 +1519,7 @@ class FileChecker(object):
 
         seriesalt = False
         if nspace_altseriesname is not None:
-            if re.sub('\|','', nspace_altseriesname.lower()).strip() == re.sub('\|', '', nspace_watchcomic.lower()).strip():
+            if re.sub('[\|\-:]','', nspace_altseriesname.lower()).strip() == re.sub('[\|\-:]', '', nspace_watchcomic.lower()).strip():
                 seriesalt = True
                 qmatch_chk = 'alt_match'
 
@@ -1522,19 +1529,26 @@ class FileChecker(object):
         #logger.info('nspace_serisname_decoded: %s' % nspace_seriesname_decoded)
         #logger.info('nspace_watchname_decoded: %s' % nspace_watchname_decoded)
         #logger.info('self.AS_Alt: %s' % self.AS_Alt)
+        
+        # Debug logging for matching
+        compare_series = re.sub('[\|\-:]','', nspace_seriesname.lower()).strip()
+        compare_watch = re.sub('[\|\-:]', '', nspace_watchcomic.lower()).strip()
+        logger.fdebug('[DEBUG-MATCH] Comparing series: "%s" vs watch: "%s"' % (compare_series, compare_watch))
+        logger.fdebug('[DEBUG-MATCH] nspace_series: "%s" nspace_watch: "%s"' % (nspace_seriesname, nspace_watchcomic))
+        
         if any(
                   [
                        seriesalt is True,
-                       re.sub('\|','', nspace_seriesname.lower()).strip() == re.sub('\|', '', nspace_watchcomic.lower()).strip(),
-                       re.sub('\|','', nspace_seriesname_decoded.lower()).strip() == re.sub('\|', '', nspace_watchname_decoded.lower()).strip(),
+                       re.sub('[\|\-:]','', nspace_seriesname.lower()).strip() == re.sub('[\|\-:]', '', nspace_watchcomic.lower()).strip(),
+                       re.sub('[\|\-:]','', nspace_seriesname_decoded.lower()).strip() == re.sub('[\|\-:]', '', nspace_watchname_decoded.lower()).strip(),
                    ]
        ) or all(
                    [
                        annualisation is True,
-                       re.sub(n_name, '', re.sub('\|', '', nspace_watchcomic.lower()).strip()) == re.sub('\|', '', nspace_seriesname.lower()).strip(),
+                       re.sub(n_name, '', re.sub('[\|\-:]', '', nspace_watchcomic.lower()).strip()) == re.sub('[\|\-:]', '', nspace_seriesname.lower()).strip(),
                    ]
        ) or any(
-                   re.sub('[\|\s]','', x.lower()).strip() == re.sub('[\|\s]','', nspace_seriesname.lower()).strip() for x in self.AS_Alt
+                   re.sub('[\|\s\-:]','', x.lower()).strip() == re.sub('[\|\s\-:]','', nspace_seriesname.lower()).strip() for x in self.AS_Alt
        ):
             if qmatch_chk is None:
                 qmatch_chk = 'match'
@@ -1542,11 +1556,11 @@ class FileChecker(object):
             #logger.fdebug('[%s][MATCH: %s][seriesALT: %s] %s' % (qmatch_chk, seriesalt, series_info['series_name'], filename))
             enable_annual = False
             annual_comicid = None
-            if any(re.sub('[\|\s]','', x.lower()).strip() == re.sub('[\|\s]','', nspace_seriesname.lower()).strip() for x in self.AS_Alt):
+            if any(re.sub('[\|\s\-:]','', x.lower()).strip() == re.sub('[\|\s\-:]','', nspace_seriesname.lower()).strip() for x in self.AS_Alt):
                 #if the alternate search name is almost identical, it won't match up because it will hit the 'normal' first.
                 #not important for series' matches, but for annuals, etc it is very important.
                 #loop through the Alternates picking out the ones that match and then do an overall loop.
-                loopchk = [x for x in self.AS_Alt if re.sub('[\|\s]','', x.lower()).strip() == re.sub('[\|\s]','', nspace_seriesname.lower()).strip()]
+                loopchk = [x for x in self.AS_Alt if re.sub('[\|\s\-:]','', x.lower()).strip() == re.sub('[\|\s\-:]','', nspace_seriesname.lower()).strip()]
                 if len(loopchk) > 0 and loopchk[0] != '':
                     if mylar.CONFIG.FOLDER_SCAN_LOG_VERBOSE:
                         logger.fdebug('[FILECHECKER] This should be an alternate: %s' % loopchk)
@@ -1560,7 +1574,7 @@ class FileChecker(object):
                     #logger.info('loopchk: ' + str(loopchk))
 
                 #if the names match up, and enable annuals isn't turned on - keep it all together.
-                if re.sub('\|', '', nspace_watchcomic.lower()).strip() == re.sub('\|', '', nspace_seriesname.lower()).strip() and enable_annual is False:
+                if re.sub('[\|\-:]', '', nspace_watchcomic.lower()).strip() == re.sub('[\|\-:]', '', nspace_seriesname.lower()).strip() and enable_annual is False:
                     loopchk.append(nspace_watchcomic)
                     if any(['annual' in nspace_seriesname.lower(), 'special' in nspace_seriesname.lower()]):
                         if 'biannual' in nspace_seriesname.lower():
@@ -1594,7 +1608,7 @@ class FileChecker(object):
                         for ATS in self.AS_Tuple:
                             if mylar.CONFIG.FOLDER_SCAN_LOG_VERBOSE:
                                 logger.fdebug('[FILECHECKER] %s comparing to %s' % (ATS['AS_Alternate'], nspace_seriesname))
-                            if re.sub('\|','', ATS['AS_Alternate'].lower()).strip() == re.sub('\|','', nspace_seriesname.lower()).strip():
+                            if re.sub('[\|\-:]','', ATS['AS_Alternate'].lower()).strip() == re.sub('[\|\-:]','', nspace_seriesname.lower()).strip():
                                 if mylar.CONFIG.FOLDER_SCAN_LOG_VERBOSE:
                                     logger.fdebug('[FILECHECKER] Associating ComiciD : %s' % ATS['ComicID'])
                                 annual_comicid = str(ATS['ComicID'])
@@ -1717,11 +1731,17 @@ class FileChecker(object):
         mod_watchcomic = None
 
         if self.watchcomic:
-            watchdynamic_handlers_match = [x for x in self.dynamic_handlers if x.lower() in self.watchcomic.lower()]
+            # normalize watchcomic same as series_name to handle unicode dashes/apostrophes/colons
+            # Added \u2015 (Horizontal Bar)
+            working_watchcomic = re.sub(r'[\u2014|\u2013|\u2015|\u2e3a|\u2e3b]', ' - ', self.watchcomic)
+            working_watchcomic = re.sub('\u2019', " ' ", working_watchcomic)
+            working_watchcomic = re.sub(':', ' ', working_watchcomic)
+
+            watchdynamic_handlers_match = [x for x in self.dynamic_handlers if x.lower() in working_watchcomic.lower()]
             #logger.fdebug('watch dynamic handlers recognized : ' + str(watchdynamic_handlers_match))
-            watchdynamic_replacements_match = [x for x in self.dynamic_replacements if x.lower() in self.watchcomic.lower()]
+            watchdynamic_replacements_match = [x for x in self.dynamic_replacements if x.lower() in working_watchcomic.lower()]
             #logger.fdebug('watch dynamic replacements recognized : ' + str(watchdynamic_replacements_match))
-            mod_watchcomic = re.sub('[\s\s+\_\.]', '%$', self.watchcomic)
+            mod_watchcomic = re.sub('[\s\s+\_\.]', '%$', working_watchcomic)
             mod_watchcomic = re.sub('[\#]', '', mod_watchcomic)
             mod_find = []
             wdrm_find = []
@@ -1746,8 +1766,10 @@ class FileChecker(object):
                                 spacer+='|'
                             mod_watchcomic = mod_watchcomic[:wd] + spacer + mod_watchcomic[wd+len(wdrm):]
 
-        series_name = re.sub(r'[\u2014|\u2013|\u2e3a|\u2e3b]', ' - ', series_name)
+        series_name = re.sub(r'[\u2014|\u2013|\u2015|\u2e3a|\u2e3b]', ' - ', series_name)
         series_name = re.sub('\u2019', " ' ", series_name)
+        # Handle colons in series_name too (just in case)
+        series_name = re.sub(':', ' ', series_name)
         seriesdynamic_handlers_match = [x for x in self.dynamic_handlers if x.lower() in series_name.lower()]
         #logger.fdebug('series dynamic handlers recognized : ' + str(seriesdynamic_handlers_match))
         seriesdynamic_replacements_match = [x for x in self.dynamic_replacements if x.lower() in series_name.lower()]

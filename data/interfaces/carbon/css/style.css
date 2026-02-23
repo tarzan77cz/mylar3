@@ -94,6 +94,7 @@ html {
   line-height: 1.5;
 }
 body {
+  --body-bg: #272b30;
   background: #272b30;
   color: #c8c8c8;
   font-family: "Helvetica Neue", Helvetica, Arial, Geneva, sans-serif;
