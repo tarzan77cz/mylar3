@@ -43,7 +43,7 @@ import gzip
 import os, errno
 import urllib
 from collections import namedtuple
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 from io import StringIO
 from apscheduler.triggers.interval import IntervalTrigger
 from PIL import Image
@@ -3296,7 +3296,12 @@ def ddl_load_queued_items():
     """
     try:
         myDB = db.DBConnection()
-        queued_items = myDB.select("SELECT * FROM ddl_info WHERE status = 'Queued' ORDER BY updated_date ASC")
+        # Do not auto-load unresolved dlds (link has /dlds/ but link_type empty); queue_direct_ddl will resolve and put resolved item in queue
+        queued_items = myDB.select(
+            "SELECT * FROM ddl_info WHERE status = 'Queued' AND link IS NOT NULL AND trim(link) != '' "
+            "AND NOT (link LIKE '%/dlds/%' AND (link_type IS NULL OR trim(link_type) = '')) "
+            "ORDER BY updated_date ASC"
+        )
         
         if queued_items:
             logger.info('[DDL-STARTUP] Found %s queued items in ddl_info table. Loading into DDL queue...' % len(queued_items))
@@ -3390,6 +3395,36 @@ def ddl_load_queued_items():
     except Exception as e:
         logger.error('[DDL-STARTUP] Error loading queued items: %s' % e)
         mylar.DDL_STARTUP_LOADED = True
+
+
+def resolve_getcomics_dlds(url, timeout=(10, 25)):
+    """
+    Resolve a getcomics dlds URL to the final download URL. Uses browser-like headers.
+    Returns (resolved_link, resolved_type). resolved_type is one of GC-Main, GC-Pixel, GC-Media.
+    Raises on failure (e.g. timeout, invalid host).
+    """
+    parsed = urlparse(url)
+    if not parsed.netloc or ('getcomics.org' not in parsed.netloc and 'getcomics.info' not in parsed.netloc):
+        raise ValueError('Unsupported dlds host')
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 6.1; WOW64; rv:40.0) Gecko/20100101 Firefox/40.1',
+        'Referer': mylar.GC_URL,
+    }
+    r = requests.get(url, allow_redirects=True, headers=headers, timeout=timeout)
+    final = urlparse(r.url)
+    final_netloc = (final.netloc or '').lower()
+    resolved_link = r.url
+    resolved_type = 'GC-Main'
+    order = getattr(mylar.CONFIG, 'DDL_PRIORITY_ORDER', None) or []
+    if isinstance(order, str):
+        order = json.loads(order) if order else []
+    allowed = [p.lower() for p in order]
+    if final_netloc == 'pixeldrain.com' and 'pixeldrain' in allowed:
+        resolved_type = 'GC-Pixel'
+    elif 'mediafire.com' in final_netloc and 'mediafire' in allowed:
+        resolved_type = 'GC-Media'
+    return (resolved_link, resolved_type)
+
 
 def ddl_downloader(queue):
     myDB = db.DBConnection()
@@ -3572,29 +3607,74 @@ def ddl_downloader(queue):
                 ddl_cleanup(item['id'])
             else:
                 if item['site'] == 'DDL(GetComics)':
-                    try:
-                        ltf = ddzstat.get('links_exhausted') if ddzstat else None
-                    except (KeyError, AttributeError):
-                        ltf = None
-                    if not ltf:
-                        logger.info('[Status: %s] Failed to download item from %s : %s ' % (ddzstat.get('success') if ddzstat else 'Unknown', item['link_type'], ddzstat))
-                    # Direct-download / restarted items have no alternate links; mark failed and reverse snatch
-                    if not item.get('comicinfo') or not item.get('packinfo'):
-                        nval = {'status': 'Failed', 'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}
-                        myDB.upsert('ddl_info', nval, ctrlval)
-                        if item.get('pack') or (item.get('id') and str(item['id']).startswith('manual-')):
-                            reverse_the_pack_snatch(item['id'], item['comicid'])
-                        ddl_cleanup(item['id'])
+                    extraction_failed_zip_ok = False
+                    # Zip download complete but extraction failed (e.g. CRC) - avoid re-download by marking Completed
+                    if (ddzstat and ddzstat.get('filename') and ddzstat.get('path') is None
+                            and item.get('comicinfo') and item.get('packinfo')
+                            and mylar.CONFIG.DDL_LOCATION):
+                        zip_path = os.path.join(mylar.CONFIG.DDL_LOCATION, ddzstat['filename'])
+                        if os.path.isfile(zip_path):
+                            try:
+                                zip_size = os.path.getsize(zip_path)
+                            except (OSError, TypeError):
+                                zip_size = 0
+                            remote = item.get('remote_filesize')
+                            if remote is not None:
+                                try:
+                                    remote = int(remote)
+                                except (TypeError, ValueError):
+                                    remote = 0
+                            else:
+                                remote = 0
+                            if remote and abs(zip_size - remote) < 1024:
+                                extraction_failed_zip_ok = True
+                            elif not remote and zip_size > 50 * 1024 * 1024:
+                                extraction_failed_zip_ok = True
+                            if extraction_failed_zip_ok:
+                                logger.warn('[DDL-DOWNLOADER] Zip download complete but extraction failed (e.g. CRC). Marking as Completed to avoid re-download. Zip retained at: %s' % zip_path)
+                                myDB.upsert('ddl_info', {
+                                    'status': 'Completed',
+                                    'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
+                                }, ctrlval)
+                                try:
+                                    if item['id'] in mylar.DDL_QUEUED:
+                                        mylar.DDL_QUEUED.remove(item['id'])
+                                except (ValueError, KeyError):
+                                    pass
+                                ddl_cleanup(item['id'])
+                                try:
+                                    link_type_failure.pop(item['id'])
+                                except KeyError:
+                                    pass
+                                # Optional: if partial extract folder exists, send to PP so good files get processed
+                                if mylar.CONFIG.POST_PROCESSING and mylar.CONFIG.DDL_LOCATION:
+                                    base = re.sub(r'\.zip$', '', ddzstat['filename'], flags=re.I).strip()
+                                    extracted_path = os.path.join(mylar.CONFIG.DDL_LOCATION, base)
+                                    if os.path.isdir(extracted_path):
+                                        try:
+                                            mylar.PP_QUEUE.put({
+                                                'nzb_name': base,
+                                                'nzb_folder': extracted_path,
+                                                'failed': False,
+                                                'issueid': None,
+                                                'comicid': item['comicid'],
+                                                'apicall': True,
+                                                'ddl': True,
+                                                'download_info': {'provider': 'DDL', 'id': item['id']},
+                                            })
+                                            mylar.PP_DDL_IDS.add(item['id'])
+                                            logger.info('[DDL-DOWNLOADER] Partial extract folder found; sent to post-processing: %s' % extracted_path)
+                                        except Exception as e:
+                                            logger.fdebug('[DDL-DOWNLOADER] Could not queue partial extract for PP: %s' % e)
+                    if not extraction_failed_zip_ok:
                         try:
-                            if item['id'] in mylar.DDL_QUEUED:
-                                mylar.DDL_QUEUED.remove(item['id'])
-                        except (ValueError, KeyError):
-                            pass
-                    elif not ltf:
-                        # Need valid mainlink to fetch alternate links; empty/invalid = no alternates, mark Failed
-                        mainlink = item.get('mainlink') or ''
-                        if not mainlink.strip().startswith('http'):
-                            logger.warn('[DDL-DOWNLOADER] No valid mainlink for alternate links (item %s). Marking as Failed.' % item['id'])
+                            ltf = ddzstat.get('links_exhausted') if ddzstat else None
+                        except (KeyError, AttributeError):
+                            ltf = None
+                        if not ltf:
+                            logger.info('[Status: %s] Failed to download item from %s : %s ' % (ddzstat.get('success') if ddzstat else 'Unknown', item['link_type'], ddzstat))
+                        # Direct-download / restarted items have no alternate links; mark failed and reverse snatch
+                        if not item.get('comicinfo') or not item.get('packinfo'):
                             nval = {'status': 'Failed', 'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}
                             myDB.upsert('ddl_info', nval, ctrlval)
                             if item.get('pack') or (item.get('id') and str(item['id']).startswith('manual-')):
@@ -3605,17 +3685,11 @@ def ddl_downloader(queue):
                                     mylar.DDL_QUEUED.remove(item['id'])
                             except (ValueError, KeyError):
                                 pass
-                        else:
-                            try:
-                                link_type_failure[item['id']].append(item['link_type'])
-                            except KeyError:
-                                link_type_failure[item['id']] = [item['link_type']]
-                            logger.fdebug('[%s] link_type_failure: %s' % (item['id'], link_type_failure))
-                            try:
-                                ggc = getcomics.GC(comicid=item['comicid'], issueid=item['issueid'], oneoff=item['oneoff'])
-                                ggc.parse_downloadresults(item['id'], item['mainlink'], item['comicinfo'], item['packinfo'], link_type_failure[item['id']])
-                            except Exception as parse_err:
-                                logger.error('[DDL-DOWNLOADER] parse_downloadresults failed for %s: %s. Marking as Failed.' % (item['id'], parse_err))
+                        elif not ltf:
+                            # Need valid mainlink to fetch alternate links; empty/invalid = no alternates, mark Failed
+                            mainlink = item.get('mainlink') or ''
+                            if not mainlink.strip().startswith('http'):
+                                logger.warn('[DDL-DOWNLOADER] No valid mainlink for alternate links (item %s). Marking as Failed.' % item['id'])
                                 nval = {'status': 'Failed', 'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}
                                 myDB.upsert('ddl_info', nval, ctrlval)
                                 if item.get('pack') or (item.get('id') and str(item['id']).startswith('manual-')):
@@ -3626,20 +3700,41 @@ def ddl_downloader(queue):
                                         mylar.DDL_QUEUED.remove(item['id'])
                                 except (ValueError, KeyError):
                                     pass
-                    else:
-                        # links_exhausted was returned, meaning all links were tried
-                        failed_links = link_type_failure.get(item['id'], [item.get('link_type', 'Unknown')])
-                        logger.info('[REDO] Exhausted all available links [%s] for issueid %s and was not able to download anything' % (failed_links, item['issueid']))
-                        nval = {'status':  'Failed',
-                                'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}
-                        myDB.upsert('ddl_info', nval, ctrlval)
-                        #undo all snatched items, to previous status via item['id'] - this will be set to Skipped currently regardless of previous status
-                        reverse_the_pack_snatch(item['id'], item['comicid'])
-                        try:
-                            link_type_failure.pop(item['id'])
-                        except KeyError:
-                            pass
-                        ddl_cleanup(item['id'])
+                            else:
+                                try:
+                                    link_type_failure[item['id']].append(item['link_type'])
+                                except KeyError:
+                                    link_type_failure[item['id']] = [item['link_type']]
+                                logger.fdebug('[%s] link_type_failure: %s' % (item['id'], link_type_failure))
+                                try:
+                                    ggc = getcomics.GC(comicid=item['comicid'], issueid=item['issueid'], oneoff=item['oneoff'])
+                                    ggc.parse_downloadresults(item['id'], item['mainlink'], item['comicinfo'], item['packinfo'], link_type_failure[item['id']])
+                                except Exception as parse_err:
+                                    logger.error('[DDL-DOWNLOADER] parse_downloadresults failed for %s: %s. Marking as Failed.' % (item['id'], parse_err))
+                                    nval = {'status': 'Failed', 'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}
+                                    myDB.upsert('ddl_info', nval, ctrlval)
+                                    if item.get('pack') or (item.get('id') and str(item['id']).startswith('manual-')):
+                                        reverse_the_pack_snatch(item['id'], item['comicid'])
+                                    ddl_cleanup(item['id'])
+                                    try:
+                                        if item['id'] in mylar.DDL_QUEUED:
+                                            mylar.DDL_QUEUED.remove(item['id'])
+                                    except (ValueError, KeyError):
+                                        pass
+                        else:
+                            # links_exhausted was returned, meaning all links were tried
+                            failed_links = link_type_failure.get(item['id'], [item.get('link_type', 'Unknown')])
+                            logger.info('[REDO] Exhausted all available links [%s] for issueid %s and was not able to download anything' % (failed_links, item['issueid']))
+                            nval = {'status':  'Failed',
+                                    'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}
+                            myDB.upsert('ddl_info', nval, ctrlval)
+                            #undo all snatched items, to previous status via item['id'] - this will be set to Skipped currently regardless of previous status
+                            reverse_the_pack_snatch(item['id'], item['comicid'])
+                            try:
+                                link_type_failure.pop(item['id'])
+                            except KeyError:
+                                pass
+                            ddl_cleanup(item['id'])
                 else:
                     logger.info('[Status: %s] Failed to download item from %s : %s ' % (ddzstat.get('success') if ddzstat else 'Unknown', item['site'], ddzstat))
                     myDB.action('DELETE FROM ddl_info where id=?', [item['id']])
@@ -3660,7 +3755,12 @@ def ddl_downloader(queue):
                         continue
                     
                     try:
-                        queued_items = myDB.select("SELECT * FROM ddl_info WHERE status = 'Queued' ORDER BY updated_date ASC")
+                        # Do not auto-load unresolved dlds (link has /dlds/ but link_type empty); queue_direct_ddl will resolve and put resolved item in queue
+                        queued_items = myDB.select(
+                            "SELECT * FROM ddl_info WHERE status = 'Queued' AND link IS NOT NULL AND trim(link) != '' "
+                            "AND NOT (link LIKE '%/dlds/%' AND (link_type IS NULL OR trim(link_type) = '')) "
+                            "ORDER BY updated_date ASC"
+                        )
                         if queued_items:
                             logger.info('[DDL-DOWNLOADER] Queue empty, found %s queued items in DB. Auto-loading...' % len(queued_items))
                             items_loaded = 0
@@ -5723,7 +5823,10 @@ def issue_number_parser(issue_no, zero_padding=None, issue_id= None, from_data_s
         pass
     else:
         #logger.debug(f'Issue identified as numeric {issue_no}')
-        return IssueNumber(issue_number_to_int(float(issue_no)),format_issue_number(issue_no,zero_padding) if pretty_string else None, legacy_issue)
+        # When brackets contained a non-numeric suffix (e.g. "5 [A]" or "5 [B]"), use it so 5A/5B files match (e.g. Human Torch 1940). Do not use numeric legacy (e.g. "1 [15]") to avoid breaking Haunt of Fear-style numbering.
+        if legacy_issue and not legacy_issue.strip().isdigit():
+            return IssueNumber(issue_number_to_int(float(issue_no), legacy_issue.strip()), format_issue_number(issue_no, zero_padding) if pretty_string else None, legacy_issue)
+        return IssueNumber(issue_number_to_int(float(issue_no)), format_issue_number(issue_no, zero_padding) if pretty_string else None, legacy_issue)
 
     # Find the first recognisable numeric string, and use that to denote the issue "number"
     # Note that the regex will match empty strings so we need to filter this result set.  This was to

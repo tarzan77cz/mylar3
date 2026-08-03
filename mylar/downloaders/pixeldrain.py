@@ -20,6 +20,7 @@ import time
 from operator import itemgetter
 from pathlib import Path
 import urllib
+import urllib.parse
 
 import mylar
 from mylar import db, helpers, logger, search, search_filer
@@ -43,6 +44,21 @@ class PixelDrain(object):
     def ddl_download(self, link, id, issueid, resume=None, remote_filesize=0):
         self.id = id
         self.url = link
+        # If link is getcomics dlds, resolve to final Pixeldrain URL first (without Pixeldrain Referer so getcomics redirects)
+        try:
+            parsed = urllib.parse.urlparse(link)
+            netloc = (parsed.netloc or '').lower()
+            if '/dlds/' in (parsed.path or '') and ('getcomics.org' in netloc or 'getcomics.info' in netloc):
+                resolve_headers = {'User-Agent': self.headers['User-Agent']}
+                r = self.session.get(link, allow_redirects=True, headers=resolve_headers, timeout=(10, 15))
+                final_netloc = (urllib.parse.urlparse(r.url).netloc or '').lower()
+                if 'pixeldrain.com' in final_netloc:
+                    self.url = r.url
+                    logger.fdebug('[PixelDrain] Resolved getcomics dlds to: %s' % self.url)
+                else:
+                    logger.fdebug('[PixelDrain] dlds resolve did not land on pixeldrain.com, got: %s' % r.url)
+        except Exception as e:
+            logger.fdebug('[PixelDrain] dlds resolve failed: %s' % e)
         if self.dl_location is not None and not os.path.isdir(
             self.dl_location
         ):
@@ -65,9 +81,9 @@ class PixelDrain(object):
                 timeout=(30,30)
             )
 
-        file_id = os.path.basename(
-            urllib.parse.unquote(t.url)
-        )  # .decode('utf-8'))
+        # Get file_id from path only (avoid query string); Pixeldrain URLs are .../u/FILEID
+        path = (urllib.parse.urlparse(t.url).path or '').strip('/')
+        file_id = path.split('/')[-1] if path else os.path.basename(urllib.parse.unquote(t.url))
         logger.fdebug(t.url)
         logger.fdebug(t)
         logger.fdebug('[PixelDrain] file_id: %s' % file_id)

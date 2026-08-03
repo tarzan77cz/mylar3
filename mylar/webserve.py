@@ -4354,11 +4354,6 @@ class WebInterface(object):
         issueid = None
         if issueid_info.get('issues'):
             issueid = issueid_info['issues'][0]['issueid']
-        # Mark all pack issues as Snatched immediately (same as Search-4-Missing pack flow)
-        nzbname = 'Direct Download %s (%s)' % (ComicName, issue_range)
-        for isid in issueid_info['issues']:
-            updater.nzblog(isid['issueid'], nzbname, ComicName, id=pack_id, prov='DDL(GetComics)', oneoff=False)
-            updater.foundsearch(ComicID, isid['issueid'], mode='want', provider='DDL(GetComics)')
         comicinfo = [{
             'ComicID': ComicID,
             'ComicName': ComicName,
@@ -4375,63 +4370,111 @@ class WebInterface(object):
             'pack_numbers': issue_range,
             'pack_issuelist': issueid_info,
         }
-        link = url
-        link_type = 'GC-Main'
-        if '/dlds/' in url:
-            try:
-                parsed = urllib.parse.urlparse(url)
-                if parsed.netloc and ('getcomics.org' in parsed.netloc or 'getcomics.info' in parsed.netloc):
-                    r = requests.get(url, allow_redirects=True, timeout=15)
-                    final = urllib.parse.urlparse(r.url)
-                    if final.netloc == 'pixeldrain.com':
-                        order = getattr(mylar.CONFIG, 'DDL_PRIORITY_ORDER', None) or []
-                        if isinstance(order, str):
-                            order = json.loads(order) if order else []
-                        allowed = [p.lower() for p in order]
-                        if 'pixeldrain' in allowed:
-                            link_type = 'GC-Pixel'
-                            link = r.url
-                            logger.info('[QUEUE-DIRECT-DDL] Resolved dlds link to Pixeldrain; using GC-Pixel')
-            except Exception as e:
-                logger.fdebug('[QUEUE-DIRECT-DDL] dlds resolve failed, using GC-Main: %s' % e)
-        # Display name with issue range so multiple packs are distinguishable (e.g. "Suicide Squad (2011) 0-15")
         series_display = '%s%s %s' % (ComicName, (' (%s)' % ComicYear) if ComicYear else '', issue_range)
         ctrlval = {'id': pack_id}
-        vals = {
-            'series': series_display,
-            'year': ComicYear,
-            'size': '',
-            'issues': issue_range,
-            'issueid': issueid,
-            'comicid': ComicID,
-            'link': link,
-            'mainlink': '',
-            'site': 'DDL(GetComics)',
-            'pack': 1,
-            'link_type': link_type,
-            'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
-            'status': 'Queued',
-        }
-        myDB.upsert('ddl_info', vals, ctrlval)
-        mylar.DDL_QUEUE.put({
-            'link': link,
-            'mainlink': '',
-            'series': series_display,
-            'year': ComicYear,
-            'size': '',
-            'comicid': ComicID,
-            'issueid': issueid,
-            'oneoff': False,
-            'id': pack_id,
-            'link_type': link_type,
-            'filename': None,
-            'comicinfo': comicinfo,
-            'packinfo': packinfo,
-            'site': 'DDL(GetComics)',
-            'remote_filesize': 0,
-            'resume': None,
-        })
-        logger.info('[QUEUE-DIRECT-DDL] Queued direct download for %s (issues %s)' % (ComicName, issue_range))
+        nzbname = 'Direct Download %s (%s)' % (ComicName, issue_range)
+
+        if '/dlds/' in url:
+            # dlds URL: save record with user URL in link so we can retry resolve on requeue
+            vals = {
+                'series': series_display,
+                'year': ComicYear,
+                'size': '',
+                'issues': issue_range,
+                'issueid': issueid,
+                'comicid': ComicID,
+                'link': url,
+                'mainlink': '',
+                'site': 'DDL(GetComics)',
+                'pack': 1,
+                'link_type': '',
+                'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
+                'status': 'Queued',
+            }
+            myDB.upsert('ddl_info', vals, ctrlval)
+            for isid in issueid_info['issues']:
+                updater.nzblog(isid['issueid'], nzbname, ComicName, id=pack_id, prov='DDL(GetComics)', oneoff=False)
+                updater.foundsearch(ComicID, isid['issueid'], mode='want', provider='DDL(GetComics)')
+            try:
+                resolved_link, resolved_type = helpers.resolve_getcomics_dlds(url)
+                if resolved_type == 'GC-Pixel':
+                    logger.info('[QUEUE-DIRECT-DDL] Resolved dlds link to Pixeldrain; using GC-Pixel')
+                elif resolved_type == 'GC-Media':
+                    logger.info('[QUEUE-DIRECT-DDL] Resolved dlds link to Mediafire; using GC-Media')
+                myDB.upsert('ddl_info', {
+                    'link': resolved_link,
+                    'link_type': resolved_type,
+                    'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
+                }, ctrlval)
+                mylar.DDL_QUEUE.put({
+                    'link': resolved_link,
+                    'mainlink': '',
+                    'series': series_display,
+                    'year': ComicYear,
+                    'size': '',
+                    'comicid': ComicID,
+                    'issueid': issueid,
+                    'oneoff': False,
+                    'id': pack_id,
+                    'link_type': resolved_type,
+                    'filename': None,
+                    'comicinfo': comicinfo,
+                    'packinfo': packinfo,
+                    'site': 'DDL(GetComics)',
+                    'remote_filesize': 0,
+                    'resume': None,
+                })
+                logger.info('[QUEUE-DIRECT-DDL] Resolved and queued direct download for %s (issues %s)' % (ComicName, issue_range))
+            except Exception as e:
+                logger.warn('[QUEUE-DIRECT-DDL] dlds resolve failed: %s. Marking as Failed.' % e)
+                myDB.upsert('ddl_info', {
+                    'status': 'Failed',
+                    'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
+                }, ctrlval)
+                helpers.reverse_the_pack_snatch(pack_id, ComicID)
+                return json.dumps({'status': 'error', 'message': 'Could not resolve download link: %s' % str(e)})
+        else:
+            # Non-dlds: known link, write to DB and put in queue immediately
+            link = url
+            link_type = 'GC-Main'
+            vals = {
+                'series': series_display,
+                'year': ComicYear,
+                'size': '',
+                'issues': issue_range,
+                'issueid': issueid,
+                'comicid': ComicID,
+                'link': link,
+                'mainlink': '',
+                'site': 'DDL(GetComics)',
+                'pack': 1,
+                'link_type': link_type,
+                'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
+                'status': 'Queued',
+            }
+            myDB.upsert('ddl_info', vals, ctrlval)
+            mylar.DDL_QUEUE.put({
+                'link': link,
+                'mainlink': '',
+                'series': series_display,
+                'year': ComicYear,
+                'size': '',
+                'comicid': ComicID,
+                'issueid': issueid,
+                'oneoff': False,
+                'id': pack_id,
+                'link_type': link_type,
+                'filename': None,
+                'comicinfo': comicinfo,
+                'packinfo': packinfo,
+                'site': 'DDL(GetComics)',
+                'remote_filesize': 0,
+                'resume': None,
+            })
+            logger.info('[QUEUE-DIRECT-DDL] Queued direct download for %s (issues %s)' % (ComicName, issue_range))
+            for isid in issueid_info['issues']:
+                updater.nzblog(isid['issueid'], nzbname, ComicName, id=pack_id, prov='DDL(GetComics)', oneoff=False)
+                updater.foundsearch(ComicID, isid['issueid'], mode='want', provider='DDL(GetComics)')
         return json.dumps({'status': 'success', 'message': 'Direct download queued for %s (issues %s)' % (ComicName, issue_range)})
     queue_direct_ddl.exposed = True
 
@@ -4802,7 +4845,25 @@ class WebInterface(object):
                                     packinfo = {'pack': True, 'pack_numbers': item['issues'], 'pack_issuelist': issueid_info}
                         except Exception as e:
                             logger.debug('[DDL-REQUEUE] Could not reconstruct comicinfo for %s: %s' % (item['id'], e))
-                    mylar.DDL_QUEUE.put({'link': item['link'],
+                    # Retry resolve when link is unresolved dlds URL (link has /dlds/, link_type empty)
+                    link_to_put = item['link']
+                    link_type_to_put = item['link_type']
+                    if (link_to_put and '/dlds/' in link_to_put and
+                            (not link_type_to_put or not (link_type_to_put or '').strip())):
+                        try:
+                            resolved_link, resolved_type = helpers.resolve_getcomics_dlds(link_to_put)
+                            myDB.upsert('ddl_info', {
+                                'link': resolved_link,
+                                'link_type': resolved_type,
+                                'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
+                            }, {'id': item['id']})
+                            link_to_put = resolved_link
+                            link_type_to_put = resolved_type
+                            logger.info('[DDL-REQUEUE] Resolved dlds link for %s (ID: %s); queuing for download.' % (item['series'], item['id']))
+                        except Exception as e:
+                            logger.warn('[DDL-REQUEUE] Resolve failed for %s (ID: %s): %s. Skipping queue (no valid link).' % (item['series'], item['id'], e))
+                            continue
+                    mylar.DDL_QUEUE.put({'link': link_to_put,
                                          'mainlink': item['mainlink'],
                                          'series': item['series'],
                                          'year': item['year'],
@@ -4811,7 +4872,7 @@ class WebInterface(object):
                                          'issueid': item['issueid'],
                                          'oneoff': item['oneoff'],
                                          'id': item['id'],
-                                         'link_type': item['link_type'],
+                                         'link_type': link_type_to_put,
                                          'filename': item['filename'],
                                          'tmp_filename': item.get('tmp_filename'),
                                          'comicinfo': comicinfo,

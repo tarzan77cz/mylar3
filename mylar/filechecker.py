@@ -138,7 +138,8 @@ class FileChecker(object):
                     'issue_number':        runresults['issue_number'],
                     'scangroup':           runresults['scangroup'],
                     'reading_order':       runresults['reading_order'],
-                    'booktype':            runresults['booktype']
+                    'booktype':            runresults['booktype'],
+                    'possible_issuenumbers': runresults.get('possible_issuenumbers', [])
                     }
         else:
             filelist = self.traverse_directories(self.dir)
@@ -181,7 +182,8 @@ class FileChecker(object):
                                     'issue_number':        runresults['issue_number'],
                                     'scangroup':           runresults['scangroup'],
                                     'reading_order':       runresults['reading_order'],
-                                    'booktype':            runresults['booktype']
+                                    'booktype':            runresults['booktype'],
+                                    'possible_issuenumbers': runresults.get('possible_issuenumbers', [])
                                     })
                         else:
                             comiclist.append({
@@ -196,7 +198,8 @@ class FileChecker(object):
                                      'AnnualComicID':           runresults['annual_comicid'],
                                      'issueid':                 runresults['issueid'],
                                      'scangroup':               runresults['scangroup'],
-                                     'booktype':                runresults['booktype']
+                                     'booktype':                runresults['booktype'],
+                                     'possible_issuenumbers':   runresults.get('possible_issuenumbers', [])
                                      })
                         comiccnt +=1
                     else:
@@ -821,7 +824,17 @@ class FileChecker(object):
                                 lastissue_position = split_file.index(sf, lastissue_position)                            
                                 lastissue_mod_position = file_length
                         elif x > 0:
-                            if x == float('inf') and split_file.index(sf, lastissue_position) <= 2:
+                            sf_pos = split_file.index(sf, lastissue_position)
+                            # If the word "Infinity" is immediately followed by the XCV
+                            # placeholder (which represents an actual unicode char such
+                            # as the infinity symbol), the word is just a textual
+                            # duplicate of the symbol and belongs to the series title.
+                            inf_followed_by_xcv = (
+                                x == float('inf')
+                                and sf_pos + 1 < len(split_file)
+                                and split_file[sf_pos + 1] == 'XCV'
+                            )
+                            if x == float('inf') and (sf_pos <= 2 or inf_followed_by_xcv):
                                 logger.fdebug('infinity wording detected - position places it within series title boundaries..')
                             else:
                                 logger.fdebug('I have encountered a decimal issue #: %s' % sf)
@@ -985,11 +998,31 @@ class FileChecker(object):
                                               'mod_position':  self.char_file_position(modfilename, new_issuenumber, yearmodposition),
                                               'validcountchk': False})
         #---end 2019-11-30
+        # Add parenthesized token after year as issue candidate when year is present (e.g. "... 1994-09-00 ( 25) ...")
+        if yearposition is not None and yearposition + 1 < len(split_file):
+            next_token = split_file[yearposition + 1]
+            if '(' in next_token and ')' in next_token:
+                inner = re.sub(r'[\(\)]', '', next_token).strip()
+                if inner and re.search(r'\d', inner):
+                    possible_issuenumbers.append({
+                        'number':       inner,
+                        'position':     yearposition + 1,
+                        'mod_position': self.char_file_position(modfilename, next_token, yearmodposition),
+                        'validcountchk': False})
         issue_number = None
         dash_numbers = []
         issue_number_position = len(split_file)
+        possible_issuenumbers_asint = []  # normalized asInt list for PostProcessor matching
         if len(possible_issuenumbers) > 0:
             logger.fdebug('possible_issuenumbers: %s' % possible_issuenumbers)
+            # Build normalized list (asInt) for matching in PostProcessor
+            for p in possible_issuenumbers:
+                try:
+                    asint = helpers.issue_number_parser(p['number']).asInt
+                    if asint is not None:
+                        possible_issuenumbers_asint.append(asint)
+                except Exception:
+                    pass
             # When year is known, prefer issue numbers before the year (avoids picking trailing IDs e.g. "Family Man 01 (1995) c2c (DC) 21199.cbz")
             if yearposition is not None and len(possible_issuenumbers) > 1:
                 before_year = [p for p in possible_issuenumbers if p['position'] < yearposition]
@@ -1009,7 +1042,13 @@ class FileChecker(object):
                     finddash = -1
                     logger.fdebug('dash is in first word, not considering for determing issue number.')
 
-                for pis in sorted(possible_issuenumbers, key=operator.itemgetter('position'), reverse=True):
+                pis_order = sorted(possible_issuenumbers, key=operator.itemgetter('position'), reverse=True)
+                if yearposition is not None:
+                    at_yp1 = [p for p in pis_order if p['position'] == yearposition + 1]
+                    if at_yp1:
+                        pis_order = at_yp1 + [p for p in pis_order if p['position'] != yearposition + 1]
+                        logger.fdebug('Preferring parenthesized issue after year: %s at position %s' % (at_yp1[0]['number'], at_yp1[0]['position']))
+                for pis in pis_order:
                     a = ' '.join(split_file)
                     lenn = pis['mod_position'] + len(pis['number'])
                     if lenn == len(a) and finddash != -1:
@@ -1390,7 +1429,8 @@ class FileChecker(object):
                             'annual_comicid':      None,
                             'scangroup':           scangroup,
                             'booktype':            booktype,
-                            'reading_order':       None}
+                            'reading_order':       None,
+                            'possible_issuenumbers': possible_issuenumbers_asint}
 
         if self.justparse:
             return {'parse_status':           'success',
@@ -1409,7 +1449,8 @@ class FileChecker(object):
                     'issue_number':           issue_number,
                     'scangroup':              scangroup,
                     'booktype':               booktype,
-                    'reading_order':          reading_order}
+                    'reading_order':          reading_order,
+                    'possible_issuenumbers': possible_issuenumbers_asint}
 
         series_info = {}
         series_info = {'sub':                    path_list,
@@ -1425,7 +1466,8 @@ class FileChecker(object):
                        'issue_year':             issue_year,
                        'issue_number':           issue_number,
                        'scangroup':              scangroup,
-                       'booktype':               booktype}
+                       'booktype':               booktype,
+                       'possible_issuenumbers':  possible_issuenumbers_asint}
 
         return self.matchIT(series_info)
 
@@ -1664,7 +1706,8 @@ class FileChecker(object):
                     'issue_year':     series_info['issue_year'],
                     'issueid':        series_info['issueid'],
                     'scangroup':      series_info['scangroup'],
-                    'booktype':       series_info['booktype']}
+                    'booktype':       series_info['booktype'],
+                    'possible_issuenumbers': series_info.get('possible_issuenumbers', [])}
 
     def char_file_position(self, file, findchar, lastpos):
         return file.find(findchar, lastpos)

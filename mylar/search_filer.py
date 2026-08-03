@@ -45,6 +45,43 @@ def _find_rejected_match_index(IssueID, link, nzbid):
     return None
 
 
+def _pack_year_bounds(year_value):
+    """Parse pack/issue year into inclusive (start, end) ints.
+
+    Accepts values like ``2014``, ``2014-2015``, or messy strings containing
+    one or more 19xx/20xx years. Returns None when no usable year is present.
+    """
+    if year_value is None:
+        return None
+    year_str = str(year_value).strip()
+    if not year_str or year_str.lower() == 'none':
+        return None
+
+    range_match = re.match(r'^(\d{4})\s*[-–—]\s*(\d{4})$', year_str)
+    if range_match:
+        start_year = int(range_match.group(1))
+        end_year = int(range_match.group(2))
+        if start_year > end_year:
+            start_year, end_year = end_year, start_year
+        return start_year, end_year
+
+    if re.match(r'^\d{4}$', year_str):
+        year_int = int(year_str)
+        return year_int, year_int
+
+    found_years = [int(y) for y in re.findall(r'(?:19|20)\d{2}', year_str)]
+    if not found_years:
+        return None
+    return min(found_years), max(found_years)
+
+
+def _years_overlap(bounds_a, bounds_b):
+    """Return True when inclusive year ranges overlap."""
+    if not bounds_a or not bounds_b:
+        return False
+    return bounds_a[0] <= bounds_b[1] and bounds_b[0] <= bounds_a[1]
+
+
 def _add_or_update_rejected_match(IssueID, link, nzbid, match_data, update_only=False):
     """Add new or update existing rejected match. Returns True if added/updated, False otherwise."""
     try:
@@ -917,6 +954,59 @@ class search_check(object):
                                 )
         elif UseFuzzy == "1":
             yearmatch = True
+
+        # Pack titles often include both a volume and a year range
+        # (e.g. "Vampirella Vol. 2 #1-22 (2001-2003)"). Volume alone must not
+        # allow that pack onto a different era of the same title (e.g. Dynamite
+        # Vampirella 2014 marked as v2 on the watchlist).
+        if pack is True:
+            pack_year_str = None
+            if parsed_comic is not None:
+                pack_year_str = parsed_comic.get('issue_year')
+            if pack_year_str is None and entry.get('year') is not None:
+                pack_year_str = entry.get('year')
+            pack_bounds = _pack_year_bounds(pack_year_str)
+            if pack_bounds is not None:
+                ref_years = []
+                for year_candidate in (SeriesYear, ComicYear, comyear):
+                    if year_candidate is None:
+                        continue
+                    try:
+                        year_digits = re.sub(r'[^0-9]', '', str(year_candidate))
+                        if len(year_digits) < 4:
+                            continue
+                        year_int = int(year_digits[:4])
+                    except Exception:
+                        continue
+                    if 1900 <= year_int <= 2100:
+                        ref_years.append(year_int)
+                if ref_years:
+                    # ±1 covers Nov/Jan store-date edge cases around year boundaries
+                    ref_bounds = (min(ref_years) - 1, max(ref_years) + 1)
+                    if not _years_overlap(pack_bounds, ref_bounds):
+                        logger.fdebug(
+                            '[PACK-YEAR] Pack years %s do not overlap series/issue'
+                            ' years %s-%s. Ignoring possible match.'
+                            % (pack_year_str, min(ref_years), max(ref_years))
+                        )
+                        yearmatch = False
+                        try:
+                            nzbid = entry.get('id') if 'id' in entry else None
+                            size_val = comsize_m if 'comsize_m' in locals() and comsize_m != 0 else None
+                            self._store_rejected_match(
+                                entry,
+                                is_info,
+                                "Pack year mismatch: found %s, expected around %s-%s"
+                                % (pack_year_str, min(ref_years), max(ref_years)),
+                                comsize_m=size_val,
+                                pubdate=pubdate if 'pubdate' in locals() else None,
+                                nzbid=nzbid,
+                                relevance_score=0.4,
+                            )
+                        except Exception as e:
+                            logger.fdebug('[REJECTED-MATCHES] Error storing pack year rejection: %s' % e)
+                        return None
+                    yearmatch = True
 
         if yearmatch is False and pack is False:
             # Store rejected match for user review

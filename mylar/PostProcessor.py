@@ -1101,59 +1101,84 @@ class PostProcessor(object):
                             nm+=1
                             continue
                         else:
-                            try:
-                                if (any([cs['WatchValues']['Type'] == 'TPB', cs['WatchValues']['Type'] == 'HC', cs['WatchValues']['Type'] == 'GN']) and cs['WatchValues']['Total'] > 1) or all([cs['WatchValues']['Type'] == 'One-Shot', cs['WatchValues']['Total'] == 1]):
-                                    if watchmatch['series_volume'] is not None:
-                                        just_the_digits = re.sub('[^0-9]', '', watchmatch['series_volume']).strip()
+                            issuechk = None
+                            fcdigit = None
+                            annchk = "no"
+                            temploc = None
+                            possible = fl.get('possible_issuenumbers') or []
+                            if possible:
+                                for candidate_int in possible:
+                                    issuechk = myDB.select("SELECT * from issues WHERE ComicID=? AND Int_IssueNumber=?", [cs['ComicID'], candidate_int])
+                                    if issuechk:
+                                        fcdigit = candidate_int
+                                        temploc = issuechk[0]['Issue_Number']
+                                        break
+                                if not issuechk and mylar.CONFIG.ANNUALS_ON is True:
+                                    for candidate_int in possible:
+                                        issuechk = myDB.select("SELECT * from annuals WHERE ComicID=? AND Int_IssueNumber=? AND NOT Deleted", [cs['ComicID'], candidate_int])
+                                        if issuechk:
+                                            fcdigit = candidate_int
+                                            annchk = "yes"
+                                            temploc = issuechk[0]['Issue_Number']
+                                            break
+                            if possible and issuechk:
+                                datematch = "False"
+                            if not possible or not issuechk:
+                                try:
+                                    if (any([cs['WatchValues']['Type'] == 'TPB', cs['WatchValues']['Type'] == 'HC', cs['WatchValues']['Type'] == 'GN']) and cs['WatchValues']['Total'] > 1) or all([cs['WatchValues']['Type'] == 'One-Shot', cs['WatchValues']['Total'] == 1]):
+                                        if watchmatch['series_volume'] is not None:
+                                            just_the_digits = re.sub('[^0-9]', '', watchmatch['series_volume']).strip()
+                                        else:
+                                            just_the_digits = re.sub('[^0-9.\-\u00BC-\u00BE\u2150-\u215E\u221E]', '', watchmatch['justthedigits']).strip()
                                     else:
-                                        just_the_digits = re.sub('[^0-9.\-\u00BC-\u00BE\u2150-\u215E\u221E]', '', watchmatch['justthedigits']).strip()
-                                else:
-                                    just_the_digits = watchmatch['justthedigits']
-                            except Exception as e:
-                                logger.warn('[Exception: %s] Unable to properly match up/retrieve issue number (or volume) for this [CS: %s] [WATCHMATCH: %s]' % (e, cs, watchmatch))
-                                nm+=1
-                                continue
+                                        just_the_digits = watchmatch['justthedigits']
+                                except Exception as e:
+                                    logger.warn('[Exception: %s] Unable to properly match up/retrieve issue number (or volume) for this [CS: %s] [WATCHMATCH: %s]' % (e, cs, watchmatch))
+                                    nm+=1
+                                    continue
 
-                            if just_the_digits is not None:
-                                temploc= just_the_digits.replace('_', ' ')
-                                temploc = re.sub('[\#\']', '', temploc)
-                                #logger.fdebug('temploc: %s' % temploc)
-                            else:
-                                if any([cs['WatchValues']['Type'] == 'TPB', cs['WatchValues']['Type'] == 'GN', cs['WatchValues']['Type'] == 'HC', cs['WatchValues']['Type'] == 'One-Shot']):
-                                   temploc = '1'
+                                if just_the_digits is not None:
+                                    temploc= just_the_digits.replace('_', ' ')
+                                    temploc = re.sub('[\#\']', '', temploc)
+                                    #logger.fdebug('temploc: %s' % temploc)
                                 else:
-                                   temploc = None
-                            datematch = "False"
-
-                            if temploc is None and all([cs['WatchValues']['Type'] != 'TPB', cs['WatchValues']['Type'] != 'GN', cs['WatchValues']['Type'] != 'HC', cs['WatchValues']['Type'] != 'One-Shot']):
-                                logger.info('this should have an issue number to match to this particular series: %s' % cs['ComicID'])
-                                continue
-
-                            if temploc is not None and (any(['annual' in temploc.lower(), 'special' in temploc.lower()]) and mylar.CONFIG.ANNUALS_ON is True):
-                                biannchk = re.sub('-', '', temploc.lower()).strip()
-                                if 'biannual' in biannchk:
-                                    logger.fdebug('%s Bi-Annual detected.' % module)
-                                    fcdigit = helpers.issue_number_parser(re.sub('biannual', '', str(biannchk)).strip()).asInt
-                                else:
-                                    if 'annual' in temploc.lower():
-                                        year_check = re.findall(r'(\d{4})(?=[\s]|annual\b|$)', temploc, flags=re.I)
-                                        if year_check:
-                                            ann_line = '%s annual' % year_check[0]
-                                            fcdigit = helpers.issue_number_parser(re.sub(ann_line, '', str(temploc.lower())).strip()).asInt
-                                        fcdigit = helpers.issue_number_parser(re.sub('annual', '', str(temploc.lower())).strip()).asInt
+                                    if any([cs['WatchValues']['Type'] == 'TPB', cs['WatchValues']['Type'] == 'GN', cs['WatchValues']['Type'] == 'HC', cs['WatchValues']['Type'] == 'One-Shot']):
+                                       temploc = '1'
                                     else:
-                                        fcdigit = helpers.issue_number_parser(re.sub('special', '', str(temploc.lower())).strip()).asInt
+                                       temploc = None
+                                datematch = "False"
+
+                                if temploc is None and all([cs['WatchValues']['Type'] != 'TPB', cs['WatchValues']['Type'] != 'GN', cs['WatchValues']['Type'] != 'HC', cs['WatchValues']['Type'] != 'One-Shot']):
+                                    logger.info('this should have an issue number to match to this particular series: %s' % cs['ComicID'])
+                                    continue
+
+                                if temploc is not None and (any(['annual' in temploc.lower(), 'special' in temploc.lower()]) and mylar.CONFIG.ANNUALS_ON is True):
+                                    biannchk = re.sub('-', '', temploc.lower()).strip()
+                                    if 'biannual' in biannchk:
+                                        logger.fdebug('%s Bi-Annual detected.' % module)
+                                        fcdigit = helpers.issue_number_parser(re.sub('biannual', '', str(biannchk)).strip()).asInt
+                                    else:
+                                        if 'annual' in temploc.lower():
+                                            year_check = re.findall(r'(\d{4})(?=[\s]|annual\b|$)', temploc, flags=re.I)
+                                            if year_check:
+                                                ann_line = '%s annual' % year_check[0]
+                                                fcdigit = helpers.issue_number_parser(re.sub(ann_line, '', str(temploc.lower())).strip()).asInt
+                                            fcdigit = helpers.issue_number_parser(re.sub('annual', '', str(temploc.lower())).strip()).asInt
+                                        else:
+                                            fcdigit = helpers.issue_number_parser(re.sub('special', '', str(temploc.lower())).strip()).asInt
                                     logger.fdebug('%s Annual/Special detected [%s]. ComicID assigned as %s' % (module, fcdigit, cs['ComicID']))
-                                annchk = "yes"
-                                issuechk = myDB.select("SELECT * from annuals WHERE ComicID=? AND Int_IssueNumber=? AND NOT Deleted", [cs['ComicID'], fcdigit])
-                            else:
-                                annchk = "no"
-                                if temploc is not None:
-                                    fcdigit = helpers.issue_number_parser(temploc).asInt
-                                    issuechk = myDB.select("SELECT * from issues WHERE ComicID=? AND Int_IssueNumber=?", [cs['ComicID'], fcdigit])
+                                    annchk = "yes"
+                                    issuechk = myDB.select("SELECT * from annuals WHERE ComicID=? AND Int_IssueNumber=? AND NOT Deleted", [cs['ComicID'], fcdigit])
                                 else:
-                                    fcdigit = None
-                                    issuechk = myDB.select("SELECT * from issues WHERE ComicID=?", [cs['ComicID']])
+                                    annchk = "no"
+                                    if temploc is not None:
+                                        fcdigit = helpers.issue_number_parser(temploc).asInt
+                                        issuechk = myDB.select("SELECT * from issues WHERE ComicID=? AND Int_IssueNumber=?", [cs['ComicID'], fcdigit])
+                                    else:
+                                        fcdigit = None
+                                        issuechk = myDB.select("SELECT * from issues WHERE ComicID=?", [cs['ComicID']])
+                            else:
+                                datematch = "False"
 
                             if not issuechk:
                                 try:
@@ -1233,18 +1258,22 @@ class PostProcessor(object):
 
                                     #logger.info(module + ' ReleaseDate: ' + str(isc['ReleaseDate']))
                                     #logger.info(module + ' IssueDate: ' + str(isc['IssueDate']))
+                                    file_year = int(watchmatch['issue_year'])
                                     if isc['DigitalDate'] is not None and isc['DigitalDate'] != '0000-00-00':
-                                        if int(isc['DigitalDate'][:4]) < int(watchmatch['issue_year']):
-                                            logger.fdebug('%s[ISSUE-VERIFY] %s is before the issue year of %s that was discovered in the filename' % (module, isc['DigitalDate'], watchmatch['issue_year']))
+                                        db_year = int(isc['DigitalDate'][:4])
+                                        if abs(db_year - file_year) > 1:
+                                            logger.fdebug('%s[ISSUE-VERIFY] Issue year %s differs from filename year %s by more than 1 year' % (module, isc['DigitalDate'], watchmatch['issue_year']))
                                             datematch = "False"
 
                                     elif isc['ReleaseDate'] is not None and isc['ReleaseDate'] != '0000-00-00':
-                                        if int(isc['ReleaseDate'][:4]) < int(watchmatch['issue_year']):
-                                            logger.fdebug('%s[ISSUE-VERIFY] %s is before the issue year of %s that was discovered in the filename' % (module, isc['ReleaseDate'], watchmatch['issue_year']))
+                                        db_year = int(isc['ReleaseDate'][:4])
+                                        if abs(db_year - file_year) > 1:
+                                            logger.fdebug('%s[ISSUE-VERIFY] Issue year %s differs from filename year %s by more than 1 year' % (module, isc['ReleaseDate'], watchmatch['issue_year']))
                                             datematch = "False"
                                     else:
-                                        if int(isc['IssueDate'][:4]) < int(watchmatch['issue_year']):
-                                            logger.fdebug('%s[ISSUE-VERIFY] %s is before the issue year %s that was discovered in the filename' % (module, isc['IssueDate'], watchmatch['issue_year']))
+                                        db_year = int(isc['IssueDate'][:4])
+                                        if abs(db_year - file_year) > 1:
+                                            logger.fdebug('%s[ISSUE-VERIFY] Issue year %s differs from filename year %s by more than 1 year' % (module, isc['IssueDate'], watchmatch['issue_year']))
                                             datematch = "False"
 
                                     if int(watch_issueyear) != int(watchmatch['issue_year']):
@@ -1646,8 +1675,16 @@ class PostProcessor(object):
                                         else:
                                             temploc = None
 
-                                    if (any([temploc is not None ,temploc != 999999999999999]) and 
-                                            helpers.issue_number_parser(temploc).asInt != helpers.issue_number_parser(v[i]['ArcValues']['IssueNumber']).asInt):
+                                    arc_issue_int = helpers.issue_number_parser(v[i]['ArcValues']['IssueNumber']).asInt
+                                    possible_arc = fl.get('possible_issuenumbers') or []
+                                    if possible_arc and arc_issue_int in possible_arc:
+                                        fcdigit = arc_issue_int
+                                        _chk = myDB.select("SELECT * from storyarcs WHERE ComicID=? AND Int_IssueNumber=?", [v[i]['WatchValues']['ComicID'], fcdigit])
+                                        issuechk = _chk if _chk else None
+                                        annchk = "no"
+                                        annualtype = None
+                                    elif (any([temploc is not None ,temploc != 999999999999999]) and 
+                                            helpers.issue_number_parser(temploc).asInt != arc_issue_int):
                                         #logger.fdebug('issues dont match. Skipping')
                                         i+=1
                                         continue
@@ -1727,9 +1764,11 @@ class PostProcessor(object):
                                                 #logger.fdebug('issuechk: %s' % isc['IssueDate'][5:7])
                                                 #logger.fdebug('StoreDate %s' % isc['ReleaseDate'])
                                                 #logger.fdebug('IssueDate: %s' % isc['IssueDate'])
+                                                arc_file_year = int(arcmatch['issue_year'])
                                                 if isc['DigitalDate'] is not None and isc['DigitalDate'] != '0000-00-00':
-                                                    if int(isc['DigitalDate'][:4]) < int(arcmatch['issue_year']):
-                                                        logger.fdebug('%s[ARC ISSUE-VERIFY] %s is before the issue year of %s that was discovered in the filename' % (module, isc['DigitalDate'], arcmatch['issue_year']))
+                                                    db_year = int(isc['DigitalDate'][:4])
+                                                    if abs(db_year - arc_file_year) > 1:
+                                                        logger.fdebug('%s[ARC ISSUE-VERIFY] Issue year %s differs from filename year %s by more than 1 year' % (module, isc['DigitalDate'], arcmatch['issue_year']))
                                                         datematch = "False"
 
                                                 elif all([isc['ReleaseDate'] is not None, isc['ReleaseDate'] != '0000-00-00']):
@@ -1737,20 +1776,23 @@ class PostProcessor(object):
                                                         datevalue = isc['IssueDate']
                                                     else:
                                                         datevalue = isc['ReleaseDate']
-                                                    if int(datevalue[:4]) < int(arcmatch['issue_year']):
-                                                        logger.fdebug('%s[ARC ISSUE-VERIFY] %s is before the issue year %s that was discovered in the filename' % (module, datevalue[:4], arcmatch['issue_year']))
+                                                    db_year = int(datevalue[:4])
+                                                    if abs(db_year - arc_file_year) > 1:
+                                                        logger.fdebug('%s[ARC ISSUE-VERIFY] Issue year %s differs from filename year %s by more than 1 year' % (module, datevalue[:4], arcmatch['issue_year']))
                                                         datematch = "False"
                                                 elif all([isc['IssueDate'] is not None, isc['IssueDate'] != '0000-00-00']):
                                                     if isc['IssueDate'] == '0000-00-00':
                                                         datevalue = isc['ReleaseDate']
                                                     else:
                                                         datevalue = isc['IssueDate']
-                                                    if int(datevalue[:4]) < int(arcmatch['issue_year']):
-                                                        logger.fdebug('%s[ARC ISSUE-VERIFY] %s is before the issue year of %s that was discovered in the filename' % (module, datevalue[:4], arcmatch['issue_year']))
+                                                    db_year = int(datevalue[:4])
+                                                    if abs(db_year - arc_file_year) > 1:
+                                                        logger.fdebug('%s[ARC ISSUE-VERIFY] Issue year %s differs from filename year %s by more than 1 year' % (module, datevalue[:4], arcmatch['issue_year']))
                                                         datematch = "False"
                                                 else:
-                                                    if int(isc['IssueDate'][:4]) < int(arcmatch['issue_year']):
-                                                        logger.fdebug('%s[ARC ISSUE-VERIFY] %s is before the issue year %s that was discovered in the filename' % (module, isc['IssueDate'], arcmatch['issue_year']))
+                                                    db_year = int(isc['IssueDate'][:4])
+                                                    if abs(db_year - arc_file_year) > 1:
+                                                        logger.fdebug('%s[ARC ISSUE-VERIFY] Issue year %s differs from filename year %s by more than 1 year' % (module, isc['IssueDate'], arcmatch['issue_year']))
                                                         datematch = "False"
 
                                                 if int(arc_issueyear) != int(arcmatch['issue_year']):
@@ -2006,10 +2048,14 @@ class PostProcessor(object):
                                         else:
                                             fcdigit = helpers.issue_number_parser(temploc).asInt
 
-                                    if (temploc is not None and 
-                                        fcdigit == helpers.issue_number_parser(ofv['Issue_Number']).asInt or
-                                        # TODO Is this check not redundant?  The helper always returns a (large) integer
-                                          all([temploc is None, helpers.issue_number_parser(ofv['Issue_Number']).asInt == '1'])):
+                                    ofv_int = helpers.issue_number_parser(ofv['Issue_Number']).asInt
+                                    possible_oneoff = fl.get('possible_issuenumbers') or []
+                                    if possible_oneoff:
+                                        issue_match = (ofv_int in possible_oneoff)
+                                    else:
+                                        issue_match = (temploc is not None and fcdigit == ofv_int or
+                                            all([temploc is None, ofv_int == 1]))
+                                    if issue_match:
                                         if watchmatch['sub']:
                                             clocation = os.path.join(watchmatch['comiclocation'], watchmatch['sub'], watchmatch['comicfilename']) #helpers.conversion(watchmatch['comicfilename']))
                                             if not os.path.exists(clocation):

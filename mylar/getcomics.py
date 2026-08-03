@@ -1667,10 +1667,14 @@ class GC(object):
                                 }
 
                         if remote_filesize == 0:
-                            try:
-                                remote_filesize = int(t.headers['Content-length'])
-                                logger.fdebug('remote filesize: %s' % remote_filesize)
-                            except Exception as e:
+                            cl = t.headers.get('Content-Length')
+                            if cl is not None:
+                                try:
+                                    remote_filesize = int(cl)
+                                    logger.fdebug('remote filesize: %s' % remote_filesize)
+                                except (TypeError, ValueError):
+                                    cl = None
+                            if remote_filesize == 0 and cl is None:
                                 if 'run.php-urls' not in link:
                                     link = re.sub('run.php-url=', 'run.php-urls', link)
                                     link = re.sub('go.php-url=', 'run.php-urls', link)
@@ -1688,14 +1692,29 @@ class GC(object):
                                         filename = re.sub(
                                             'GetComics.INFO', '', filename, re.I
                                         ).strip()
-                                    try:
-                                        remote_filesize = int(t.headers['Content-length'])
-                                        logger.fdebug('remote filesize: %s' % remote_filesize)
-                                    except Exception as e:
+                                    if filename is not None:
+                                        file, ext = os.path.splitext(filename)
+                                        filename = '%s[__%s__]%s' % (file, issueid, ext)
+                                    cl = t.headers.get('Content-Length')
+                                    if cl is not None:
+                                        try:
+                                            remote_filesize = int(cl)
+                                            logger.fdebug('remote filesize: %s' % remote_filesize)
+                                        except (TypeError, ValueError):
+                                            cl = None
+                                if remote_filesize == 0 and cl is None:
+                                    if t.status_code == 200:
+                                        logger.info(
+                                            '[DDL] No Content-Length (e.g. chunked encoding). '
+                                            'Proceeding with streamed download.'
+                                        )
+                                        remote_filesize = 0
+                                    else:
                                         logger.warn(
                                             '[WARNING] Unable to retrieve remote file size - this'
                                             ' is usually due to the page being behind a different'
-                                            ' click-bait/ad page. Error returned as : %s' % e
+                                            ' click-bait/ad page. Error: status=%s, no Content-Length'
+                                            % t.status_code
                                         )
                                         logger.warn(
                                             '[WARNING] Considering this particular download as'
@@ -1710,23 +1729,22 @@ class GC(object):
                                             "link_type": link_type,
                                         }
 
-                                else:
-                                    logger.warn(
-                                        '[WARNING] Unable to retrieve remote file size - this is'
-                                        ' usually due to the page being behind a different'
-                                        ' click-bait/ad page. Error returned as : %s' % e
-                                    )
-                                    logger.warn(
-                                        '[WARNING] Considering this particular download as invalid'
-                                        ' and will ignore this result.'
-                                    )
-                                    remote_filesize = 0
-                                    mylar.DDL_LOCK = False
-                                    return {
-                                        "success": False,
-                                        "filename": filename,
-                                        "path": None,
-                                        "link_type": link_type}
+                            if remote_filesize == 0 and cl is None and t.status_code != 200:
+                                logger.warn(
+                                    '[WARNING] Unable to retrieve remote file size - status %s.'
+                                    ' Considering download as invalid.' % t.status_code
+                                )
+                                logger.warn(
+                                    '[WARNING] Considering this particular download as invalid'
+                                    ' and will ignore this result.'
+                                )
+                                mylar.DDL_LOCK = False
+                                return {
+                                    "success": False,
+                                    "filename": filename,
+                                    "path": None,
+                                    "link_type": link_type,
+                                }
 
                         # write the filename and size to the db for tracking/display (size from response when download starts)
                         upsert_vals = {'filename': filename, 'remote_filesize': remote_filesize}
@@ -1986,6 +2004,7 @@ class GC(object):
         title_length = len(title)
 
         # find the year
+        year = None
         year_check = re.search(r'(\d{4}-\d{4})', title, flags=re.I)
         if not year_check:
             year_check = re.findall(r'(\d{4})', title, flags=re.I)
