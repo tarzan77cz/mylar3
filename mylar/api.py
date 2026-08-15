@@ -912,6 +912,12 @@ class Api(object):
 
         if 'apc_version' not in kwargs:
             logger.info('Received API Request for PostProcessing %s [%s]. Queueing...' % (self.nzb_name, self.nzb_folder))
+            download_info = None
+            if ddl is True:
+                download_info = {
+                    'provider': 'DDL',
+                    'id': kwargs.get('id') or kwargs.get('nzbid'),
+                }
             mylar.PP_QUEUE.put({'nzb_name':    self.nzb_name,
                                 'nzb_folder':  self.nzb_folder,
                                 'issueid':     issueid,
@@ -919,7 +925,8 @@ class Api(object):
                                 'oneoff':      oneoff,
                                 'comicid':     comicid,
                                 'apicall':     True,
-                                'ddl':         ddl})
+                                'ddl':         ddl,
+                                'download_info': download_info})
             self.data = 'Successfully submitted request for post-processing for %s' % self.nzb_name
             #fp = process.Process(self.nzb_name, self.nzb_folder, issueid=issueid, failed=failed, comicid=comicid, apicall=True)
             #self.data = fp.post_process()

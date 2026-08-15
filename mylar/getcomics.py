@@ -318,12 +318,38 @@ class GC(object):
                 #logger.fdebug('[PACK_PRIORITY:False] %s' % (sorted(verified_matches, key=itemgetter('pack'), reverse=False)))
                 return sorted(verified_matches, key=itemgetter('pack'), reverse=False)
 
+    def _html_cache_path(self, id_value):
+        """Build a filesystem-safe html_cache path for a GetComics post id/URL."""
+        cache_id = str(id_value or '').strip()
+        if '?p=' in cache_id:
+            candidate = cache_id.split('?p=', 1)[1].split('&', 1)[0].strip()
+            while '?p=' in candidate:
+                candidate = candidate.split('?p=', 1)[1].split('&', 1)[0].strip()
+            if candidate.isdigit():
+                cache_id = candidate
+        # Keep only safe filename characters (URLs contain ':' '/' '?' which break paths).
+        cache_id = re.sub(r'[^0-9A-Za-z._-]+', '_', cache_id).strip('._-') or 'unknown'
+        cache_dir = os.path.join(mylar.CONFIG.CACHE_DIR, 'html_cache')
+        if not os.path.isdir(cache_dir):
+            os.makedirs(cache_dir, exist_ok=True)
+        return os.path.join(cache_dir, 'getcomics-' + cache_id)
+
     def loadsite(self, id, link):
 
         if not link or not str(link).strip().startswith('http'):
             raise ValueError("Invalid or empty mainlink URL - cannot load GetComics page for alternate links")
 
-        title = os.path.join(mylar.CONFIG.CACHE_DIR, 'html_cache', 'getcomics-' + id)
+        # Unwrap accidental nested ?p=https://getcomics.info/?p=123 URLs.
+        link = str(link).strip()
+        if '?p=' in link:
+            post_candidate = link.split('?p=', 1)[1].split('&', 1)[0].strip()
+            while '?p=' in post_candidate:
+                post_candidate = post_candidate.split('?p=', 1)[1].split('&', 1)[0].strip()
+            if post_candidate.isdigit():
+                link = 'https://getcomics.info/?p=%s' % post_candidate
+                id = post_candidate
+
+        title = self._html_cache_path(id)
         logger.fdebug('now loading info from local html to resolve via url: %s' % link)
 
         self.cookie_receipt()
@@ -588,11 +614,12 @@ class GC(object):
         series = None
         year = None
         size = None
-        title = os.path.join(mylar.CONFIG.CACHE_DIR, 'html_cache', 'getcomics-' + id)
+        title = self._html_cache_path(id)
 
-        if not os.path.exists(title):
+        if not os.path.exists(title + '.html'):
             logger.fdebug('Unable to locate local cached html file - attempting to retrieve page results again..')
             self.loadsite(id, mainlink)
+            title = self._html_cache_path(id)
 
         soup = BeautifulSoup(open(title + '.html', encoding='utf-8'), 'html.parser')
 

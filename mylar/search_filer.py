@@ -25,12 +25,107 @@ from mylar import logger, filechecker, helpers, search
 import time
 
 
+def _normalize_id_value(value):
+    """Normalize nzbid/link id values so None and '' compare equal."""
+    if value is None:
+        return ''
+    return str(value).strip()
+
+
+def _extract_getcomics_post_id(value):
+    """Return numeric GetComics post id from a raw id/link, or None."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.isdigit():
+        return text
+    # Handle full / already-normalized URLs and accidental double-wraps.
+    if '?p=' in text:
+        try:
+            candidate = text.split('?p=', 1)[1].split('&', 1)[0].strip()
+            # Unwrap nested ?p=https://getcomics.info/?p=123
+            while '?p=' in candidate:
+                candidate = candidate.split('?p=', 1)[1].split('&', 1)[0].strip()
+            if candidate.isdigit():
+                return candidate
+        except Exception:
+            return None
+    return None
+
+
+def _normalize_ddl_rejected_ids(entry, nzbid=None, provider=None, mutate_entry=False):
+    """Normalize DDL(GetComics) link/id for rejected-match storage and download.
+
+    RSS results often store only the numeric post id in ``link`` (e.g. ``402258``)
+    without ``id``. Download via searcher requires a full GetComics URL and nzbid.
+
+    By default this does not mutate ``entry``. Mutating before RSS matching would
+    turn a numeric link into a full URL and then the RSS path would double-wrap it
+    (breaking html_cache filenames that embed the nzbid).
+    """
+    if not isinstance(entry, dict):
+        return _normalize_id_value(entry), _normalize_id_value(nzbid) or None
+
+    entry_link = entry.get('link', '') or ''
+    entry_id = nzbid if nzbid not in (None, '') else entry.get('id')
+    site = str(entry.get('site') or '')
+    provider_name = str(provider or site or '')
+    is_getcomics = (
+        ('DDL' in provider_name and 'GetComics' in provider_name)
+        or ('DDL' in site and 'GetComics' in site)
+    )
+
+    if is_getcomics:
+        link_str = str(entry_link).strip()
+        post_id = (
+            _extract_getcomics_post_id(entry_id)
+            or _extract_getcomics_post_id(link_str)
+            or _extract_getcomics_post_id(entry.get('id'))
+        )
+        if post_id:
+            entry_id = post_id
+            # Prefer a stable canonical URL; keep pretty getcomics.org links as-is.
+            if (
+                not link_str
+                or not link_str.startswith('http')
+                or '/cat/' in link_str
+                or '?p=' in link_str
+            ):
+                entry_link = 'https://getcomics.info/?p=%s' % post_id
+        elif link_str and not link_str.startswith('http'):
+            # Non-numeric id-only link fallback
+            entry_id = link_str
+            entry_link = 'https://getcomics.info/?p=%s' % entry_id
+
+        if mutate_entry:
+            if entry_id not in (None, ''):
+                entry['id'] = entry_id
+            if entry_link:
+                entry['link'] = entry_link
+            if not entry.get('filename') and entry.get('title'):
+                entry['filename'] = entry['title']
+
+    if entry_id in (None, ''):
+        entry_id = None
+    return entry_link, entry_id
+
+
+def _rejected_ids_match(stored_link, stored_nzbid, link, nzbid):
+    """Compare rejected-match identifiers, treating None/'' as equivalent."""
+    return (
+        _normalize_id_value(stored_link) == _normalize_id_value(link)
+        and _normalize_id_value(stored_nzbid) == _normalize_id_value(nzbid)
+    )
+
+
 def _is_duplicate_rejected_match(IssueID, link, nzbid):
     """Check if rejected match with given link and nzbid already exists for IssueID"""
     if IssueID not in mylar.REJECTED_MATCHES:
         return False
     for match in mylar.REJECTED_MATCHES[IssueID]:
-        if match.get('link') == link and match.get('nzbid') == nzbid:
+        if _rejected_ids_match(match.get('link'), match.get('nzbid'), link, nzbid):
             return True
     return False
 
@@ -40,8 +135,23 @@ def _find_rejected_match_index(IssueID, link, nzbid):
     if IssueID not in mylar.REJECTED_MATCHES:
         return None
     for idx, match in enumerate(mylar.REJECTED_MATCHES[IssueID]):
-        if match.get('link') == link and match.get('nzbid') == nzbid:
+        if _rejected_ids_match(match.get('link'), match.get('nzbid'), link, nzbid):
             return idx
+    # Fallback: match by link alone when nzbid was missing on either side
+    if _normalize_id_value(link):
+        link_matches = [
+            idx for idx, match in enumerate(mylar.REJECTED_MATCHES[IssueID])
+            if _normalize_id_value(match.get('link')) == _normalize_id_value(link)
+        ]
+        if len(link_matches) == 1:
+            return link_matches[0]
+    if _normalize_id_value(nzbid):
+        nzbid_matches = [
+            idx for idx, match in enumerate(mylar.REJECTED_MATCHES[IssueID])
+            if _normalize_id_value(match.get('nzbid')) == _normalize_id_value(nzbid)
+        ]
+        if len(nzbid_matches) == 1:
+            return nzbid_matches[0]
     return None
 
 
@@ -127,12 +237,12 @@ class search_check(object):
         
         try:
             IssueID = is_info['IssueID']
-            entry_link = entry.get('link', '')
-            entry_id = nzbid if nzbid else entry.get('id')
+            provider = is_info.get('nzbprov', 'Unknown')
+            entry_link, entry_id = _normalize_ddl_rejected_ids(entry, nzbid=nzbid, provider=provider)
             
             rejected_match = {
                 "title": entry.get('title', 'Unknown'),
-                "provider": is_info.get('nzbprov', 'Unknown'),
+                "provider": provider,
                 "size": comsize_m if comsize_m else 'Unknown',
                 "kind": entry.get('kind', 'Unknown'),
                 "link": entry_link,
@@ -162,13 +272,13 @@ class search_check(object):
             nzbprov = is_info.get('nzbprov', 'Unknown')
             
             for entry in entries:
-                entry_link = entry.get('link', '')
-                entry_id = entry.get('id')  # nzbid might not be available yet at this stage
+                provider = entry.get('site', nzbprov)
+                entry_link, entry_id = _normalize_ddl_rejected_ids(entry, nzbid=entry.get('id'), provider=provider)
                 
                 # Create minimal match data - will be updated later when we know more
                 minimal_match = {
                     "title": entry.get('title', 'Unknown'),
-                    "provider": entry.get('site', nzbprov),
+                    "provider": provider,
                     "size": entry.get('length', 'Unknown'),
                     "kind": "Unknown",  # Will be determined later
                     "link": entry_link,
@@ -1390,16 +1500,24 @@ class search_check(object):
                         nzbid = search.generate_id(provider_stat, entry['id'], ComicName)
                     elif 'DDL' in nzbprov:
                         if 'GetComics' in nzbprov:
-                            if RSS == "yes":
+                            # Idempotent normalization: numeric RSS ids, full URLs,
+                            # and accidental double-wraps all resolve to post id + ?p= URL.
+                            post_id = (
+                                _extract_getcomics_post_id(entry.get('id'))
+                                or _extract_getcomics_post_id(entry.get('link'))
+                            )
+                            if post_id:
+                                entry['id'] = post_id
+                                entry['link'] = 'https://getcomics.info/?p=%s' % post_id
+                            elif RSS == "yes":
                                 entry['id'] = entry['link']
                                 entry['link'] = 'https://getcomics.info/?p=' + str(
                                     entry['id']
                                 )
-                                entry['filename'] = entry['title']
-                            else:
-                                nzbid = entry['id']
-                            if '/cat/' in entry['link']:
+                            elif '/cat/' in str(entry.get('link') or ''):
                                 entry['link'] = 'https://getcomics.info/?p=%s' % entry['id']
+                            if not entry.get('filename'):
+                                entry['filename'] = entry.get('title')
                         entry['title'] = entry['filename']
                         nzbid = entry['id']
                     else:

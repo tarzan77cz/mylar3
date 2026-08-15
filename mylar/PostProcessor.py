@@ -44,7 +44,7 @@ class PostProcessor(object):
     FOLDER_NAME = 2
     FILE_NAME = 3
 
-    def __init__(self, nzb_name, nzb_folder, issueid=None, module=None, queue=None, comicid=None, apicall=False, ddl=False):
+    def __init__(self, nzb_name, nzb_folder, issueid=None, module=None, queue=None, comicid=None, apicall=False, ddl=False, download_info=None):
         """
         Creates a new post processor with the given file path and optionally an NZB name.
 
@@ -73,6 +73,8 @@ class PostProcessor(object):
         else:
             self.ddl = False
 
+        self.download_info = download_info
+
         if mylar.CONFIG.FILE_OPTS == 'copy':
             self.fileop = shutil.copy
         else:
@@ -96,6 +98,48 @@ class PostProcessor(object):
             self.comicid = None
 
         self.issuearcid = None
+
+    def _revert_unmatched_pack_snatches(self, reason='no matches'):
+        """After DDL pack PP, revert leftover Snatched issues for this pack to Wanted.
+
+        Marks the pack release as Failed so Failed Download Handling will not
+        re-snatch the same pack. Safe no-op outside DDL pack context.
+        """
+        if not (
+            self.ddl is True
+            and self.comicid is not None
+            and self.issueid is None
+            and isinstance(self.download_info, dict)
+            and self.download_info.get('id')
+        ):
+            return []
+
+        pack_id = self.download_info.get('id')
+        provider = self.download_info.get('provider') or 'DDL(GetComics)'
+        if provider == 'DDL':
+            provider = 'DDL(GetComics)'
+
+        issueids = helpers.get_pack_snatched_issueids(pack_id, comicid=self.comicid)
+        if not issueids:
+            logger.fdebug(
+                '%s[PACK-PP-SELF-HEAL] No leftover Snatched issues for pack %s (%s)'
+                % (self.module, pack_id, reason)
+            )
+            return []
+
+        logger.warn(
+            '%s[PACK-PP-SELF-HEAL] Pack PP %s for pack %s — reverting %s Snatched '
+            'issue(s) to Wanted and marking pack as Failed'
+            % (self.module, reason, pack_id, len(issueids))
+        )
+        return helpers.reverse_the_pack_snatch(
+            pack_id,
+            self.comicid,
+            issueids=issueids,
+            mark_failed=True,
+            provider=provider,
+            nzbname=self.nzb_name,
+        )
 
     def _log(self, message, level=logger): #.message):  #level=logger.MESSAGE):
         """
@@ -2437,6 +2481,9 @@ class PostProcessor(object):
                     if self.nzb_name == 'Manual Run':
                         mylar.MANUAL_PP_STATUS.update({'phase': 'done', 'running': False, 'summary': 'No matches for Manual Run.'})
                         logger.info('%s No matches for Manual Run ... exiting.' % module)
+                    else:
+                        # DDL pack downloaded but nothing matched watchlist issues
+                        self._revert_unmatched_pack_snatches(reason='matched 0 files')
                     if mylar.APILOCK is True:
                         mylar.APILOCK = False
                     self.valreturn.append({"self.log": self.log,
@@ -2528,6 +2575,10 @@ class PostProcessor(object):
                 m_event = None
                 if self.failed_files == 0:
                     if all([self.comicid is not None, self.issueid is None]):
+                        # Pack PP may have matched only some issues — revert leftovers
+                        self._revert_unmatched_pack_snatches(
+                            reason='partial match leftovers after %s successful' % i
+                        )
                         try:
                             logger.info('%s post-processing of pack completed for %s issues of %s (%s).' % (module, i, dspcname, dspcyear))
                             global_line = 'Successfully post-processed pack for %s issues of %s (%s)' % (i, dspcname, dspcyear)
@@ -2575,6 +2626,10 @@ class PostProcessor(object):
                     dspcname = None
                     dspcyear = None
                     if self.comicid is not None:
+                        # Partial pack PP: matched some files, revert leftover Snatched
+                        self._revert_unmatched_pack_snatches(
+                            reason='partial match leftovers after %s successful' % i
+                        )
                         logger.info('%s post-processing of pack completed for %s issues [FAILED: %s]' % (module, i, self.failed_files))
                         global_line = 'Successfully post-processing of pack completed for %s issues [FAILED: %s]' % (i, self.failed_files)
                     else:

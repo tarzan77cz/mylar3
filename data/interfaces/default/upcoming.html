@@ -849,8 +849,8 @@
                         
                         $.each(data.matches, function(index, match) {
                             // Use unique identifier (nzbid + link) instead of index
-                            var matchNzbId = match.nzbid || '';
-                            var matchLink = match.link || '';
+                            var matchNzbId = match.nzbid != null ? String(match.nzbid) : '';
+                            var matchLink = match.link != null ? String(match.link) : '';
                             var matchNzbIdEscaped = $('<div/>').text(matchNzbId).html();
                             var matchLinkEscaped = $('<div/>').text(matchLink).html();
                             
@@ -861,7 +861,7 @@
                                 '<td>' + $('<div/>').text(match.kind || 'Unknown').html() + '</td>' +
                                 '<td>' + $('<div/>').text(match.pubdate || '').html() + '</td>' +
                                 '<td>' + $('<div/>').text(match.reason || 'Unknown reason').html() + '</td>' +
-                                '<td><button class="download-rejected-btn" data-issueid="' + $('<div/>').text(issueId).html() + '" data-nzbid="' + matchNzbIdEscaped + '" data-link="' + matchLinkEscaped + '">Download</button></td>' +
+                                '<td><button type="button" class="download-rejected-btn" data-issueid="' + $('<div/>').text(issueId).html() + '" data-nzbid="' + matchNzbIdEscaped + '" data-link="' + matchLinkEscaped + '">Download</button></td>' +
                                 '</tr>';
                             tbody.append(row);
                         });
@@ -915,20 +915,32 @@
             // Handle download button click
             $(document).on('click', '.download-rejected-btn', function(e) {
                 e.preventDefault();
-                var issueId = $(this).data('issueid');
-                var matchNzbId = $(this).data('nzbid');
-                var matchLink = $(this).data('link');
+                e.stopPropagation();
+                // Use attr() not data() - jQuery data() coerces numeric strings to numbers
+                var issueId = String($(this).attr('data-issueid') || '');
+                var matchNzbId = String($(this).attr('data-nzbid') || '');
+                var matchLink = String($(this).attr('data-link') || '');
                 var btn = $(this);
+                
+                if (!issueId || (!matchNzbId && !matchLink)) {
+                    alert('Error: Missing match identifiers for download');
+                    return false;
+                }
                 
                 // Disable button and show loading
                 btn.prop('disabled', true).text('Adding...');
                 
-                $.getJSON('select_rejected_match', {
-                    IssueID: issueId,
-                    nzbid: matchNzbId,
-                    link: matchLink
-                }, function(data) {
-                    if (data.status === 'success') {
+                $.ajax({
+                    url: 'select_rejected_match',
+                    method: 'POST',
+                    dataType: 'json',
+                    data: {
+                        IssueID: issueId,
+                        nzbid: matchNzbId,
+                        link: matchLink
+                    }
+                }).done(function(data) {
+                    if (data && data.status === 'success') {
                         // Success - close dialog silently
                         $("#rejected_matches_dialog").dialog("close");
                         
@@ -938,11 +950,18 @@
                         }
                     } else {
                         // Error - show alert and allow retry
-                        alert('Error: ' + (data.message || 'Failed to add to download queue'));
+                        alert('Error: ' + ((data && data.message) ? data.message : 'Failed to add to download queue'));
                         btn.prop('disabled', false).text('Download');
                     }
                 }).fail(function(jqXHR, textStatus, errorThrown) {
-                    alert('Error: ' + textStatus);
+                    var msg = textStatus;
+                    try {
+                        var errData = jqXHR.responseJSON || JSON.parse(jqXHR.responseText);
+                        if (errData && errData.message) {
+                            msg = errData.message;
+                        }
+                    } catch (ignore) {}
+                    alert('Error: ' + msg + (errorThrown ? ' (' + errorThrown + ')' : ''));
                     btn.prop('disabled', false).text('Download');
                 });
                 

@@ -73,6 +73,7 @@ from mylar import (
     req_test,
     sabparse,
     search,
+    search_filer,
     series_metadata,
     updater,
     weeklypull,
@@ -3915,22 +3916,27 @@ class WebInterface(object):
         Can use either match_index (for backwards compatibility) or nzbid+link (preferred, unique identifier).
         """
         try:
+            logger.info('[SELECT-REJECTED-MATCH] Request IssueID=%s nzbid=%r link=%r match_index=%r' % (
+                IssueID, nzbid, link, match_index))
             if IssueID not in mylar.REJECTED_MATCHES:
+                logger.error('[SELECT-REJECTED-MATCH] No rejected matches found for IssueID %s' % IssueID)
                 return json.dumps({"status": "error", "message": "No rejected matches found for this issue"})
             
             matches = mylar.REJECTED_MATCHES[IssueID]
             match = None
             match_index_to_remove = None
             
-            # Prefer unique identifier (nzbid + link) over index
-            if nzbid is not None and link is not None:
-                # Find match by unique identifier and also get its index for removal
-                for idx, m in enumerate(matches):
-                    if m.get('nzbid') == nzbid and m.get('link') == link:
-                        match = m
-                        match_index_to_remove = idx
-                        break
+            # Prefer unique identifier (nzbid + link) over index.
+            # Treat empty string the same as missing (frontend may send nzbid=).
+            has_nzbid = nzbid is not None and str(nzbid).strip() != ''
+            has_link = link is not None and str(link).strip() != ''
+            if has_nzbid or has_link:
+                match_index_to_remove = search_filer._find_rejected_match_index(IssueID, link, nzbid)
+                if match_index_to_remove is not None:
+                    match = matches[match_index_to_remove]
                 if not match:
+                    logger.error('[SELECT-REJECTED-MATCH] Match not found for IssueID %s nzbid=%r link=%r (have %s stored)' % (
+                        IssueID, nzbid, link, len(matches)))
                     return json.dumps({"status": "error", "message": "Rejected match not found with given nzbid and link"})
             elif match_index is not None:
                 # Fallback to index-based lookup (for backwards compatibility)
@@ -3942,17 +3948,68 @@ class WebInterface(object):
                 match = matches[match_index]
                 match_index_to_remove = match_index
             else:
+                logger.error('[SELECT-REJECTED-MATCH] Missing identifiers for IssueID %s' % IssueID)
                 return json.dumps({"status": "error", "message": "Either match_index or nzbid+link must be provided"})
+
+            # Normalize DDL(GetComics) id-only links left over from older RSS rejects
+            entry = match.get('entry') if isinstance(match.get('entry'), dict) else {}
+            norm_link, norm_nzbid = search_filer._normalize_ddl_rejected_ids(
+                entry if entry else {'link': match.get('link'), 'site': match.get('provider')},
+                nzbid=match.get('nzbid'),
+                provider=match.get('provider'),
+                mutate_entry=True,
+            )
+            if norm_link:
+                match['link'] = norm_link
+            if norm_nzbid is not None:
+                match['nzbid'] = norm_nzbid
+            if entry:
+                match['entry'] = entry
             
-            # Get issue info from database
+            # Get issue info from database (issues first, then annuals)
             myDB = db.DBConnection()
             issue = myDB.selectone("SELECT * FROM issues WHERE IssueID=?", [IssueID]).fetchone()
+            annual_mode = None
             if not issue:
+                issue = myDB.selectone(
+                    "SELECT * FROM annuals WHERE IssueID=? AND NOT Deleted", [IssueID]
+                ).fetchone()
+                if issue:
+                    annual_mode = 'want_ann'
+            if not issue:
+                logger.error('[SELECT-REJECTED-MATCH] IssueID %s not found in issues/annuals' % IssueID)
                 return json.dumps({"status": "error", "message": "Issue not found in database"})
             
             comic = myDB.selectone("SELECT * FROM comics WHERE ComicID=?", [issue['ComicID']]).fetchone()
             if not comic:
                 return json.dumps({"status": "error", "message": "Comic not found in database"})
+
+            # Manual Download from Rejected Matches is an explicit user override.
+            # Clear any prior Failed mark for this release id so searcher can snatch it.
+            clear_ids = set()
+            for candidate in (
+                match.get('nzbid'),
+                norm_nzbid,
+                entry.get('id') if isinstance(entry, dict) else None,
+            ):
+                extracted = search_filer._extract_getcomics_post_id(candidate)
+                if extracted:
+                    clear_ids.add(extracted)
+                elif candidate not in (None, ''):
+                    clear_ids.add(str(candidate).strip())
+            for clear_id in clear_ids:
+                try:
+                    failed_row = myDB.selectone(
+                        "SELECT ID, Status FROM failed WHERE ID=?", [clear_id]
+                    ).fetchone()
+                    if failed_row is not None and failed_row['Status'] == 'Failed':
+                        myDB.action("DELETE FROM failed WHERE ID=?", [clear_id])
+                        logger.info(
+                            '[SELECT-REJECTED-MATCH] Cleared Failed mark for ID %s '
+                            '(manual rejected-match download override)' % clear_id
+                        )
+                except Exception as e:
+                    logger.warn('[SELECT-REJECTED-MATCH] Unable to clear Failed mark for %s: %s' % (clear_id, e))
             
             # Reconstruct verified match data from stored rejected match
             verified_data = match.get("verified_data")
@@ -4076,7 +4133,7 @@ class WebInterface(object):
                         updater.foundsearch(
                             issue['ComicID'],
                             IssueID,
-                            mode=None,
+                            mode=annual_mode,
                             provider=provider
                         )
                         logger.info('[SELECT-REJECTED-MATCH] Updated status to Snatched for IssueID %s' % IssueID)
@@ -4108,7 +4165,12 @@ class WebInterface(object):
                     })
                 else:
                     error_msg = "Failed to add to download queue"
-                    if searchresult:
+                    if searchresult == 'downloadchk-fail':
+                        error_msg = (
+                            "This release is marked as Failed in download history. "
+                            "Clear it from Failed history and try again."
+                        )
+                    elif searchresult:
                         error_msg += ": %s" % str(searchresult)
                     logger.error('[SELECT-REJECTED-MATCH] %s' % error_msg)
                     return json.dumps({
@@ -4198,7 +4260,7 @@ class WebInterface(object):
                     links,
                     IssueID,
                     issue['ComicID'],
-                    '',
+                    provider,
                     rss='no',
                     provider_stat=provider_stat
                 )
@@ -4224,7 +4286,7 @@ class WebInterface(object):
                         updater.foundsearch(
                             issue['ComicID'],
                             IssueID,
-                            mode=None,
+                            mode=annual_mode,
                             provider=provider
                         )
                         logger.info('[SELECT-REJECTED-MATCH] Updated status to Snatched for IssueID %s' % IssueID)
@@ -4256,7 +4318,12 @@ class WebInterface(object):
                     })
                 else:
                     error_msg = "Failed to add to download queue"
-                    if searchresult:
+                    if searchresult == 'downloadchk-fail':
+                        error_msg = (
+                            "This release is marked as Failed in download history. "
+                            "Clear it from Failed history and try again."
+                        )
+                    elif searchresult:
                         error_msg += ": %s" % str(searchresult)
                     logger.error('[SELECT-REJECTED-MATCH] %s' % error_msg)
                     return json.dumps({

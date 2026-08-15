@@ -2275,23 +2275,138 @@ def issue_find_ids(ComicName, ComicID, pack, IssueNumber, pack_id):
     issues['valid'] = valid
     return issues
 
-def reverse_the_pack_snatch(pack_id, comicid):
-    logger.info('[REVERSE UNO] Reversal of issues marked as Snatched via pack download reversing due to invalid link retrieval..')
-    #logger.fdebug(mylar.PACK_ISSUEIDS_DONT_QUEUE)
-    reverselist = [issueid for issueid, packid in mylar.PACK_ISSUEIDS_DONT_QUEUE.items() if pack_id == packid]
+def get_pack_snatched_issueids(pack_id, comicid=None):
+    """Return IssueIDs still Snatched for a pack release id (from nzblog).
+
+    Used after DDL pack download succeeds and PACK_ISSUEIDS_DONT_QUEUE has been
+    cleared — recover which issues were marked Snatched for this pack.
+    """
+    if pack_id in (None, ''):
+        return []
     myDB = db.DBConnection()
+    rows = myDB.select('SELECT IssueID FROM nzblog WHERE ID=?', [str(pack_id)])
+    issueids = []
+    seen = set()
+    for row in rows:
+        issueid = row['IssueID']
+        if issueid in (None, '', 'None') or issueid in seen:
+            continue
+        seen.add(issueid)
+        issue = myDB.selectone(
+            'SELECT IssueID, Status, ComicID FROM issues WHERE IssueID=?', [issueid]
+        ).fetchone()
+        if issue is None:
+            issue = myDB.selectone(
+                'SELECT IssueID, Status, ComicID FROM annuals WHERE IssueID=? AND NOT Deleted',
+                [issueid]
+            ).fetchone()
+        if issue is None:
+            continue
+        if comicid and str(issue['ComicID']) != str(comicid):
+            continue
+        if issue['Status'] != 'Snatched':
+            continue
+        issueids.append(issueid)
+    return issueids
+
+
+def reverse_the_pack_snatch(pack_id, comicid, issueids=None, mark_failed=False, provider='DDL(GetComics)', nzbname=None):
+    """Revert pack-snatched issues from Snatched back to Wanted.
+
+    When ``issueids`` is None, use in-memory ``PACK_ISSUEIDS_DONT_QUEUE``
+    (download-link failure path). When provided, use that list (PP match-failure
+    path after the in-memory map was cleared).
+
+    Only issues currently in Snatched are reset; Downloaded/Archived are left alone.
+    When ``mark_failed`` is True, record the pack release id in the failed table
+    so Failed Download Handling will not snatch the same pack again.
+    """
+    logger.info(
+        '[REVERSE UNO] Reversal of issues marked as Snatched via pack download '
+        '(pack_id=%s, mark_failed=%s)..' % (pack_id, mark_failed)
+    )
+    myDB = db.DBConnection()
+    if issueids is None:
+        reverselist = [
+            issueid for issueid, packid in mylar.PACK_ISSUEIDS_DONT_QUEUE.items()
+            if pack_id == packid
+        ]
+    else:
+        reverselist = list(issueids)
+
+    reverted = []
     for x in reverselist:
-        myDB.upsert("issues", {"Status": "Wanted"}, {"IssueID": x})
-    if reverselist:
-        logger.info('[REVERSE UNO] Reversal completed for %s issues' % len(reverselist))
-        comicname = None
-        seriesyear = None
-        if comicid:
-            comic = myDB.selectone('SELECT ComicName, ComicYear FROM comics WHERE ComicID=?', [comicid]).fetchone()
-            if comic:
-                comicname = comic['ComicName']
-                seriesyear = comic['ComicYear']
-        mylar.GLOBAL_MESSAGES = {'status': 'success', 'comicid': comicid, 'comicname': comicname, 'seriesyear': seriesyear, 'tables': 'both', 'message': 'Successfully changed status of %s issues to %s' % (len(reverselist), 'Wanted')}
+        issue = myDB.selectone(
+            'SELECT IssueID, Status FROM issues WHERE IssueID=?', [x]
+        ).fetchone()
+        table = 'issues'
+        if issue is None:
+            issue = myDB.selectone(
+                'SELECT IssueID, Status FROM annuals WHERE IssueID=? AND NOT Deleted', [x]
+            ).fetchone()
+            table = 'annuals'
+        if issue is None:
+            continue
+        if issue['Status'] != 'Snatched':
+            continue
+        myDB.upsert(table, {"Status": "Wanted"}, {"IssueID": x})
+        reverted.append(x)
+        # Drop from in-memory dont-queue map if still present
+        try:
+            if x in mylar.PACK_ISSUEIDS_DONT_QUEUE:
+                del mylar.PACK_ISSUEIDS_DONT_QUEUE[x]
+        except Exception:
+            pass
+
+    comicname = None
+    seriesyear = None
+    if comicid:
+        comic = myDB.selectone(
+            'SELECT ComicName, ComicYear FROM comics WHERE ComicID=?', [comicid]
+        ).fetchone()
+        if comic:
+            comicname = comic['ComicName']
+            seriesyear = comic['ComicYear']
+
+    if mark_failed and pack_id not in (None, ''):
+        failed_nzbname = nzbname or comicname or ('pack-%s' % pack_id)
+        try:
+            myDB.upsert(
+                'failed',
+                {
+                    'Status': 'Failed',
+                    'ComicName': comicname,
+                    'Issue_Number': 'pack',
+                    'IssueID': reverted[0] if reverted else None,
+                    'ComicID': comicid,
+                    'DateFailed': now(),
+                },
+                {
+                    'ID': str(pack_id),
+                    'Provider': provider,
+                    'NZBName': failed_nzbname,
+                },
+            )
+            logger.info(
+                '[REVERSE UNO] Marked pack release %s as Failed so it will not be re-snatched'
+                % pack_id
+            )
+        except Exception as e:
+            logger.warn('[REVERSE UNO] Unable to mark pack %s as Failed: %s' % (pack_id, e))
+
+    if reverted:
+        logger.info('[REVERSE UNO] Reversal completed for %s issues' % len(reverted))
+        mylar.GLOBAL_MESSAGES = {
+            'status': 'success',
+            'comicid': comicid,
+            'comicname': comicname,
+            'seriesyear': seriesyear,
+            'tables': 'both',
+            'message': 'Successfully changed status of %s issues to %s' % (len(reverted), 'Wanted'),
+        }
+    else:
+        logger.info('[REVERSE UNO] No Snatched issues found to reverse for pack_id=%s' % pack_id)
+    return reverted
 
 
 def conversion(value):
@@ -3915,10 +4030,19 @@ def postprocess_main(queue):
                     pass
 
             if mylar.APILOCK is False:
-                try:
-                    pprocess = process.Process(item['nzb_name'], item['nzb_folder'], item['failed'], item['issueid'], item['comicid'], item['apicall'], item['ddl'], item['download_info'])
-                except:
-                    pprocess = process.Process(item['nzb_name'], item['nzb_folder'], item['failed'], item['issueid'], item['comicid'], item['apicall'])
+                # Always pass ddl/download_info explicitly. A missing download_info key
+                # used to KeyError and fall into the except path that dropped ddl=True,
+                # causing DDL files in /downloads to be treated as SABnzbd jobs.
+                pprocess = process.Process(
+                    item['nzb_name'],
+                    item['nzb_folder'],
+                    item.get('failed', False),
+                    item.get('issueid'),
+                    item.get('comicid'),
+                    item.get('apicall', False),
+                    item.get('ddl', False),
+                    item.get('download_info'),
+                )
                 pp = pprocess.post_process()
                 time.sleep(5) #arbitrary sleep to let the process attempt to finish pp'ing
                 if ddl_id_processing is not None:
