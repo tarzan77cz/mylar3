@@ -4091,18 +4091,24 @@ def postprocess_main(queue):
                 # Always pass ddl/download_info explicitly. A missing download_info key
                 # used to KeyError and fall into the except path that dropped ddl=True,
                 # causing DDL files in /downloads to be treated as SABnzbd jobs.
-                pprocess = process.Process(
-                    item['nzb_name'],
-                    item['nzb_folder'],
-                    item.get('failed', False),
-                    item.get('issueid'),
-                    item.get('comicid'),
-                    item.get('apicall', False),
-                    item.get('ddl', False),
-                    item.get('download_info'),
-                )
-                pp = pprocess.post_process()
-                time.sleep(5) #arbitrary sleep to let the process attempt to finish pp'ing
+                try:
+                    pprocess = process.Process(
+                        item['nzb_name'],
+                        item['nzb_folder'],
+                        item.get('failed', False),
+                        item.get('issueid'),
+                        item.get('comicid'),
+                        item.get('apicall', False),
+                        item.get('ddl', False),
+                        item.get('download_info'),
+                    )
+                    pp = pprocess.post_process()
+                    time.sleep(5) #arbitrary sleep to let the process attempt to finish pp'ing
+                except Exception as e:
+                    logger.error('[POST-PROCESS-QUEUE] Error running post-process for %s: %s' % (item.get('nzb_name'), e))
+                    pp = {'mode': 'stop'}
+                finally:
+                    mylar.APILOCK = False
                 if ddl_id_processing is not None:
                     try:
                         mylar.PP_CURRENT_DDL_IDS.discard(ddl_id_processing)

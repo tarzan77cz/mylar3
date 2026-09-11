@@ -2003,25 +2003,53 @@ def totals(ComicID, havefiles=None, totalfiles=None, module=None, issueid=None, 
             if hf is None:
                 hf = myDB.selectone("SELECT a.Have, a.Total, b.Status as IssStatus FROM comics AS a INNER JOIN annuals as b ON a.ComicID=b.ComicID WHERE b.IssueID=? AND NOT b.Deleted", [issueid]).fetchone()
                 filetable = 'annuals'
-            totalfiles = int(hf['Total'])
-            logger.fdebug('totalfiles: %s' % totalfiles)
-            logger.fdebug('status: %s' % hf['IssStatus'])
-            if hf['IssStatus'] != 'Downloaded':
+            if hf is None:
+                comic_row = myDB.selectone("SELECT Have, Total FROM comics WHERE ComicID=?", [ComicID]).fetchone()
+                if comic_row is None:
+                    logger.error(
+                        '%s Unable to update totals - ComicID %s not found in comics table (IssueID %s).'
+                        % (module, ComicID, issueid)
+                    )
+                    return
+                logger.warn(
+                    '%s IssueID %s not found in issues/annuals during +1 update '
+                    '(series refresh likely in progress). Using comics row fallback.'
+                    % (module, issueid)
+                )
+                totalfiles = int(comic_row['Total'])
                 try:
-                    havefiles = int(hf['Have']) +1
-                    if havefiles > totalfiles and recheck is False:
-                        recheck = True
-                        return forceRescan(ComicID, recheck=recheck)
+                    havefiles = int(comic_row['Have']) + 1
                 except TypeError:
                     if totalfiles == 1:
                         havefiles = 1
                     else:
-                        logger.warn('Total issues for this series [ComiciD:%s/IssueID:%s] is not 1 when it should be. This is probably a mistake and the series should be refreshed.' % (ComicID, issueid))
+                        logger.warn(
+                            'Total issues for this series [ComicID:%s/IssueID:%s] is not 1 when it should be. '
+                            'This is probably a mistake and the series should be refreshed.'
+                            % (ComicID, issueid)
+                        )
                         havefiles = 0
-                logger.fdebug('incremented havefiles: %s' % havefiles)
+                logger.fdebug('fallback havefiles: %s' % havefiles)
             else:
-                havefiles = int(hf['Have'])
-                logger.fdebug('untouched havefiles: %s' % havefiles)
+                totalfiles = int(hf['Total'])
+                logger.fdebug('totalfiles: %s' % totalfiles)
+                logger.fdebug('status: %s' % hf['IssStatus'])
+                if hf['IssStatus'] != 'Downloaded':
+                    try:
+                        havefiles = int(hf['Have']) +1
+                        if havefiles > totalfiles and recheck is False:
+                            recheck = True
+                            return forceRescan(ComicID, recheck=recheck)
+                    except TypeError:
+                        if totalfiles == 1:
+                            havefiles = 1
+                        else:
+                            logger.warn('Total issues for this series [ComiciD:%s/IssueID:%s] is not 1 when it should be. This is probably a mistake and the series should be refreshed.' % (ComicID, issueid))
+                            havefiles = 0
+                    logger.fdebug('incremented havefiles: %s' % havefiles)
+                else:
+                    havefiles = int(hf['Have'])
+                    logger.fdebug('untouched havefiles: %s' % havefiles)
     #let's update the total count of comics that was found.
     #store just the total of issues, since annuals gets tracked seperately.
     controlValueStat = {"ComicID":     ComicID}
@@ -2031,10 +2059,20 @@ def totals(ComicID, havefiles=None, totalfiles=None, module=None, issueid=None, 
 
     myDB.upsert("comics", newValueStat, controlValueStat)
     if file is not None:
-        controlValueStat = {"IssueID":     issueid,
-                            "ComicID":     ComicID}
-        newValueStat = {"ComicSize":       os.path.getsize(file)}
-        myDB.upsert(filetable, newValueStat, controlValueStat)
+        issue_row = myDB.selectone(
+            "SELECT IssueID FROM %s WHERE IssueID=? AND ComicID=?" % filetable,
+            [issueid, ComicID],
+        ).fetchone()
+        if issue_row is None:
+            logger.fdebug(
+                '%s Skipping ComicSize upsert for IssueID %s - issue row not present (refresh in progress).'
+                % (module, issueid)
+            )
+        else:
+            controlValueStat = {"IssueID":     issueid,
+                                "ComicID":     ComicID}
+            newValueStat = {"ComicSize":       os.path.getsize(file)}
+            myDB.upsert(filetable, newValueStat, controlValueStat)
 
 
 def watchlist_updater(calledfrom=None, sched=False):

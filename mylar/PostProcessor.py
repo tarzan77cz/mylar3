@@ -441,9 +441,19 @@ class PostProcessor(object):
         is_manual_run = self.nzb_name in ('Manual Run', 'Manual+Run')
         try:
             return self._process_body()
+        except Exception as e:
+            logger.error('%s Post-processing failed with an unhandled error: %s' % (self.module, e))
+            logger.error('%s Post-Processing ABORTED.' % self.module)
+            self._log('Post-processing failed: %s' % e)
+            self.valreturn.append({"self.log": self.log,
+                                   "mode": 'stop'})
+            if hasattr(self, 'queue') and self.queue is not None:
+                self.queue.put(self.valreturn)
         finally:
             if is_manual_run:
                 mylar.MANUAL_PP_LOCK = False
+            if self.apicall is True:
+                mylar.APILOCK = False
 
     def _process_body(self):
             module = self.module
