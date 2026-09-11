@@ -152,6 +152,64 @@ def today():
     yyyymmdd = datetime.date.isoformat(today)
     return yyyymmdd
 
+def issue_store_date_key(issue_row):
+    """Return YYYYMMDD store date string for an issue row, or 00000000 if unknown."""
+    if issue_row['ReleaseDate'] not in (None, '', '0000-00-00'):
+        dk = re.sub('-', '', issue_row['ReleaseDate']).strip()
+    else:
+        dk = re.sub('-', '', issue_row['IssueDate']).strip()
+    if dk in (None, '', '00000000'):
+        return '00000000'
+    return dk
+
+def is_within_autowant_reeval_window(dk, weeks=None):
+    """Return True when issue store date is within the configured re-evaluation window."""
+    if not dk or dk == '00000000':
+        return False
+    try:
+        issue_date = datetime.datetime.strptime(dk, "%Y%m%d").date()
+    except (TypeError, ValueError):
+        return False
+    if weeks is None:
+        weeks = mylar.CONFIG.AUTOWANT_REEVAL_WINDOW
+    try:
+        weeks = int(weeks)
+    except (TypeError, ValueError):
+        weeks = 8
+    if weeks < 0:
+        weeks = 0
+    cutoff = datetime.date.today() - datetime.timedelta(weeks=weeks)
+    return issue_date >= cutoff
+
+def resolve_autowant_status(issue_row, serieslast_updated=None, pause_status=False):
+    """Determine Wanted vs Skipped using AUTOWANT settings and re-evaluation window."""
+    if pause_status is True:
+        if issue_row['Status'] in (None, 'None'):
+            return 'Skipped'
+        return issue_row['Status']
+
+    dk = issue_store_date_key(issue_row)
+    if dk == '00000000':
+        return 'Skipped'
+
+    if not is_within_autowant_reeval_window(dk):
+        return 'Skipped'
+
+    nowdate = datetime.datetime.now()
+    now_week = datetime.datetime.strftime(nowdate, "%Y%U")
+    datechk = datetime.datetime.strptime(dk, "%Y%m%d")
+    issue_week = datetime.datetime.strftime(datechk, "%Y%U")
+
+    if mylar.CONFIG.AUTOWANT_ALL:
+        return 'Wanted'
+    if serieslast_updated is None:
+        return 'Skipped'
+    if issue_week >= now_week and mylar.CONFIG.AUTOWANT_UPCOMING:
+        return 'Wanted'
+    if all([int(re.sub('-', '', serieslast_updated).strip()) < int(dk), mylar.CONFIG.AUTOWANT_UPCOMING is True]):
+        return 'Wanted'
+    return 'Skipped'
+
 def now(format_string=None):
     now = datetime.datetime.now()
     if format_string is None:

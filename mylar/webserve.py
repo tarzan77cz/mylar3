@@ -3284,8 +3284,7 @@ class WebInterface(object):
 
     def pullrecreate(self, weeknumber=None, year=None):
         if mylar.BACKENDSTATUS_WS != 'up':
-            logger.warn('[PULL-LIST] Cannot re-create pull-list as walksoftly is currently offline. Retaining existing pull-data until it\'s back online')
-            return {'status': 'failure'}
+            logger.warn('[PULL-LIST] Walksoftly is offline - attempting pull-list refresh using local fallback if available')
 
         myDB = db.DBConnection()
         forcecheck = 'yes'
@@ -8223,6 +8222,7 @@ class WebInterface(object):
                     "duplicate_dump": mylar.CONFIG.DUPLICATE_DUMP,
                     "autowant_all": helpers.checked(mylar.CONFIG.AUTOWANT_ALL),
                     "autowant_upcoming": helpers.checked(mylar.CONFIG.AUTOWANT_UPCOMING),
+                    "autowant_reeval_window": mylar.CONFIG.AUTOWANT_REEVAL_WINDOW,
                     "comic_cover_local": helpers.checked(mylar.CONFIG.COMIC_COVER_LOCAL),
                     "cover_folder_local": helpers.checked(mylar.CONFIG.COVER_FOLDER_LOCAL),
                     "series_metadata_local": helpers.checked(mylar.CONFIG.SERIES_METADATA_LOCAL),

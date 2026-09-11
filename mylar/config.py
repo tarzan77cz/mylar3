@@ -82,6 +82,7 @@ _CONFIG_DEFINITIONS = OrderedDict({
     'MAXSIZE': (str, 'General', None),
     'AUTOWANT_UPCOMING': (bool, 'General', True),
     'AUTOWANT_ALL': (bool, 'General', False),
+    'AUTOWANT_REEVAL_WINDOW': (int, 'General', 8),
     'COMIC_COVER_LOCAL': (bool, 'General', False),
     'SERIES_METADATA_LOCAL': (bool, 'General', False),
     'SERIESJSON_FILE_PRIORITY': (bool, 'General', False),

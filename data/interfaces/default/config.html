@@ -1485,6 +1485,8 @@
                                         <div class="row checkbox left clearfix">
                                                    <input type="checkbox" style="vertical-align: middle; margin: 3px; margin-top: -1px;" name="autowant_upcoming" value="1" ${config['autowant_upcoming']} /><label>Automatically Mark Upcoming Issues as Wanted</label>
                                                    <input type="checkbox" style="vertical-align: middle; margin: 3px; margin-top: -1px;" name="autowant_all" value="1" ${config['autowant_all']} /><label>Automatically Mark All Issues as Wanted</label>
+                                                   <label>Re-evaluate Skipped issues within</label>
+                                                   <input type="text" name="autowant_reeval_window" value="${config['autowant_reeval_window']}" size="3" /> weeks (when ComicVine adds release dates)
                                                    <input type="checkbox" style="vertical-align: middle; margin: 3px; margin-top: -1px;" name="comic_cover_local" value="1" ${config['comic_cover_local']} /><label>Place cover.jpg into Comic Directory for each comic</label>
                                                    <input type="checkbox" style="vertical-align: middle; margin: 3px; margin-top: -1px;" name="cover_folder_local" value="1" ${config['cover_folder_local']} /><label>Place a thumbnail (folder.jpg) into Comic Directory for each comic</label>
                                                    <input type="checkbox" style="vertical-align: middle; margin: 3px; margin-top: -1px;" name="cvinfo" value="1" ${config['cvinfo']} /><label>Write cvinfo into each comic directory</label>

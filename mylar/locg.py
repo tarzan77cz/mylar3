@@ -21,7 +21,35 @@ import mylar
 from mylar import logger, db
 from mylar.helpers import ignored_publisher_check
 
+_locg_backoff_until = None
+_locg_backoff_hours = 4
+
+def _locg_in_backoff():
+    global _locg_backoff_until
+    if _locg_backoff_until is None:
+        return False
+    if datetime.datetime.now() < _locg_backoff_until:
+        return True
+    _locg_backoff_until = None
+    return False
+
+def _locg_set_backoff():
+    global _locg_backoff_until
+    _locg_backoff_until = datetime.datetime.now() + datetime.timedelta(hours=_locg_backoff_hours)
+    logger.fdebug('[PULL-LIST] Walksoftly backoff active until %s' % _locg_backoff_until.strftime('%Y-%m-%d %H:%M:%S'))
+
+def _locg_mark_down(status_code=None):
+    mylar.BACKENDSTATUS_WS = 'down'
+    if status_code is not None:
+        logger.warn('[%s] Walksoftly backend is unavailable. Pull-list data may be stale.' % status_code)
+    _locg_set_backoff()
+
 def locg(pulldate=None,weeknumber=None,year=None):
+
+        if _locg_in_backoff():
+            logger.fdebug('[PULL-LIST] Skipping Walksoftly request during backoff period.')
+            mylar.BACKENDSTATUS_WS = 'down'
+            return {'status': 'failure'}
 
         todaydate = datetime.datetime.today().replace(second=0,microsecond=0)
         if pulldate:
@@ -57,24 +85,25 @@ def locg(pulldate=None,weeknumber=None,year=None):
             r = requests.get(url, params=params, verify=True, headers={'User-Agent': mylar.USER_AGENT[:mylar.USER_AGENT.find('/')+7] + mylar.USER_AGENT[mylar.USER_AGENT.find('(')+1]})
         except requests.exceptions.RequestException as e:
             logger.warn('[PULL-LIST] Error encountered retrieving pull-list: %s' % (e,))
-            mylar.BACKENDSTATUS_WS = 'down'
+            _locg_mark_down()
             return {'status': 'failure'}
 
         if str(r.status_code) == '619':
             logger.warn('[%s] No date supplied, or an invalid date was provided [%s]' % (r.status_code, pulldate))
             return {'status': 'failure'}
-        elif str(r.status_code) == '522':
-            logger.warn('[%s] Walksoftly is currently offline. Data shown may be stale until it comes back online' % (r.status_code,))
-            mylar.BACKENDSTATUS_WS = 'down'
+        elif str(r.status_code) in ('522', '523'):
+            _locg_mark_down(r.status_code)
             return {'status': 'failure'}
         elif str(r.status_code) == '999' or str(r.status_code) == '111':
             logger.warn('[%s] Unable to retrieve data from site - this is a site.specific issue [%s]' % (r.status_code, pulldate))
-            mylar.BACKENDSTATUS_WS = 'down'
+            _locg_mark_down(r.status_code)
             return {'status': 'failure'}
         elif str(r.status_code) == '200':
             data = r.json()
 
             mylar.BACKENDSTATUS_WS = 'up'
+            global _locg_backoff_until
+            _locg_backoff_until = None
 
             logger.info('[WEEKLY-PULL] There are %s issues for week %s, %s' % (len(data), weeknumber, year))
             pull = []
@@ -160,6 +189,9 @@ def locg(pulldate=None,weeknumber=None,year=None):
             if str(r.status_code) == '666':
                 logger.warn('[%s] The error returned is: %s' % (r.status_code, r.headers))
                 return {'status': 'update_required'}
+            elif str(r.status_code).startswith('5'):
+                _locg_mark_down(r.status_code)
+                return {'status': 'failure'}
             else:
                 logger.warn('[%s] The error returned is: %s' % (r.status_code, r.headers))
                 return {'status': 'failure'}

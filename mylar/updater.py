@@ -156,7 +156,7 @@ def dbUpdate(ComicIDList=None, calledfrom=None, sched=False):
         if comic['Status'] == 'Paused':
             pause_status = True #Paused / Active
 
-        lastupdated = '0000-00-00'
+        lastupdated = None
         if comic['LastUpdated'] is not None:
             lastupdated = datetime.datetime.strptime(comic['LastUpdated'], "%Y-%m-%d %H:%M:%S").strftime('%Y-%m-%d')
 
@@ -297,34 +297,20 @@ def dbUpdate(ComicIDList=None, calledfrom=None, sched=False):
                                             newVAL = {"Status":        issue['Status']}
 
                                     if all([issuenew['Status'] == None, issue['Status'] == 'Skipped']):
-                                        if issuenew['ReleaseDate'] == '0000-00-00':
-                                            dk = re.sub('-', '', issue['IssueDate']).strip()
+                                        reeval_status = helpers.resolve_autowant_status(
+                                            issuenew,
+                                            serieslast_updated=lastupdated,
+                                            pause_status=pause_status,
+                                        )
+                                        newVAL = {"Status": reeval_status}
+                                        if issue['Location'] is not None:
+                                            newVAL['Location'] = issue['Location']
+                                        if issue['ComicSize'] is not None:
+                                            newVAL['ComicSize'] = issue['ComicSize']
+                                        if reeval_status == 'Wanted':
+                                            logger.fdebug('[AUTOWANT-REEVAL] Marking IssueID %s (#%s) as Wanted after CV refresh' % (issue['IssueID'], issue['Issue_Number']))
                                         else:
-                                            dk = re.sub('-', '', issuenew['ReleaseDate']).strip() # converts date to 20140718 format
-                                        if dk == '00000000':
-                                            logger.warn('Issue Data is invalid for Issue Number %s. Marking this issue as Skipped' % issue['Issue_Number'])
-                                            newVAL = {"Status":  "Skipped"}
-                                        else:
-                                            datechk = datetime.datetime.strptime(dk, "%Y%m%d")
-                                            issue_week = datetime.datetime.strftime(datechk, "%Y%U")
-                                            if pause_status is True:
-                                                newVAL = {"Status": issue['Status']}
-                                                logger.fdebug('[PAUSE-CATCH-STATUS] Series is Paused - keeping status of %s for #%s' % (issue['Status'], issue['Issue_Number']))
-                                            else:
-                                                if mylar.CONFIG.AUTOWANT_ALL:
-                                                    newVAL = {"Status": "Wanted"}
-                                                elif lastupdated is None:
-                                                    logger.fdebug('serieslast_updated is None. Setting to Skipped')
-                                                    newVAL = {"Status":"Skipped"}
-                                                elif issue_week >= now_week and mylar.CONFIG.AUTOWANT_UPCOMING:
-                                                    logger.fdebug('Issue_week: %s -- now_week: %s' % (issue_week, now_week))
-                                                    logger.fdebug('Issue date [%s] is in/beyond current week - marking as Wanted.' % dk)
-                                                    newVAL = {"Status": "Wanted"}
-                                                elif all([int(re.sub('-', '', lastupdated).strip()) < int(dk), mylar.CONFIG.AUTOWANT_UPCOMING is True]):
-                                                    logger.info('Autowant upcoming triggered for issue #%s' % issuenew['Issue_Number'])
-                                                    newVAL = {"Status": "Wanted"}
-                                                else:
-                                                    newVAL = {"Status":  "Skipped"}
+                                            logger.fdebug('[SKIPPED-PRESERVE] Keeping Skipped status for existing IssueID %s (#%s)' % (issue['IssueID'], issue['Issue_Number']))
 
                                     if newVAL is not None:
                                         if issue['IssueDate_Edit'] is not None:
@@ -598,6 +584,12 @@ def upcoming_update(ComicID, ComicName, IssueNumber, IssueDate, forcecheck=None,
             wkend = wkde + datetime.timedelta(days = 2)
             wk_end = wkend.strftime('%Y-%m-%d')
 
+            if issue_checkdate is None or issue_checkdate == '0000-00-00':
+                logger.info('[IssueDate:%s] is invalid/unknown. Not applying Autowant upcoming (Skipped will be preserved).' % issue_checkdate)
+                return {"Status":  'incorrect_match',
+                        "ComicID": ComicID,
+                        "IssueID": issuechk['IssueID']}
+
             if issue_checkdate != '0000-00-00' and not ( re.sub('-', '', wk_end) >= re.sub('-', '', issue_checkdate) >= re.sub('-', '', wk_start) ):
                 logger.info('[IssueDate:%s] is not within the range of [Pulldate:%s - %s]. Incorrect match being imposed by WS - please log an issue if this has not fixed itself within a few hours' %(issue_checkdate, wk_info['startweek'], wk_info['endweek']))
                 if IssueNumber is not None:
@@ -728,6 +720,7 @@ def upcoming_update(ComicID, ComicName, IssueNumber, IssueDate, forcecheck=None,
             logger.fdebug('...Changing Status to Wanted and throwing it in the Upcoming section since it is not published yet.')
         #this works for issues existing in DB...
         elif og_status == "Skipped":
+            # Reached only when the issue date falls within the pull week (invalid/out-of-range dates return earlier).
             newValue['Status'] = "Wanted"
             values = {"Status":  "Wanted"}
             logger.fdebug('...New status of Wanted')

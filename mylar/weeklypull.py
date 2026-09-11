@@ -33,6 +33,74 @@ import json
 import mylar
 from mylar import db, updater, helpers, logger, newpull, importer, mb, locg, webserve
 
+def weekly_local_fallback(weeknumber, year):
+    """Populate weekly table from watched-series issues when Walksoftly is unavailable."""
+    myDB = db.DBConnection()
+    wk_info = helpers.weekly_info(weeknumber, year)
+    wkds = datetime.datetime.strptime(wk_info['startweek'], '%B %d, %Y')
+    wkstr = wkds - datetime.timedelta(days=2)
+    wk_start = wkstr.strftime('%Y-%m-%d')
+    wkde = datetime.datetime.strptime(wk_info['endweek'], '%B %d, %Y')
+    wkend = wkde + datetime.timedelta(days=2)
+    wk_end = wkend.strftime('%Y-%m-%d')
+
+    rows = myDB.select(
+        "SELECT i.IssueID, i.ComicID, i.ComicName, i.Issue_Number, i.ReleaseDate, i.IssueDate, "
+        "cm.ComicPublisher, cm.ComicYear FROM issues i "
+        "INNER JOIN comics cm ON cm.ComicID = i.ComicID "
+        "WHERE cm.Status = 'Active' AND i.ReleaseDate != '0000-00-00' "
+        "AND i.ReleaseDate >= ? AND i.ReleaseDate <= ?",
+        [wk_start, wk_end],
+    )
+
+    if not rows:
+        logger.warn('[PULL-LIST] Local fallback found no watched issues for week %s, %s' % (weeknumber, year))
+        return {'status': 'failure'}
+
+    myDB.action(
+        "CREATE TABLE IF NOT EXISTS weekly (SHIPDATE, PUBLISHER text, ISSUE text, COMIC VARCHAR(150), "
+        "EXTRA text, STATUS text, ComicID text, IssueID text, CV_Last_Update text, DynamicName text, "
+        "weeknumber text, year text, volume text, seriesyear text, annuallink text, format text, "
+        "rowid INTEGER PRIMARY KEY)",
+    )
+    myDB.action('DELETE FROM weekly WHERE weeknumber=? AND year=?', [int(weeknumber), int(year)])
+
+    cl_d = mylar.filechecker.FileChecker()
+    for row in rows:
+        comicname = row['ComicName']
+        cl_dyninfo = cl_d.dynamic_replace(comicname)
+        dynamic_name = re.sub('[\|\s]', '', cl_dyninfo['mod_seriesname'].lower()).strip()
+        controlValueDict = {
+            'DYNAMICNAME': dynamic_name,
+            'ISSUE': re.sub('#', '', row['Issue_Number']).strip(),
+        }
+        newValueDict = {
+            'SHIPDATE': row['ReleaseDate'],
+            'PUBLISHER': row['ComicPublisher'],
+            'STATUS': 'Skipped',
+            'COMIC': comicname,
+            'COMICID': row['ComicID'],
+            'ISSUEID': row['IssueID'],
+            'WEEKNUMBER': str(weeknumber),
+            'YEAR': str(year),
+            'VOLUME': None,
+            'SERIESYEAR': row['ComicYear'],
+            'FORMAT': None,
+            'ANNUALLINK': None,
+        }
+        myDB.upsert("weekly", newValueDict, controlValueDict)
+
+    todaydate = datetime.datetime.today().replace(second=0, microsecond=0)
+    mylar.CONFIG.PULL_REFRESH = todaydate.strftime('%Y-%m-%d %H:%M:%S')
+    mylar.CONFIG.writeconfig(values={'pull_refresh': mylar.CONFIG.PULL_REFRESH})
+    logger.info('[PULL-LIST] Local fallback populated %s issues for week %s, %s' % (len(rows), weeknumber, year))
+    return {
+        'status': 'success',
+        'count': len(rows),
+        'weeknumber': weeknumber,
+        'year': year,
+    }
+
 def pullit(forcecheck=None, weeknumber=None, year=None):
     myDB = db.DBConnection()
     if weeknumber is None:
@@ -110,7 +178,12 @@ def pullit(forcecheck=None, weeknumber=None, year=None):
                 return {'status': 'failure'}
             else:
                 logger.warn('[PULL-LIST] Unable to retrieve weekly pull-list. Pull list for week %s, %s may be stale.' % (weeknumber_mod, year_mod))
-                return {'status': 'failure'}
+                fallback = weekly_local_fallback(weeknumber_mod, year_mod)
+                if fallback['status'] == 'success':
+                    logger.info('[PULL-LIST] Using local fallback for week %s, %s with %s issues.' % (weeknumber_mod, year_mod, fallback['count']))
+                    new_pullcheck(fallback['weeknumber'], fallback['year'])
+                else:
+                    return {'status': 'failure'}
                 #mylar.PULLBYFILE = pull_the_file(newrl)
                 #break
         return {'status': 'success'}
@@ -1083,6 +1156,21 @@ def new_pullcheck(weeknumber, pullyear, comic1off_name=None, comic1off_id=None, 
                     else:
                         #if it's a name metch, it means that CV hasn't been populated yet with the necessary data
                         #do a quick issue check to see if the next issue number is in sequence and not a #1, or like #900
+                        # Also require series year near the pull year so an old volume (e.g. 1988) is not paired with a new title.
+                        year_ok_matches = []
+                        for nm in namematch:
+                            try:
+                                series_year = int(str(nm['SeriesYear']).strip()[:4])
+                                pull_year = int(pullyear)
+                            except (TypeError, ValueError):
+                                continue
+                            if abs(series_year - pull_year) <= 5:
+                                year_ok_matches.append((abs(series_year - pull_year), nm))
+                        if not year_ok_matches:
+                            logger.fdebug('[WEEKLY-PULL] Series ID:' + namematch[0]['ComicID'] + ' not a match based on series year vs pull year [SeriesYear:' + str(namematch[0]['SeriesYear']) + '][PullYear:' + str(pullyear) + ']')
+                            continue
+                        year_ok_matches.sort(key=lambda x: x[0])
+                        namematch = [year_ok_matches[0][1]]
                         latestiss = namematch[0]['latestIssue'].strip()
                         lastupdated = namematch[0]['LastUpdated']
                         try:
@@ -1322,12 +1410,15 @@ def new_pullcheck(weeknumber, pullyear, comic1off_name=None, comic1off_id=None, 
                             else:
                                 if all([isschk['Status'] != 'Downloaded', isschk['Status'] != 'Snatched', isschk['Status'] != 'Archived', isschk['Status'] != 'Ignored']) and newValue['Status'] == 'Wanted':
                                 #make sure the status is Wanted and that the issue status is identical if not.
-                                    newStat = {'Status': 'Wanted'}
-                                    ctrlStat = {'IssueID': issueid}
-                                    if all([annualidmatch, mylar.CONFIG.ANNUALS_ON]):
-                                        myDB.upsert("annuals", newStat, ctrlStat)
+                                    if isschk['Status'] == 'Skipped' and (mismatched is True or incomp_cv is True):
+                                        logger.fdebug('[WEEKLY-PULL] Not overwriting Skipped for IssueID %s (mismatched/invalid date).' % issueid)
                                     else:
-                                        myDB.upsert("issues", newStat, ctrlStat)
+                                        newStat = {'Status': 'Wanted'}
+                                        ctrlStat = {'IssueID': issueid}
+                                        if all([annualidmatch, mylar.CONFIG.ANNUALS_ON]):
+                                            myDB.upsert("annuals", newStat, ctrlStat)
+                                        else:
+                                            myDB.upsert("issues", newStat, ctrlStat)
                 else:
                     continue
 #                    else:
