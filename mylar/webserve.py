@@ -3650,7 +3650,7 @@ class WebInterface(object):
                     watcharc = None
 
                 try:
-                    rejected_count = len(mylar.REJECTED_MATCHES.get(row['IssueID'], []))
+                    rejected_count = search_filer.count_offerable_rejected_matches(row['IssueID'])
                     ddl_info_status = None
                     ddl_activity = None
                     if row['Status'] == 'Snatched':
@@ -3682,7 +3682,7 @@ class WebInterface(object):
                     filtered.append([row['ComicName'], row['Issue_Number'], row['ReleaseDate'], row['IssueID'], tier, row['ComicID'], row['Status'], storyarc, storyarcid, issuearcid, watcharc, row['Int_IssueNumber'], rejected_count, ddl_info_status, ddl_activity])
                 except Exception as e:
                     #logger.warn('danger Wil Robinson: %s' % (e,))
-                    rejected_count = len(mylar.REJECTED_MATCHES.get(row['IssueID'], []))
+                    rejected_count = search_filer.count_offerable_rejected_matches(row['IssueID'])
                     ddl_info_status = None
                     ddl_activity = None
                     if row['Status'] == 'Snatched':
@@ -3760,7 +3760,7 @@ class WebInterface(object):
                         matched = True
 
                 if matched is True:
-                    rejected_count = len(mylar.REJECTED_MATCHES.get(key, []))
+                    rejected_count = search_filer.count_offerable_rejected_matches(key)
                     ddl_info_status = None
                     ddl_activity = None
                     if ark['status'] == 'Snatched':
@@ -3880,7 +3880,9 @@ class WebInterface(object):
         """
         try:
             if IssueID in mylar.REJECTED_MATCHES:
-                matches = mylar.REJECTED_MATCHES[IssueID]
+                matches = search_filer._filter_offerable_rejected_matches(
+                    mylar.REJECTED_MATCHES[IssueID]
+                )
                 # Convert to JSON-serializable format
                 result = []
                 for match in matches:
@@ -3895,8 +3897,7 @@ class WebInterface(object):
                         "nzbid": match.get("nzbid", None),
                         "relevance_score": match.get("relevance_score", 0.0)
                     })
-                
-                # Sort by relevance_score (descending), then by pubdate (descending - newest first)
+
                 result = self._sort_rejected_matches(result)
                 
                 return json.dumps({"status": "success", "matches": result})
@@ -3921,10 +3922,11 @@ class WebInterface(object):
                 logger.error('[SELECT-REJECTED-MATCH] No rejected matches found for IssueID %s' % IssueID)
                 return json.dumps({"status": "error", "message": "No rejected matches found for this issue"})
             
-            matches = mylar.REJECTED_MATCHES[IssueID]
+            stored_matches = mylar.REJECTED_MATCHES[IssueID]
+            matches = search_filer._filter_offerable_rejected_matches(stored_matches)
             match = None
             match_index_to_remove = None
-            
+
             # Prefer unique identifier (nzbid + link) over index.
             # Treat empty string the same as missing (frontend may send nzbid=).
             has_nzbid = nzbid is not None and str(nzbid).strip() != ''
@@ -3932,15 +3934,14 @@ class WebInterface(object):
             if has_nzbid or has_link:
                 match_index_to_remove = search_filer._find_rejected_match_index(IssueID, link, nzbid)
                 if match_index_to_remove is not None:
-                    match = matches[match_index_to_remove]
+                    match = stored_matches[match_index_to_remove]
                 if not match:
                     logger.error('[SELECT-REJECTED-MATCH] Match not found for IssueID %s nzbid=%r link=%r (have %s stored)' % (
-                        IssueID, nzbid, link, len(matches)))
+                        IssueID, nzbid, link, len(stored_matches)))
                     return json.dumps({"status": "error", "message": "Rejected match not found with given nzbid and link"})
             elif match_index is not None:
                 # Fallback to index-based lookup (for backwards compatibility)
                 match_index = int(match_index)
-                # Sort matches to ensure consistent ordering with frontend
                 matches = self._sort_rejected_matches(matches)
                 if match_index < 0 or match_index >= len(matches):
                     return json.dumps({"status": "error", "message": "Invalid match index"})

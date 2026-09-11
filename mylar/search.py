@@ -1331,6 +1331,14 @@ def verification(verified_matches, is_info):
                     # Create rejected match object for update
                     link = verified.get('link', '')
                     nzbid = verified.get('nzbid', None)
+                    entry = verified.get('entry', verified)
+                    relevance_score = search_filer._compute_rejected_relevance(
+                        is_info,
+                        entry,
+                        reason,
+                        alt_match=verified.get('alt_match', False),
+                        verified=True,
+                    )
                     rejected_match = {
                         "title": verified.get('nzbtitle', verified.get('ComicTitle', 'Unknown')),
                         "provider": verified.get('provider', verified.get('nzbprov', 'Unknown')),
@@ -1340,13 +1348,12 @@ def verification(verified_matches, is_info):
                         "pubdate": verified.get('pubdate', ''),
                         "reason": reason,
                         "nzbid": nzbid,
-                        "entry": verified.get('entry', {}),
-                        "relevance_score": 0.8,  # High relevance - passed all checks but not selected
-                        "verified_data": verified,  # Store full verified data for later use
-                        "initial_added": False  # This is being updated with a reason
+                        "entry": entry,
+                        "relevance_score": relevance_score,
+                        "verified_data": verified,
+                        "initial_added": False,
                     }
-                    
-                    # Use update mechanism - will update existing match or add if doesn't exist
+
                     search_filer._add_or_update_rejected_match(IssueID, link, nzbid, rejected_match, update_only=False)
                 except Exception as e:
                     logger.fdebug('[REJECTED-MATCHES] Error storing rejected match in verification: %s' % e)

@@ -18,6 +18,7 @@ import re
 import email.utils
 import datetime
 import time
+import difflib
 from wsgiref.handlers import format_date_time
 
 import mylar
@@ -192,6 +193,283 @@ def _years_overlap(bounds_a, bounds_b):
     return bounds_a[0] <= bounds_b[1] and bounds_b[0] <= bounds_a[1]
 
 
+OFFERABLE_MIN_RELEVANCE = 0.15
+
+
+def _normalize_series_name(name):
+    """Normalize a series/title string for fuzzy comparison."""
+    if not name:
+        return ''
+    return helpers.cleanName(str(name)).strip()
+
+
+def _parsed_year_empty(parsed_year):
+    """Return True when a parsed year value is missing or unusable."""
+    if parsed_year is None:
+        return True
+    year_str = str(parsed_year).strip()
+    return year_str in ('', 'None', 'Unknown')
+
+
+def _single_year_compatible(parsed_year, is_info, bypass_volume_year=False, comvers_chk=None):
+    """Return True when parsed year is absent or compatible with the watched comic."""
+    if _parsed_year_empty(parsed_year):
+        return True
+
+    UseFuzzy = is_info['UseFuzzy'] if 'UseFuzzy' in is_info else None
+    if UseFuzzy == "1":
+        return True
+
+    if bypass_volume_year:
+        return True
+
+    if comvers_chk == 0 and _parsed_year_empty(parsed_year):
+        return True
+
+    ComicYear = is_info['ComicYear']
+    comyear = ComicYear
+    IssDateFix = is_info['IssDateFix'] if 'IssDateFix' in is_info else 'no'
+
+    if not any(
+        [
+            UseFuzzy == "0",
+            UseFuzzy == "2",
+            UseFuzzy is None,
+            IssDateFix != "no",
+        ]
+    ):
+        return True
+
+    year_str = str(parsed_year).strip()
+    if not any(
+        [
+            len(year_str) >= 4 and year_str[:-2] == '19',
+            len(year_str) >= 4 and year_str[:-2] == '20',
+        ]
+    ):
+        return True
+
+    if str(comyear) == year_str:
+        return True
+
+    if UseFuzzy == "2":
+        try:
+            ComUp = int(ComicYear) + 1
+            ComDwn = int(ComicYear) - 1
+            if str(ComUp) in year_str or str(ComDwn) in year_str:
+                return True
+        except Exception:
+            pass
+
+    if IssDateFix != "no" and UseFuzzy != "2":
+        try:
+            if IssDateFix in ("01", "02", "03"):
+                ComicYearFix = int(ComicYear) - 1
+            else:
+                ComicYearFix = int(ComicYear) + 1
+            if str(ComicYearFix) in year_str:
+                return True
+        except Exception:
+            pass
+
+    return False
+
+
+def _pack_year_compatible(pack_year_str, is_info):
+    """Return True when a pack year range overlaps the watched series/issue years."""
+    if _parsed_year_empty(pack_year_str):
+        return True
+
+    UseFuzzy = is_info['UseFuzzy'] if 'UseFuzzy' in is_info else None
+    if UseFuzzy == "1":
+        return True
+
+    pack_bounds = _pack_year_bounds(pack_year_str)
+    if pack_bounds is None:
+        return True
+
+    ComicYear = is_info['ComicYear']
+    SeriesYear = is_info['SeriesYear'] if 'SeriesYear' in is_info else None
+    comyear = ComicYear
+
+    ref_years = []
+    for year_candidate in (SeriesYear, ComicYear, comyear):
+        if year_candidate is None:
+            continue
+        try:
+            year_digits = re.sub(r'[^0-9]', '', str(year_candidate))
+            if len(year_digits) < 4:
+                continue
+            year_int = int(year_digits[:4])
+        except Exception:
+            continue
+        if 1900 <= year_int <= 2100:
+            ref_years.append(year_int)
+
+    if not ref_years:
+        return True
+
+    ref_bounds = (min(ref_years) - 1, max(ref_years) + 1)
+    return _years_overlap(pack_bounds, ref_bounds)
+
+
+def _compute_rejected_relevance(
+    is_info,
+    entry,
+    reason,
+    parsed_comic=None,
+    filecomic=None,
+    alt_match=False,
+    verified=False,
+):
+    """Compute a 0-1 relevance score for a rejected match vs the watched issue."""
+    comic_name = is_info['ComicName'] if 'ComicName' in is_info else ''
+    issue_number = is_info['IssueNumber'] if 'IssueNumber' in is_info else None
+    comic_version = is_info['ComicVersion'] if 'ComicVersion' in is_info else None
+
+    title = ''
+    if isinstance(entry, dict):
+        title = entry.get('title', '') or entry.get('nzbtitle', '') or entry.get('ComicTitle', '')
+
+    candidate_series = title
+    candidate_year = None
+    candidate_issue = None
+    candidate_volume = None
+
+    if parsed_comic:
+        if parsed_comic.get('series_name'):
+            candidate_series = parsed_comic['series_name']
+        elif parsed_comic.get('comicfilename'):
+            candidate_series = parsed_comic['comicfilename']
+        candidate_year = parsed_comic.get('issue_year')
+        candidate_issue = parsed_comic.get('issue_number')
+        candidate_volume = parsed_comic.get('series_volume')
+
+    if filecomic and filecomic.get('justthedigits') is not None:
+        candidate_issue = filecomic['justthedigits']
+
+    norm_expected = _normalize_series_name(comic_name)
+    norm_candidate = _normalize_series_name(candidate_series)
+    norm_title = _normalize_series_name(title)
+
+    name_ratio = 0.0
+    if norm_expected and norm_candidate:
+        name_ratio = difflib.SequenceMatcher(None, norm_expected, norm_candidate).ratio()
+    if norm_expected and norm_title:
+        name_ratio = max(name_ratio, difflib.SequenceMatcher(None, norm_expected, norm_title).ratio())
+
+    name_score = name_ratio * 0.50
+
+    issue_score = 0.08
+    if issue_number is not None and candidate_issue is not None:
+        try:
+            expected_int = helpers.issue_number_parser(issue_number).asInt
+            found_int = helpers.issue_number_parser(candidate_issue).asInt
+            if expected_int == found_int:
+                issue_score = 0.25
+            else:
+                issue_score = 0.05
+        except Exception:
+            issue_score = 0.10
+    elif candidate_issue is None:
+        issue_score = 0.12
+
+    if _parsed_year_empty(candidate_year):
+        year_score = 0.08
+    elif _single_year_compatible(candidate_year, is_info):
+        year_score = 0.15
+    else:
+        year_score = 0.0
+
+    volume_score = 0.0
+    if comic_version and candidate_volume:
+        try:
+            expected_vol = re.sub('[^0-9]', '', str(comic_version))
+            found_vol = re.sub('[^0-9]', '', str(candidate_volume))
+            if expected_vol and found_vol and expected_vol == found_vol:
+                volume_score = 0.10
+        except Exception:
+            pass
+
+    score = name_score + issue_score + year_score + volume_score
+
+    if verified:
+        score = min(1.0, score + 0.15)
+    if alt_match:
+        score = max(0.0, score - 0.05)
+
+    reason_lower = (reason or '').lower()
+    if 'issue number matches' in reason_lower or 'issue #' in reason_lower:
+        score = min(1.0, score + 0.10)
+    if 'alternate series' in reason_lower:
+        score = min(1.0, max(score, 0.55))
+
+    return round(min(1.0, max(0.0, score)), 4)
+
+
+def _remove_rejected_match(IssueID, link, nzbid):
+    """Remove a rejected match from the in-memory cache."""
+    try:
+        if IssueID not in mylar.REJECTED_MATCHES:
+            return False
+        match_idx = _find_rejected_match_index(IssueID, link, nzbid)
+        if match_idx is None:
+            return False
+        removed = mylar.REJECTED_MATCHES[IssueID].pop(match_idx)
+        if not mylar.REJECTED_MATCHES[IssueID]:
+            del mylar.REJECTED_MATCHES[IssueID]
+        logger.fdebug(
+            '[REJECTED-MATCHES] Removed rejected match for IssueID %s: %s'
+            % (IssueID, removed.get('title', 'Unknown'))
+        )
+        return True
+    except Exception as e:
+        logger.fdebug('[REJECTED-MATCHES] Error removing rejected match: %s' % e)
+        return False
+
+
+def _prune_unprocessed_rejected_matches(IssueID):
+    """Drop raw search dumps that never received a rejection reason."""
+    if IssueID not in mylar.REJECTED_MATCHES:
+        return
+    pruned = [
+        match for match in mylar.REJECTED_MATCHES[IssueID]
+        if not (
+            match.get('initial_added')
+            and not (match.get('reason') or '').strip()
+            and not match.get('verified_data')
+        )
+    ]
+    if pruned:
+        mylar.REJECTED_MATCHES[IssueID] = pruned
+    else:
+        del mylar.REJECTED_MATCHES[IssueID]
+
+
+def _filter_offerable_rejected_matches(matches):
+    """Return rejected matches that should be shown to the user."""
+    offerable = []
+    for match in matches:
+        reason = (match.get('reason') or '').strip()
+        reason_lower = reason.lower()
+        if not reason and not match.get('verified_data'):
+            continue
+        if 'year mismatch' in reason_lower or 'pack year mismatch' in reason_lower:
+            continue
+        relevance = match.get('relevance_score', 0.0)
+        if relevance < OFFERABLE_MIN_RELEVANCE and not match.get('verified_data'):
+            continue
+        offerable.append(match)
+    return offerable
+
+
+def count_offerable_rejected_matches(IssueID):
+    """Count rejected matches that would be shown in the Upcoming dialog."""
+    if IssueID not in mylar.REJECTED_MATCHES:
+        return 0
+    return len(_filter_offerable_rejected_matches(mylar.REJECTED_MATCHES[IssueID]))
+
+
 def _add_or_update_rejected_match(IssueID, link, nzbid, match_data, update_only=False):
     """Add new or update existing rejected match. Returns True if added/updated, False otherwise."""
     try:
@@ -230,35 +508,73 @@ class search_check(object):
     def __init__(self):
         pass
 
-    def _store_rejected_match(self, entry, is_info, reason, comsize_m=None, pubdate=None, nzbid=None, relevance_score=0.3):
+    def _store_rejected_match(
+        self,
+        entry,
+        is_info,
+        reason,
+        comsize_m=None,
+        pubdate=None,
+        nzbid=None,
+        parsed_comic=None,
+        filecomic=None,
+        alt_match=False,
+        verified_data=None,
+    ):
         """Helper function to store rejected matches for user review - uses update mechanism"""
         if not is_info or 'IssueID' not in is_info:
             return
-        
+
         try:
             IssueID = is_info['IssueID']
             provider = is_info.get('nzbprov', 'Unknown')
             entry_link, entry_id = _normalize_ddl_rejected_ids(entry, nzbid=nzbid, provider=provider)
-            
+
+            if parsed_comic is not None:
+                parsed_year = parsed_comic.get('issue_year')
+                if parsed_year is not None and not _single_year_compatible(parsed_year, is_info):
+                    _remove_rejected_match(IssueID, entry_link, entry_id)
+                    return
+
+            relevance_score = _compute_rejected_relevance(
+                is_info,
+                entry,
+                reason,
+                parsed_comic=parsed_comic,
+                filecomic=filecomic,
+                alt_match=alt_match,
+                verified=verified_data is not None,
+            )
+
+            if relevance_score < OFFERABLE_MIN_RELEVANCE and verified_data is None:
+                _remove_rejected_match(IssueID, entry_link, entry_id)
+                return
+
+            entry_title = 'Unknown'
+            if isinstance(entry, dict):
+                entry_title = entry.get('title', entry.get('nzbtitle', 'Unknown'))
+
             rejected_match = {
-                "title": entry.get('title', 'Unknown'),
+                "title": entry_title,
                 "provider": provider,
                 "size": comsize_m if comsize_m else 'Unknown',
-                "kind": entry.get('kind', 'Unknown'),
+                "kind": entry.get('kind', 'Unknown') if isinstance(entry, dict) else 'Unknown',
                 "link": entry_link,
-                "pubdate": pubdate if pubdate else entry.get('pubdate', ''),
+                "pubdate": pubdate if pubdate else (entry.get('pubdate', '') if isinstance(entry, dict) else ''),
                 "reason": reason,
                 "nzbid": entry_id,
                 "entry": entry,
                 "relevance_score": relevance_score,
-                "verified_data": None,  # Not verified yet, rejected early
-                "initial_added": False  # This is being added with a reason, not from initial search
+                "verified_data": verified_data,
+                "initial_added": False,
             }
-            
-            # Use _add_or_update_rejected_match which handles duplicates automatically
+
             _add_or_update_rejected_match(IssueID, entry_link, entry_id, rejected_match, update_only=False)
-            logger.fdebug('[REJECTED-MATCHES] Stored/updated rejected match for IssueID %s: %s (Reason: %s)' % 
-                        (IssueID, entry.get('title', 'Unknown'), reason))
+            logger.fdebug(
+                '[REJECTED-MATCHES] Stored/updated rejected match for IssueID %s: %s'
+                ' (Reason: %s, Score: %s)'
+                % (IssueID, entry_title, reason, relevance_score)
+            )
         except Exception as e:
             logger.fdebug('[REJECTED-MATCHES] Error storing rejected match: %s' % e)
 
@@ -652,12 +968,16 @@ class search_check(object):
                         nzbid = entry.get('id') if 'id' in entry else None
                         # Only pass comsize_m if it was actually calculated (not the initial 0)
                         size_val = comsize_m if 'comsize_m' in locals() and comsize_m != 0 else None
-                        self._store_rejected_match(entry, is_info, 
-                                                   "Publication date (%s) is before store date (%s)" % (pubdate, stdate),
-                                                   comsize_m=size_val,
-                                                   pubdate=pubdate,
-                                                   nzbid=nzbid,
-                                                   relevance_score=0.4)
+                        self._store_rejected_match(
+                            entry,
+                            is_info,
+                            "Publication date (%s) is before store date (%s)" % (pubdate, stdate),
+                            comsize_m=size_val,
+                            pubdate=pubdate,
+                            nzbid=nzbid,
+                            parsed_comic=parsed_comic if 'parsed_comic' in locals() else None,
+                            filecomic=filecomic if 'filecomic' in locals() else None,
+                        )
                     except Exception as e:
                         logger.fdebug('[REJECTED-MATCHES] Error storing date-based rejection: %s' % e)
                     return None
@@ -694,12 +1014,16 @@ class search_check(object):
                         nzbid = entry.get('id') if 'id' in entry else None
                         # Only pass comsize_m if it was actually calculated (not the initial 0)
                         size_val = comsize_m if 'comsize_m' in locals() and comsize_m != 0 else None
-                        self._store_rejected_match(entry, is_info,
-                                                   "Publication date (%s) is before store date (%s)" % (pubdate, stdate),
-                                                   comsize_m=size_val,
-                                                   pubdate=pubdate,
-                                                   nzbid=nzbid,
-                                                   relevance_score=0.4)
+                        self._store_rejected_match(
+                            entry,
+                            is_info,
+                            "Publication date (%s) is before store date (%s)" % (pubdate, stdate),
+                            comsize_m=size_val,
+                            pubdate=pubdate,
+                            nzbid=nzbid,
+                            parsed_comic=parsed_comic if 'parsed_comic' in locals() else None,
+                            filecomic=filecomic if 'filecomic' in locals() else None,
+                        )
                     except Exception as e:
                         logger.fdebug('[REJECTED-MATCHES] Error storing date-based rejection: %s' % e)
                     return None
@@ -845,17 +1169,28 @@ class search_check(object):
                     
                     # Store rejected match if relevant
                     if is_relevant:
+                        parsed_year = parsed_comic.get('issue_year') if parsed_comic else None
+                        if parsed_year is not None and not _single_year_compatible(parsed_year, is_info):
+                            logger.fdebug(
+                                '[REJECTED-MATCHES] Fail match with issue # but incompatible year'
+                                ' - not offering'
+                            )
+                            return None
                         logger.fdebug('[REJECTED-MATCHES] Attempting to store fail match: title=%s, IssueID=%s, reason=%s' % 
                                     (entry.get('title', 'Unknown'), IssueID if 'IssueID' in locals() else 'NOT_SET', reason))
                         try:
                             nzbid = entry.get('id') if 'id' in entry else None
                             size_val = comsize_m if 'comsize_m' in locals() and comsize_m != 0 else None
-                            self._store_rejected_match(entry, is_info,
-                                                       reason,
-                                                       comsize_m=size_val,
-                                                       pubdate=pubdate if 'pubdate' in locals() else None,
-                                                       nzbid=nzbid,
-                                                       relevance_score=0.5)  # Medium relevance - issue/year match but series name differs
+                            self._store_rejected_match(
+                                entry,
+                                is_info,
+                                reason,
+                                comsize_m=size_val,
+                                pubdate=pubdate if 'pubdate' in locals() else None,
+                                nzbid=nzbid,
+                                parsed_comic=parsed_comic,
+                                filecomic=filecomic if 'filecomic' in locals() else None,
+                            )
                             logger.fdebug('[REJECTED-MATCHES] Successfully stored fail match for IssueID %s' % IssueID)
                         except Exception as e:
                             logger.error('[REJECTED-MATCHES] Error storing failed match: %s' % e)
@@ -889,12 +1224,16 @@ class search_check(object):
             try:
                 nzbid = entry.get('id') if 'id' in entry else None
                 size_val = comsize_m if 'comsize_m' in locals() and comsize_m != 0 else None
-                self._store_rejected_match(entry, is_info,
-                                           "Booktype mismatch: found %s, expected %s" % (parsed_comic['booktype'], booktype),
-                                           comsize_m=size_val,
-                                           pubdate=pubdate if 'pubdate' in locals() else None,
-                                           nzbid=nzbid,
-                                           relevance_score=0.4)
+                self._store_rejected_match(
+                    entry,
+                    is_info,
+                    "Booktype mismatch: found %s, expected %s" % (parsed_comic['booktype'], booktype),
+                    comsize_m=size_val,
+                    pubdate=pubdate if 'pubdate' in locals() else None,
+                    nzbid=nzbid,
+                    parsed_comic=parsed_comic,
+                    filecomic=filecomic if 'filecomic' in locals() else None,
+                )
             except Exception as e:
                 logger.fdebug('[REJECTED-MATCHES] Error storing booktype rejection: %s' % e)
             return None
@@ -1102,36 +1441,38 @@ class search_check(object):
                         yearmatch = False
                         try:
                             nzbid = entry.get('id') if 'id' in entry else None
-                            size_val = comsize_m if 'comsize_m' in locals() and comsize_m != 0 else None
-                            self._store_rejected_match(
+                            entry_link, entry_id = _normalize_ddl_rejected_ids(
                                 entry,
-                                is_info,
-                                "Pack year mismatch: found %s, expected around %s-%s"
-                                % (pack_year_str, min(ref_years), max(ref_years)),
-                                comsize_m=size_val,
-                                pubdate=pubdate if 'pubdate' in locals() else None,
                                 nzbid=nzbid,
-                                relevance_score=0.4,
+                                provider=is_info.get('nzbprov', 'Unknown'),
                             )
+                            logger.fdebug(
+                                '[REJECTED-MATCHES] Pack year mismatch (found %s, expected around'
+                                ' %s-%s) - not offering'
+                                % (pack_year_str, min(ref_years), max(ref_years))
+                            )
+                            _remove_rejected_match(IssueID, entry_link, entry_id)
                         except Exception as e:
-                            logger.fdebug('[REJECTED-MATCHES] Error storing pack year rejection: %s' % e)
+                            logger.fdebug('[REJECTED-MATCHES] Error removing pack year rejection: %s' % e)
                         return None
                     yearmatch = True
 
         if yearmatch is False and pack is False:
-            # Store rejected match for user review
             try:
                 nzbid = entry.get('id') if 'id' in entry else None
-                size_val = comsize_m if 'comsize_m' in locals() and comsize_m != 0 else None
-                parsed_year = parsed_comic.get('issue_year', 'Unknown') if 'parsed_comic' in locals() else 'Unknown'
-                self._store_rejected_match(entry, is_info,
-                                           "Year mismatch: found %s, expected %s" % (parsed_year, ComicYear),
-                                           comsize_m=size_val,
-                                           pubdate=pubdate if 'pubdate' in locals() else None,
-                                           nzbid=nzbid,
-                                           relevance_score=0.4)
+                entry_link, entry_id = _normalize_ddl_rejected_ids(
+                    entry,
+                    nzbid=nzbid,
+                    provider=is_info.get('nzbprov', 'Unknown'),
+                )
+                parsed_year = parsed_comic.get('issue_year', 'Unknown') if parsed_comic else 'Unknown'
+                logger.fdebug(
+                    '[REJECTED-MATCHES] Year mismatch (found %s, expected %s) - not offering'
+                    % (parsed_year, ComicYear)
+                )
+                _remove_rejected_match(IssueID, entry_link, entry_id)
             except Exception as e:
-                logger.fdebug('[REJECTED-MATCHES] Error storing year rejection: %s' % e)
+                logger.fdebug('[REJECTED-MATCHES] Error removing year rejection: %s' % e)
             return None
 
         annualize = False
@@ -1261,12 +1602,20 @@ class search_check(object):
                     try:
                         nzbid = entry.get('id') if 'id' in entry else None
                         size_val = comsize_m if 'comsize_m' in locals() and comsize_m != 0 else None
-                        self._store_rejected_match(entry, is_info,
-                                                   "Volume/version mismatch: found %s, expected %s" % (fndcomicversion if 'fndcomicversion' in locals() and fndcomicversion else 'Unknown', ComicVersion if ComicVersion else 'V1'),
-                                                   comsize_m=size_val,
-                                                   pubdate=pubdate if 'pubdate' in locals() else None,
-                                                   nzbid=nzbid,
-                                                   relevance_score=0.4)
+                        self._store_rejected_match(
+                            entry,
+                            is_info,
+                            "Volume/version mismatch: found %s, expected %s"
+                            % (
+                                fndcomicversion if 'fndcomicversion' in locals() and fndcomicversion else 'Unknown',
+                                ComicVersion if ComicVersion else 'V1',
+                            ),
+                            comsize_m=size_val,
+                            pubdate=pubdate if 'pubdate' in locals() else None,
+                            nzbid=nzbid,
+                            parsed_comic=parsed_comic,
+                            filecomic=filecomic if 'filecomic' in locals() else None,
+                        )
                     except Exception as e:
                         logger.fdebug('[REJECTED-MATCHES] Error storing version rejection: %s' % e)
                     return None
@@ -1356,12 +1705,15 @@ class search_check(object):
                                 (entry.get('title', 'Unknown'), IssueID, alt_match))
                     try:
                         self._store_rejected_match(
-                            entry, is_info,
+                            entry,
+                            is_info,
                             "Alternate series match (not primary match)",
                             comsize_m=comsize_m if 'comsize_m' in locals() else None,
                             pubdate=pubdate if 'pubdate' in locals() else None,
                             nzbid=nzbid,
-                            relevance_score=0.7  # High relevance - passed all checks but alternate match
+                            parsed_comic=parsed_comic,
+                            filecomic=filecomic if 'filecomic' in locals() else None,
+                            alt_match=True,
                         )
                         logger.fdebug('[REJECTED-MATCHES] Successfully stored alt_match for IssueID %s' % IssueID)
                     except Exception as e:
@@ -1591,12 +1943,15 @@ class search_check(object):
                                         (entry.get('title', 'Unknown'), IssueID, alt_match))
                             try:
                                 self._store_rejected_match(
-                                    entry, is_info,
+                                    entry,
+                                    is_info,
                                     "Alternate series match (not primary match)",
                                     comsize_m=comsize_m if 'comsize_m' in locals() else None,
                                     pubdate=pubdate if 'pubdate' in locals() else None,
                                     nzbid=nzbid,
-                                    relevance_score=0.7  # High relevance - passed all checks but alternate match
+                                    parsed_comic=parsed_comic,
+                                    filecomic=filecomic if 'filecomic' in locals() else None,
+                                    alt_match=True,
                                 )
                                 logger.fdebug('[REJECTED-MATCHES] Successfully stored alt_match for IssueID %s' % IssueID)
                             except Exception as e:
@@ -1657,23 +2012,20 @@ class search_check(object):
                             
                             # Use _store_rejected_match which handles duplicates and updates automatically
                             self._store_rejected_match(
-                                entry, 
-                                is_info, 
+                                entry,
+                                is_info,
                                 reason,
                                 comsize_m=comsize_m if 'comsize_m' in locals() else None,
                                 pubdate=pubdate if 'pubdate' in locals() else None,
                                 nzbid=nzbid if 'nzbid' in locals() else None,
-                                relevance_score=0.5  # Partial match - series name matched but issue didn't
+                                parsed_comic=parsed_comic if 'parsed_comic' in locals() else None,
+                                filecomic=filecomic if 'filecomic' in locals() else None,
                             )
                         except Exception as e:
                             logger.fdebug('[REJECTED-MATCHES] Error storing rejected match: %s' % e)
         return None
 
     def checker(self, entries, is_info=None):
-        # Add all entries to rejected matches first (before processing)
-        if entries and is_info:
-            self._add_all_entries_to_rejected_matches(entries, is_info)
-        
         mylar.COMICINFO = []
         hold_the_matches = []
 
@@ -1683,6 +2035,9 @@ class search_check(object):
             if maybe_value is not None:
                 mylar.COMICINFO.append(maybe_value)
                 hold_the_matches.append(maybe_value)
+
+        if is_info and 'IssueID' in is_info:
+            _prune_unprocessed_rejected_matches(is_info['IssueID'])
 
         #logger.fdebug('returning hold_the_matches: %s' % (hold_the_matches,))
         return hold_the_matches
