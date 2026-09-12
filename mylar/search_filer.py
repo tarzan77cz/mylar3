@@ -211,6 +211,153 @@ def _parsed_year_empty(parsed_year):
     return year_str in ('', 'None', 'Unknown')
 
 
+def _extract_rejected_year(entry=None, parsed_comic=None, title=None):
+    """Extract a publication year from parsed data, entry fields, or title text."""
+    if parsed_comic and parsed_comic.get('issue_year') is not None:
+        year = parsed_comic.get('issue_year')
+        if not _parsed_year_empty(year):
+            return str(year).strip()
+
+    if isinstance(entry, dict) and entry.get('year') is not None:
+        year = entry.get('year')
+        if not _parsed_year_empty(year):
+            return str(year).strip()
+
+    if title is None and isinstance(entry, dict):
+        title = entry.get('title', '') or entry.get('nzbtitle', '') or entry.get('ComicTitle', '')
+
+    if not title:
+        return None
+
+    title_str = str(title)
+    range_match = re.search(
+        r'\(\s*((?:19|20)\d{2})\s*[-–—]\s*((?:19|20)\d{2})\s*\)',
+        title_str,
+    )
+    if range_match:
+        return '%s-%s' % (range_match.group(1), range_match.group(2))
+
+    paren_match = re.search(r'\(\s*((?:19|20)\d{2})\s*\)', title_str)
+    if paren_match:
+        return paren_match.group(1)
+
+    years = re.findall(r'(?:19|20)\d{2}', title_str)
+    if years:
+        return years[-1]
+
+    return None
+
+
+def _extract_rejected_issue_number(entry=None, parsed_comic=None, filecomic=None, title=None):
+    """Extract an issue number from parsed data or title text."""
+    if filecomic and filecomic.get('justthedigits') is not None:
+        return filecomic['justthedigits']
+    if parsed_comic and parsed_comic.get('issue_number') is not None:
+        return parsed_comic['issue_number']
+
+    if title is None and isinstance(entry, dict):
+        title = entry.get('title', '') or entry.get('nzbtitle', '') or entry.get('ComicTitle', '')
+
+    if not title:
+        return None
+
+    title_str = str(title)
+
+    hash_match = re.search(r'#\s*(\d+(?:\.\d+)?)', title_str, re.I)
+    if hash_match:
+        return hash_match.group(1)
+
+    cover_match = re.search(r'\bF(\d+(?:\.\d+)?)\b', title_str, re.I)
+    if cover_match:
+        return cover_match.group(1)
+
+    pre_year_match = re.search(r'\b(\d{1,4}(?:\.\d+)?)\s*\(\s*(?:19|20)\d{2}', title_str)
+    if pre_year_match:
+        return pre_year_match.group(1)
+
+    label_match = re.search(r'(?:no\.?|issue)\s*(\d+(?:\.\d+)?)\b', title_str, re.I)
+    if label_match:
+        return label_match.group(1)
+
+    return None
+
+
+def _issue_numbers_compatible(expected, found):
+    """Return True when issue numbers match or cannot be determined."""
+    if expected is None or found is None or str(found).strip() == '':
+        return True
+    try:
+        expected_int = helpers.issue_number_parser(expected).asInt
+        found_int = helpers.issue_number_parser(found).asInt
+        return expected_int == found_int
+    except Exception:
+        return str(expected).strip().lower() == str(found).strip().lower()
+
+
+def _watch_context_from_is_info(is_info):
+    """Build a minimal watch context dict for rejected-match filtering."""
+    if not is_info:
+        return None
+    ctx = {}
+    for key in ('ComicYear', 'IssueNumber', 'UseFuzzy', 'IssDateFix', 'SeriesYear'):
+        if key in is_info:
+            ctx[key] = is_info[key]
+    return ctx if ctx else None
+
+
+def _should_offer_rejected_match(is_info, entry, parsed_comic=None, filecomic=None):
+    """Return True when a rejected match is relevant enough to show the user."""
+    if not is_info:
+        return True
+
+    extracted_year = _extract_rejected_year(entry, parsed_comic=parsed_comic)
+    if not _parsed_year_empty(extracted_year):
+        year_text = str(extracted_year)
+        if re.search(r'[-–—]', year_text):
+            if not _pack_year_compatible(year_text, is_info):
+                return False
+        elif not _single_year_compatible(extracted_year, is_info):
+            return False
+
+    expected_issue = is_info['IssueNumber'] if 'IssueNumber' in is_info else None
+    found_issue = _extract_rejected_issue_number(
+        entry,
+        parsed_comic=parsed_comic,
+        filecomic=filecomic,
+    )
+    if not _issue_numbers_compatible(expected_issue, found_issue):
+        return False
+
+    return True
+
+
+def _load_watch_context_for_issue(IssueID):
+    """Load comic/issue metadata needed to filter rejected matches for an issue."""
+    try:
+        from mylar import db
+
+        myDB = db.DBConnection()
+        row = myDB.selectone(
+            "SELECT i.Issue_Number, c.ComicYear, c.SeriesYear, c.UseFuzzy, c.IssDateFix "
+            "FROM issues i LEFT JOIN comics c ON c.ComicID=i.ComicID WHERE i.IssueID=?",
+            [IssueID],
+        ).fetchone()
+        if row:
+            return {
+                'ComicYear': row['ComicYear'],
+                'IssueNumber': row['Issue_Number'],
+                'UseFuzzy': row['UseFuzzy'],
+                'IssDateFix': row['IssDateFix'],
+                'SeriesYear': row['SeriesYear'],
+            }
+    except Exception as e:
+        logger.fdebug(
+            '[REJECTED-MATCHES] Unable to load watch context for IssueID %s: %s'
+            % (IssueID, e)
+        )
+    return None
+
+
 def _single_year_compatible(parsed_year, is_info, bypass_volume_year=False, comvers_chk=None):
     """Return True when parsed year is absent or compatible with the watched comic."""
     if _parsed_year_empty(parsed_year):
@@ -348,6 +495,16 @@ def _compute_rejected_relevance(
     if filecomic and filecomic.get('justthedigits') is not None:
         candidate_issue = filecomic['justthedigits']
 
+    if _parsed_year_empty(candidate_year):
+        candidate_year = _extract_rejected_year(entry, parsed_comic=parsed_comic, title=title)
+    if candidate_issue is None:
+        candidate_issue = _extract_rejected_issue_number(
+            entry,
+            parsed_comic=parsed_comic,
+            filecomic=filecomic,
+            title=title,
+        )
+
     norm_expected = _normalize_series_name(comic_name)
     norm_candidate = _normalize_series_name(candidate_series)
     norm_title = _normalize_series_name(title)
@@ -446,7 +603,7 @@ def _prune_unprocessed_rejected_matches(IssueID):
         del mylar.REJECTED_MATCHES[IssueID]
 
 
-def _filter_offerable_rejected_matches(matches):
+def _filter_offerable_rejected_matches(matches, watch_context=None):
     """Return rejected matches that should be shown to the user."""
     offerable = []
     for match in matches:
@@ -456,6 +613,13 @@ def _filter_offerable_rejected_matches(matches):
             continue
         if 'year mismatch' in reason_lower or 'pack year mismatch' in reason_lower:
             continue
+
+        ctx = match.get('watch_context') or watch_context
+        if ctx:
+            entry = match.get('entry', match)
+            if not _should_offer_rejected_match(ctx, entry):
+                continue
+
         relevance = match.get('relevance_score', 0.0)
         if relevance < OFFERABLE_MIN_RELEVANCE and not match.get('verified_data'):
             continue
@@ -467,7 +631,13 @@ def count_offerable_rejected_matches(IssueID):
     """Count rejected matches that would be shown in the Upcoming dialog."""
     if IssueID not in mylar.REJECTED_MATCHES:
         return 0
-    return len(_filter_offerable_rejected_matches(mylar.REJECTED_MATCHES[IssueID]))
+    watch_context = _load_watch_context_for_issue(IssueID)
+    return len(
+        _filter_offerable_rejected_matches(
+            mylar.REJECTED_MATCHES[IssueID],
+            watch_context=watch_context,
+        )
+    )
 
 
 def _add_or_update_rejected_match(IssueID, link, nzbid, match_data, update_only=False):
@@ -530,11 +700,14 @@ class search_check(object):
             provider = is_info.get('nzbprov', 'Unknown')
             entry_link, entry_id = _normalize_ddl_rejected_ids(entry, nzbid=nzbid, provider=provider)
 
-            if parsed_comic is not None:
-                parsed_year = parsed_comic.get('issue_year')
-                if parsed_year is not None and not _single_year_compatible(parsed_year, is_info):
-                    _remove_rejected_match(IssueID, entry_link, entry_id)
-                    return
+            if not _should_offer_rejected_match(
+                is_info,
+                entry,
+                parsed_comic=parsed_comic,
+                filecomic=filecomic,
+            ):
+                _remove_rejected_match(IssueID, entry_link, entry_id)
+                return
 
             relevance_score = _compute_rejected_relevance(
                 is_info,
@@ -567,6 +740,7 @@ class search_check(object):
                 "relevance_score": relevance_score,
                 "verified_data": verified_data,
                 "initial_added": False,
+                "watch_context": _watch_context_from_is_info(is_info),
             }
 
             _add_or_update_rejected_match(IssueID, entry_link, entry_id, rejected_match, update_only=False)

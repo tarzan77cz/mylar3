@@ -3880,8 +3880,10 @@ class WebInterface(object):
         """
         try:
             if IssueID in mylar.REJECTED_MATCHES:
+                watch_context = search_filer._load_watch_context_for_issue(IssueID)
                 matches = search_filer._filter_offerable_rejected_matches(
-                    mylar.REJECTED_MATCHES[IssueID]
+                    mylar.REJECTED_MATCHES[IssueID],
+                    watch_context=watch_context,
                 )
                 # Convert to JSON-serializable format
                 result = []
@@ -3923,7 +3925,11 @@ class WebInterface(object):
                 return json.dumps({"status": "error", "message": "No rejected matches found for this issue"})
             
             stored_matches = mylar.REJECTED_MATCHES[IssueID]
-            matches = search_filer._filter_offerable_rejected_matches(stored_matches)
+            watch_context = search_filer._load_watch_context_for_issue(IssueID)
+            matches = search_filer._filter_offerable_rejected_matches(
+                stored_matches,
+                watch_context=watch_context,
+            )
             match = None
             match_index_to_remove = None
 

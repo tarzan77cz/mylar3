@@ -1352,6 +1352,7 @@ def verification(verified_matches, is_info):
                         "relevance_score": relevance_score,
                         "verified_data": verified,
                         "initial_added": False,
+                        "watch_context": search_filer._watch_context_from_is_info(is_info),
                     }
 
                     search_filer._add_or_update_rejected_match(IssueID, link, nzbid, rejected_match, update_only=False)
