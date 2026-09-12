@@ -1,0 +1,56 @@
+---
+description: How to deploy code changes to the running Mylar Docker container
+alwaysApply: true
+---
+
+# Mylar deployment (Docker)
+
+When deploying code changes in this project, **prefer copying files into the running container and restarting it**. Rebuilding the image is a last resort only.
+
+## Primary workflow (default)
+
+1. Identify changed files under the repo root (e.g. `mylar/search_filer.py`, `data/interfaces/default/upcoming.html`).
+2. Copy each file into the container, preserving the same path under `/app/mylar/`:
+
+```bash
+docker cp mylar/search_filer.py mylar:/app/mylar/mylar/search_filer.py
+docker cp data/interfaces/default/upcoming.html mylar:/app/mylar/data/interfaces/default/upcoming.html
+```
+
+3. Restart the container:
+
+```bash
+docker restart mylar
+```
+
+4. Optionally verify the change is present:
+
+```bash
+docker exec mylar grep -c "expected_marker" /app/mylar/mylar/search_filer.py
+docker logs mylar --tail 20
+```
+
+## Container details
+
+- **Container name:** `mylar`
+- **Image:** `mylar3:local` (code is baked in; not bind-mounted from workspace)
+- **App root in container:** `/app/mylar/`
+- **Python package path:** `/app/mylar/mylar/`
+- **UI templates:** `/app/mylar/data/interfaces/...`
+
+Workspace path on host: `/data/Tarzan/Cursor/Mylar`
+
+## Last resort: rebuild image
+
+Use `docker build -t mylar3:local /data/Tarzan/Cursor/Mylar` only when:
+
+- `docker cp` is insufficient (e.g. dependency/requirements change, Dockerfile change)
+- the container is broken and cannot be restored by copy + restart
+- the user explicitly asks for a full rebuild
+
+After rebuild, recreate/restart `mylar` without removing the container unnecessarily. Prefer `docker restart mylar` if the container already uses the updated image layers.
+
+## Notes
+
+- `REJECTED_MATCHES` and other in-memory state are cleared on restart — expected.
+- Config/data live in `/config` (host: `/home/docker/comics/mylar/config`), not in the image.
