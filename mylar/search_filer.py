@@ -294,6 +294,59 @@ def _issue_numbers_compatible(expected, found):
         return str(expected).strip().lower() == str(found).strip().lower()
 
 
+def _parsed_booktype_value(parsed_comic=None, entry=None):
+    """Return a normalized booktype string from parsed/entry data."""
+    if parsed_comic and parsed_comic.get('booktype'):
+        return parsed_comic['booktype']
+    if isinstance(entry, dict) and entry.get('gc_booktype'):
+        return entry['gc_booktype']
+    return None
+
+
+def _is_print_tpb_cross_mismatch(is_info, parsed_comic=None, entry=None):
+    """Return True for Print vs TPB/GN/HC style cross-edition mismatches."""
+    if not is_info or is_info.get('ignore_booktype'):
+        return False
+
+    expected = is_info.get('booktype')
+    found_bt = _parsed_booktype_value(parsed_comic=parsed_comic, entry=entry)
+    if not expected or not found_bt or expected == found_bt:
+        return False
+
+    print_like = ('Print', 'None', 'Digital', 'issue')
+    collection_like = ('TPB', 'GN', 'HC', 'One-Shot', 'TPB/GN/HC/One-Shot')
+
+    if expected in print_like and found_bt in collection_like:
+        return True
+    if expected in collection_like and found_bt == 'issue':
+        return True
+    return False
+
+
+def _booktype_cross_issue_compatible(is_info, parsed_comic=None, filecomic=None, entry=None):
+    """Relax issue-number checks for Print vs TPB/GN/HC rejected offers."""
+    expected_issue = is_info['IssueNumber'] if is_info and 'IssueNumber' in is_info else None
+    found_issue = _extract_rejected_issue_number(
+        entry,
+        parsed_comic=parsed_comic,
+        filecomic=filecomic,
+    )
+    if found_issue is not None:
+        return _issue_numbers_compatible(expected_issue, found_issue)
+
+    if expected_issue is None:
+        return True
+
+    try:
+        if helpers.issue_number_parser(expected_issue).asInt == helpers.issue_number_to_int(1, None):
+            return True
+    except Exception:
+        if str(expected_issue).strip() in ('1', '1.0'):
+            return True
+
+    return False
+
+
 def _watch_context_from_is_info(is_info):
     """Build a minimal watch context dict for rejected-match filtering."""
     if not is_info:
@@ -318,6 +371,14 @@ def _should_offer_rejected_match(is_info, entry, parsed_comic=None, filecomic=No
                 return False
         elif not _single_year_compatible(extracted_year, is_info):
             return False
+
+    if _is_print_tpb_cross_mismatch(is_info, parsed_comic=parsed_comic, entry=entry):
+        return _booktype_cross_issue_compatible(
+            is_info,
+            parsed_comic=parsed_comic,
+            filecomic=filecomic,
+            entry=entry,
+        )
 
     expected_issue = is_info['IssueNumber'] if 'IssueNumber' in is_info else None
     found_issue = _extract_rejected_issue_number(
