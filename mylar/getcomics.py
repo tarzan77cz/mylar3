@@ -179,8 +179,11 @@ class GC(object):
                 #add it in 1st so that packs will get searched for (hopefully first)
                 self.search_format.insert(0, '%s %s' % (self.query['comicname'], self.query['year']))
 
+            manual_mode = bool(
+                is_info is not None and is_info.get('manual')
+            )
+            verified_matches = []
             for sf in self.search_format:
-                verified_matches = []
                 sf_issue = self.query['issue']
                 if is_info['chktpb'] == 1 and self.query['comicname'] == sf:
                     comicname = re.sub(r'[\&\:\?\,\/\-]', '', self.query['comicname'])
@@ -235,13 +238,23 @@ class GC(object):
 
                 result_list = list(result_generator)
 
-                match = sfs.check_for_first_result(
-                    result_list, is_info, prefer_pack=mylar.CONFIG.PACK_PRIORITY
-                )
-                if match is not None:
-                    verified_matches = [match]
-                    logger.fdebug('verified_matches: %s' % (verified_matches,))
-                    break
+                if manual_mode:
+                    matches = sfs.checker(result_list, is_info)
+                    if matches:
+                        verified_matches.extend(matches)
+                        logger.fdebug(
+                            '[DDL-MANUAL] accumulated %s match(es) from query: %s'
+                            % (len(matches), queryline)
+                        )
+                        break
+                else:
+                    match = sfs.check_for_first_result(
+                        result_list, is_info, prefer_pack=mylar.CONFIG.PACK_PRIORITY
+                    )
+                    if match is not None:
+                        verified_matches = [match]
+                        logger.fdebug('verified_matches: %s' % (verified_matches,))
+                        break
                 logger.fdebug('sleep...%s%s' % (mylar.CONFIG.DDL_QUERY_DELAY, 's'))
                 time.sleep(mylar.CONFIG.DDL_QUERY_DELAY)
 
@@ -306,6 +319,22 @@ class GC(object):
 
             return 'no results'
         else:
+            if not verified_matches:
+                return 'no results'
+            if manual_mode:
+                deduped = []
+                seen = set()
+                for match in verified_matches:
+                    key = (
+                        match.get('nzbid'),
+                        match.get('link'),
+                        match.get('nzbtitle'),
+                    )
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    deduped.append(match)
+                return deduped
             if mylar.CONFIG.PACK_PRIORITY is True:
                 #logger.fdebug('[PACK_PRIORITY:True] %s' % (sorted(verified_matches, key=itemgetter('pack'), reverse=True)))
                 return sorted(verified_matches, key=itemgetter('pack'), reverse=True)

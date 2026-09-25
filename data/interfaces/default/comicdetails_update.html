@@ -70,6 +70,23 @@
 <%def name="body()">
         <input type="hidden" id="page_name" value="series_detail" />
         <input type="hidden" id="cv_removed" value="${comic['cv_removed']}" />
+        <div id="choose_specific_download_dialog" title="Search &amp; Choose a specific download for this issue" style="display:none" class="configtable">
+            <p id="downloads_table_status">Searching providers, this can take up to a minute...</p>
+            <table id="downloads_table" style="width:100%;">
+                <thead>
+                    <tr>
+                        <th>Title</th>
+                        <th>Provider</th>
+                        <th>Size</th>
+                        <th>Kind</th>
+                        <th>Reason</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody id="downloads_table_body">
+                </tbody>
+            </table>
+        </div>
 	<div id="paddingheader">
 		<h1>
                    </br>
@@ -721,7 +738,7 @@
         });
 
         // get the click value from the last column (options) where the filelisting option is present.
-        $('table.display').on('click', 'a', function() {
+        $('table.display').on('click', 'a', function(e) {
             if (!action && this.id == 'annual_link'){
                 return;
             }
@@ -764,11 +781,9 @@
             } else if (action == 'downloadissue'){
                 downloadthisissue(issueid);
             } else if (action == 'manqueueit' || action == 'amanqueueit'){
-                if (action == 'amanqueueit'){
-                    add_wanted(issueid, comicid, issuenumber, 'want_ann', true);
-                } else {
-                    add_wanted(issueid, comicid, issuenumber, 'want', true);
-                }
+                e.preventDefault();
+                getAvailableDownloads(issueid);
+                return false;
             } else if (action == 'queueit' || action == 'aqueueit'){
                 if (action == 'aqueueit'){
                     add_wanted(issueid, comicid, issuenumber, 'want_ann');
@@ -1319,54 +1334,104 @@
         function getAvailableDownloads(issueid) {
                 ShowSpinner();
                 $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>Now searching...</div>");
-                $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
+                $('#ajaxMsg').addClass('success').fadeIn();
+                $('#downloads_table_status').text('Searching providers, this can take up to a minute...');
+                $('#downloads_table_body').empty();
+                if ($.fn.DataTable.isDataTable('#downloads_table')) {
+                    $('#downloads_table').DataTable().destroy();
+                }
+                $("#choose_specific_download_dialog").dialog({
+                        modal: true,
+                        width: "70%",
+                        maxHeight: 500
+                });
                 $.getJSON("choose_specific_download", {issueid: issueid}, function(data) {
                         loader.remove();
                         feedback.fadeOut();
-                        search_results = data;
-                        for( var i = 0, len = data.length; i < len; i++ ) {
-                                $('#downloads_table_body').append('<tr><td id="title"><a href="javascript:void(0)" onclick="downloadSpecificRelease('+i+');">'+data[i].nzbtitle+'</a></td><td id="provider">'+data[i].provider+'</td><td id="size">'+data[i].size+'</td><td id="kind">'+data[i].kind+'</td></tr>');
+                        if (data && data.status === 'in_progress') {
+                            $('#downloads_table_status').text('Another search is already running. Try again in a moment.');
+                            return;
                         }
-                        $('#downloads_table').dataTable({
-                                "aoColumns": [
-                                        null,
-                                        null,
-                                        null,
-                                        null
-                                ],
-                                "aaSorting": [[ 1, 'desc']],
-                                "bFilter": false,
-                                "bInfo": false,
-                                "bPaginate": false,
-                                "bDestroy": true
-                        });
-                $("#choose_specific_download_dialog").dialog({
-                        modal: true,
-                        width: "60%",
-                        maxHeight: 500
-                });
-                return false;
+                        search_results = $.isArray(data) ? data : [];
+                        $('#downloads_table_body').empty();
+                        if (search_results.length > 0) {
+                            $('#downloads_table_status').text(search_results.length + ' result(s) found. Click Download to snatch.');
+                            for (var i = 0, len = search_results.length; i < len; i++) {
+                                var title = $('<div/>').text(search_results[i].nzbtitle || 'Unknown').html();
+                                var provider = $('<div/>').text(search_results[i].provider || 'Unknown').html();
+                                var size = $('<div/>').text(search_results[i].size || 'Unknown').html();
+                                var kind = $('<div/>').text(search_results[i].kind || 'Unknown').html();
+                                var reason = $('<div/>').text(search_results[i].reason || '').html();
+                                var reasonCell = search_results[i].is_rejected ? reason : '';
+                                var actionCell = '<a href="javascript:void(0)" onclick="downloadSpecificRelease(' + i + ');">Download</a>';
+                                $('#downloads_table_body').append(
+                                    '<tr>' +
+                                    '<td>' + title + '</td>' +
+                                    '<td>' + provider + '</td>' +
+                                    '<td>' + size + '</td>' +
+                                    '<td>' + kind + '</td>' +
+                                    '<td>' + reasonCell + '</td>' +
+                                    '<td>' + actionCell + '</td>' +
+                                    '</tr>'
+                                );
+                            }
+                        } else {
+                            $('#downloads_table_status').text('No results returned.');
+                            $('#downloads_table_body').append('<tr><td style="text-align:center;" colspan="6">No results returned</td></tr>');
+                        }
+                }).fail(function(jqXHR, textStatus) {
+                        loader.remove();
+                        feedback.fadeOut();
+                        $('#downloads_table_status').text('Error loading search results: ' + textStatus);
+                        alert('Error loading search results: ' + textStatus);
                 });
         }
 
         function downloadSpecificRelease(i){
-                name = search_results[i].nzbtitle;
-                prov = search_results[i].tmpprov;
-                nzbid = search_results[i].nzbid;
+                var selected = search_results[i];
+                var name = selected.nzbtitle;
                 ShowSpinner();
-                $.get("download_specific_release", 
+                if (selected.is_rejected) {
+                    $.getJSON("select_rejected_match", {
+                        IssueID: selected.issueid,
+                        nzbid: selected.rejected_nzbid || selected.nzbid || '',
+                        link: selected.rejected_link || ''
+                    }, function(data) {
+                        loader.remove();
+                        feedback.fadeOut();
+                        if (data.status === 'success') {
+                            $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>Successfully queued " + name + "</div>");
+                            $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
+                            $("#choose_specific_download_dialog").dialog("close");
+                            reload_tables();
+                        } else {
+                            alert(data.message || 'Unable to queue rejected match for download');
+                        }
+                    }).fail(function(jqXHR, textStatus) {
+                        loader.remove();
+                        feedback.fadeOut();
+                        alert('Error queuing rejected match: ' + textStatus);
+                    });
+                    return false;
+                }
+                var prov = selected.tmpprov;
+                var nzbid = selected.nzbid;
+                $.get("download_specific_release",
                        { nzbid: nzbid, provider: prov, name: name },
                        function(data) {
+                           loader.remove();
+                           feedback.fadeOut();
                            if (data.error != undefined) {
                                alert(data.error);
                                return;
                            }
                            $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>Successfully downloaded "+name+"</div>");
                            if ( data.indexOf("success") > -1){
-                               $("#choose_specific_download_dialog").dialog.close();
+                               $("#choose_specific_download_dialog").dialog("close");
                            }
-                       $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
-                       return false;
+                           $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
+                           reload_tables();
+                           return false;
                });
         }
 

@@ -10401,46 +10401,132 @@ class WebInterface(object):
             issueid = kwargs['issueid']
             logger.info('checking for: %s' % issueid)
             results = search.searchforissue(issueid, manual=True)
+            if isinstance(results, dict) and results.get('status') == 'IN PROGRESS':
+                cherrypy.response.headers['Content-type'] = 'application/json'
+                return json.dumps({'status': 'in_progress', 'matches': []})
         else:
             results = self.queueissue(kwargs['mode'], ComicName=kwargs['comicname'], ComicID=kwargs['comicid'], IssueID=kwargs['issueid'], ComicIssue=kwargs['issue'], ComicVersion=comicvolume, Publisher=kwargs['publisher'], pullinfo=kwargs['pullinfo'], pullweek=kwargs['pullweek'], pullyear=kwargs['pullyear'], manual=True)
 
         myDB = db.DBConnection()
         r = []
+        seen_result_keys = set()
+        issueid = kwargs.get('issueid')
+        if issueid in ('None', None) and mylar.COMICINFO:
+            issueid = mylar.COMICINFO[0].get('IssueID')
 
-        for x in mylar.COMICINFO: #results:
-            ctrlval = {'provider':      x['provider'],
-                       'id':            x['nzbid']}
-            newval = {'kind':           x['kind'],
-                      'sarc':           x['SARC'],
-                      'issuearcid':     x['IssueArcID'],
-                      'comicname':      x['ComicName'],
-                      'comicid':        x['ComicID'],
-                      'issueid':        x['IssueID'],
-                      'issuenumber':    x['IssueNumber'],
-                      'volume':         x['ComicVolume'],
-                      'oneoff':         x['oneoff'],
-                      'fullprov':       x['nzbprov'],
-                      'modcomicname':   x['modcomicname'],
-                      'name':           x['nzbtitle'],
-                      'link':           x['link'],
-                      'size':           x['size'],
-                      'pack_numbers':   x['pack_numbers'],
-                      'pack_issuelist': x['pack_issuelist'],
-                      'comicyear':      x['comyear'],
-                      'issuedate':      x['IssueDate'],
-                      'tmpprov':        x['tmpprov'],
-                      'pack':           x['pack']}
+        def _format_size_value(size_val):
+            if size_val is None or size_val == 'Unknown':
+                return 'Unknown'
+            size_text = str(size_val)
+            if size_text.endswith('B') and len(size_text) > 1:
+                return size_text[:-1]
+            return size_text
 
-            myDB.upsert('manualresults', newval, ctrlval)
+        def _append_result_row(row, persist=True):
+            dedupe_key = (
+                row.get('nzbid'),
+                row.get('tmpprov'),
+                row.get('nzbtitle'),
+                row.get('is_rejected', False),
+            )
+            if dedupe_key in seen_result_keys:
+                return
+            seen_result_keys.add(dedupe_key)
+            if persist and not row.get('is_rejected'):
+                try:
+                    ctrlval = {'provider': row['provider'], 'id': row['nzbid']}
+                    newval = {
+                        'kind': row.get('kind'),
+                        'sarc': row.get('sarc'),
+                        'issuearcid': row.get('issuearcid'),
+                        'comicname': row.get('comicname'),
+                        'comicid': row.get('comicid'),
+                        'issueid': row.get('issueid'),
+                        'issuenumber': row.get('issuenumber'),
+                        'volume': row.get('volume'),
+                        'oneoff': row.get('oneoff'),
+                        'fullprov': row.get('fullprov'),
+                        'modcomicname': row.get('modcomicname'),
+                        'name': row.get('nzbtitle'),
+                        'link': row.get('link'),
+                        'size': row.get('raw_size'),
+                        'pack_numbers': row.get('pack_numbers'),
+                        'pack_issuelist': row.get('pack_issuelist'),
+                        'comicyear': row.get('comicyear'),
+                        'issuedate': row.get('issuedate'),
+                        'tmpprov': row.get('tmpprov'),
+                        'pack': row.get('pack'),
+                    }
+                    myDB.upsert('manualresults', newval, ctrlval)
+                except Exception as e:
+                    logger.fdebug('[CHOOSE-SPECIFIC-DOWNLOAD] Unable to persist match: %s' % e)
+            r.append({
+                'kind': row.get('kind', 'Unknown'),
+                'provider': row.get('provider', 'Unknown'),
+                'nzbtitle': row.get('nzbtitle', 'Unknown'),
+                'nzbid': row.get('nzbid'),
+                'size': row.get('size', 'Unknown'),
+                'tmpprov': row.get('tmpprov', 'Unknown'),
+                'is_rejected': bool(row.get('is_rejected')),
+                'reason': row.get('reason', ''),
+                'rejected_link': row.get('rejected_link', ''),
+                'rejected_nzbid': row.get('rejected_nzbid'),
+                'issueid': row.get('issueid'),
+            })
 
-            r.append({'kind':         x['kind'],
-                      'provider':     x['provider'],
-                      'nzbtitle':     x['nzbtitle'],
-                      'nzbid':        x['nzbid'],
-                      'size':         x['size'][:-1],
-                      'tmpprov':      x['tmpprov']})
+        for x in mylar.COMICINFO or []:
+            if not isinstance(x, dict):
+                continue
+            _append_result_row({
+                'kind': x['kind'],
+                'provider': x['provider'],
+                'nzbtitle': x['nzbtitle'],
+                'nzbid': x['nzbid'],
+                'size': _format_size_value(x['size']),
+                'raw_size': x['size'],
+                'tmpprov': x['tmpprov'],
+                'sarc': x['SARC'],
+                'issuearcid': x['IssueArcID'],
+                'comicname': x['ComicName'],
+                'comicid': x['ComicID'],
+                'issueid': x['IssueID'],
+                'issuenumber': x['IssueNumber'],
+                'volume': x['ComicVolume'],
+                'oneoff': x['oneoff'],
+                'fullprov': x['nzbprov'],
+                'modcomicname': x['modcomicname'],
+                'link': x['link'],
+                'pack_numbers': x['pack_numbers'],
+                'pack_issuelist': x['pack_issuelist'],
+                'comicyear': x['comyear'],
+                'issuedate': x['IssueDate'],
+                'pack': x['pack'],
+                'is_rejected': False,
+            })
 
-        #logger.fdebug('results returned: %s' % r)
+        if issueid and issueid in mylar.REJECTED_MATCHES:
+            watch_context = search_filer._load_watch_context_for_issue(issueid)
+            rejected_matches = search_filer._filter_offerable_rejected_matches(
+                mylar.REJECTED_MATCHES[issueid],
+                watch_context=watch_context,
+            )
+            rejected_matches = self._sort_rejected_matches(rejected_matches)
+            for match in rejected_matches:
+                provider = match.get('provider', 'Unknown')
+                _append_result_row({
+                    'kind': match.get('kind', 'Unknown'),
+                    'provider': provider,
+                    'nzbtitle': match.get('title', 'Unknown'),
+                    'nzbid': match.get('nzbid'),
+                    'size': _format_size_value(match.get('size', 'Unknown')),
+                    'tmpprov': provider,
+                    'issueid': issueid,
+                    'is_rejected': True,
+                    'reason': match.get('reason', ''),
+                    'rejected_link': match.get('link', ''),
+                    'rejected_nzbid': match.get('nzbid'),
+                }, persist=False)
+
         cherrypy.response.headers['Content-type'] = 'application/json'
         return json.dumps(r)
 

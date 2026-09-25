@@ -2261,15 +2261,29 @@ class search_check(object):
         return None
 
     def checker(self, entries, is_info=None):
-        mylar.COMICINFO = []
+        preserve_existing = bool(
+            is_info and is_info.get('manual')
+        )
+        if not preserve_existing:
+            mylar.COMICINFO = []
         hold_the_matches = []
 
         #logger.fdebug('entries: %s' % (entries,))
         for entry in entries:
             maybe_value = self._process_entry(entry, is_info)
             if maybe_value is not None:
-                mylar.COMICINFO.append(maybe_value)
-                hold_the_matches.append(maybe_value)
+                match_key = (
+                    maybe_value.get('nzbid'),
+                    maybe_value.get('link'),
+                    maybe_value.get('nzbtitle'),
+                )
+                existing_keys = {
+                    (x.get('nzbid'), x.get('link'), x.get('nzbtitle'))
+                    for x in mylar.COMICINFO
+                }
+                if match_key not in existing_keys:
+                    mylar.COMICINFO.append(maybe_value)
+                    hold_the_matches.append(maybe_value)
 
         if is_info and 'IssueID' in is_info:
             _prune_unprocessed_rejected_matches(is_info['IssueID'])

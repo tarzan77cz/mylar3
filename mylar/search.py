@@ -1287,8 +1287,16 @@ def NZB_SEARCH(
                 logger.fdebug('setting lastrun for %s to %s' % (is_info['foundc']['provider'], time.ctime(is_info['foundc']['lastrun'])))
                 last_run_check(write={str(nzbprov): {'active': provider_stat['active'], 'lastrun': is_info['foundc']['lastrun'], 'type': provider_stat['type'], 'hits': provider_stat['hits']+1, 'id': provider_stat['id']}})
 
-        if verified_matches != "no results":
+        if verified_matches != "no results" and not is_info.get('manual'):
             verification(verified_matches, is_info)
+        elif (
+            is_info.get('manual')
+            and verified_matches not in (None, 'no results')
+            and len(verified_matches) > 0
+        ):
+            # Manual picker needs COMICINFO filled, but must not auto-download.
+            # Mark found so search_init stops walking remaining providers.
+            is_info['foundc']['status'] = True
 
         logger.fdebug(
             'booktype:%s / chktpb: %s / findloop: %s' % (is_info['booktype'], is_info['chktpb'], findloop)
