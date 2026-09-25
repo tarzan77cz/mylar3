@@ -141,6 +141,12 @@ class PostProcessor(object):
             nzbname=self.nzb_name,
         )
 
+    def _release_unfinished_single_ddl(self, reason):
+        """A single DDL issue that did not get filed must not stay Snatched+Completed."""
+        if not (self.ddl is True and self.issueid is not None):
+            return
+        helpers.release_unfinished_single_ddl(self.download_info, self.nzb_folder, reason)
+
     def _log(self, message, level=logger): #.message):  #level=logger.MESSAGE):
         """
         A wrapper for the internal logger which also keeps track of messages and saves them to a string for sabnzbd post-processing logging functions.
@@ -445,6 +451,7 @@ class PostProcessor(object):
             logger.error('%s Post-processing failed with an unhandled error: %s' % (self.module, e))
             logger.error('%s Post-Processing ABORTED.' % self.module)
             self._log('Post-processing failed: %s' % e)
+            self._release_unfinished_single_ddl('post-processing error')
             self.valreturn.append({"self.log": self.log,
                                    "mode": 'stop'})
             if hasattr(self, 'queue') and self.queue is not None:
@@ -2494,6 +2501,7 @@ class PostProcessor(object):
                     else:
                         # DDL pack downloaded but nothing matched watchlist issues
                         self._revert_unmatched_pack_snatches(reason='matched 0 files')
+                        self._release_unfinished_single_ddl('matched 0 files')
                     if mylar.APILOCK is True:
                         mylar.APILOCK = False
                     self.valreturn.append({"self.log": self.log,
@@ -2640,6 +2648,7 @@ class PostProcessor(object):
                         self._revert_unmatched_pack_snatches(
                             reason='partial match leftovers after %s successful' % i
                         )
+                        self._release_unfinished_single_ddl('post-processing failed')
                         logger.info('%s post-processing of pack completed for %s issues [FAILED: %s]' % (module, i, self.failed_files))
                         global_line = 'Successfully post-processing of pack completed for %s issues [FAILED: %s]' % (i, self.failed_files)
                     else:

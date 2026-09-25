@@ -3074,6 +3074,194 @@ def latestissue_update():
                 logger.fdebug('exception encountered: %s' % e)
                 continue
 
+def queue_ddl_postprocess(ddl_row):
+    """Put a finished DDL file on the post-processing queue.
+
+    ddl_row is a sqlite3.Row or a dict with id, filename, issueid and comicid.
+    Returns True when an item was queued.
+    """
+    if not mylar.CONFIG.POST_PROCESSING or not mylar.CONFIG.DDL_LOCATION:
+        return False
+    try:
+        filename = ddl_row['filename']
+    except (KeyError, TypeError):
+        filename = None
+    if not filename:
+        return False
+    filepath = os.path.join(mylar.CONFIG.DDL_LOCATION, filename)
+    if not os.path.isfile(filepath):
+        return False
+    try:
+        ddl_id = ddl_row['id']
+    except (KeyError, TypeError):
+        return False
+    try:
+        issueid = ddl_row['issueid']
+    except (KeyError, TypeError):
+        issueid = None
+    try:
+        comicid = ddl_row['comicid']
+    except (KeyError, TypeError):
+        comicid = None
+    if ddl_id in mylar.PP_DDL_IDS or ddl_id in mylar.PP_CURRENT_DDL_IDS:
+        return False
+    ext = os.path.splitext(filename)[1].lower()
+    single_file = ext in ('.cbz', '.cbr', '.cb7', '.pdf') and issueid
+    mylar.PP_QUEUE.put({
+        'nzb_name': filename,
+        'nzb_folder': filepath,
+        'failed': False,
+        'issueid': issueid if single_file else None,
+        'comicid': comicid,
+        'apicall': True,
+        'ddl': True,
+        'download_info': {'provider': 'DDL', 'id': ddl_id},
+    })
+    mylar.PP_DDL_IDS.add(ddl_id)
+    logger.info('[DDL] Queued post-processing for %s' % filename)
+    return True
+
+
+def release_unfinished_single_ddl(download_info, nzb_folder, reason):
+    """Keep a single-issue DDL grab from sitting at Snatched after PP gives up.
+
+    A short or unreadable file goes back to Queued so resume can finish it.
+    A readable file stays Completed; the watchdog will try post-processing again.
+    """
+    if not isinstance(download_info, dict):
+        return
+    ddl_id = download_info.get('id')
+    if not ddl_id or not mylar.CONFIG.DDL_LOCATION:
+        return
+    myDB = db.DBConnection()
+    row = myDB.selectone(
+        "SELECT d.filename, d.issueid, d.remote_filesize, i.Status AS issue_status "
+        "FROM ddl_info d LEFT JOIN issues i ON i.IssueID = d.issueid WHERE d.ID=?",
+        [ddl_id],
+    ).fetchone()
+    if row is None:
+        return
+    try:
+        issue_status = row['issue_status']
+    except (KeyError, TypeError):
+        issue_status = None
+    if issue_status != 'Snatched':
+        return
+    try:
+        filename = row['filename']
+    except (KeyError, TypeError):
+        filename = None
+    filepath = os.path.join(mylar.CONFIG.DDL_LOCATION, filename) if filename else nzb_folder
+    if not filepath or not os.path.isfile(filepath):
+        logger.warn(
+            '[DDL] Post-processing left issue %s Snatched and the download file is gone (%s).'
+            % (row['issueid'], reason)
+        )
+        return
+    try:
+        expected = row['remote_filesize']
+    except (KeyError, TypeError):
+        expected = None
+    archive_check = validate_downloaded_archive(filepath, expected, size_tolerance=1024)
+    if archive_check['ok']:
+        logger.warn(
+            '[DDL] Post-processing did not file %s (%s). The archive looks complete; '
+            'it stays Snatched until the watchdog retries post-processing.'
+            % (filename, reason)
+        )
+        myDB.upsert('ddl_info', {
+            'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
+        }, {'id': ddl_id})
+        return
+    if archive_check['discard'] and os.path.isfile(filepath):
+        try:
+            os.remove(filepath)
+            logger.warn('[DDL] Removed unreadable archive %s (%s).' % (filename, archive_check['reason']))
+        except OSError as e:
+            logger.warn('[DDL] Could not remove unreadable archive %s: %s' % (filepath, e))
+    logger.warn(
+        '[DDL] Post-processing stopped for %s (%s: %s). Returning the download to the queue.'
+        % (filename, reason, archive_check['reason'])
+    )
+    myDB.upsert('ddl_info', {
+        'status': 'Queued',
+        'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
+    }, {'id': ddl_id})
+    try:
+        if ddl_id in mylar.DDL_QUEUED:
+            mylar.DDL_QUEUED.remove(ddl_id)
+    except (ValueError, KeyError):
+        pass
+
+
+def heal_completed_but_snatched():
+    """Requeue DDL rows that are Completed while the issue is still Snatched.
+
+    The file is still in the download folder: resume it when the archive is
+    short or unreadable, otherwise send the finished file to post-processing.
+    """
+    if not mylar.CONFIG.DDL_LOCATION:
+        return
+    myDB = db.DBConnection()
+    rows = myDB.select(
+        "SELECT d.ID AS id, d.series, d.filename, d.issueid, d.comicid, d.remote_filesize, d.updated_date "
+        "FROM ddl_info d INNER JOIN issues i ON i.IssueID = d.issueid "
+        "WHERE d.status = 'Completed' AND i.Status = 'Snatched' "
+        "AND d.filename IS NOT NULL AND trim(d.filename) != ''"
+    )
+    if not rows:
+        return
+    now = datetime.datetime.now()
+    for row in rows:
+        ddl_id = row['id']
+        if ddl_id in mylar.PP_DDL_IDS or ddl_id in mylar.PP_CURRENT_DDL_IDS:
+            continue
+        try:
+            updated = datetime.datetime.strptime(row['updated_date'], '%Y-%m-%d %H:%M')
+        except (TypeError, ValueError):
+            updated = None
+        if updated is not None and (now - updated) < timedelta(minutes=10):
+            continue
+        filepath = os.path.join(mylar.CONFIG.DDL_LOCATION, row['filename'])
+        if not os.path.isfile(filepath):
+            continue
+        archive_check = validate_downloaded_archive(
+            filepath, row['remote_filesize'], size_tolerance=1024
+        )
+        if not archive_check['ok']:
+            if archive_check['discard']:
+                try:
+                    os.remove(filepath)
+                    logger.warn(
+                        '[DDL-WATCHDOG] Removed unreadable archive for %s (%s).'
+                        % (row['series'], archive_check['reason'])
+                    )
+                except OSError as e:
+                    logger.warn('[DDL-WATCHDOG] Could not remove %s: %s' % (filepath, e))
+            logger.warn(
+                '[DDL-WATCHDOG] %s is Snatched with a Completed download that is not usable (%s). Requeueing.'
+                % (row['series'], archive_check['reason'])
+            )
+            myDB.upsert('ddl_info', {
+                'status': 'Queued',
+                'updated_date': now.strftime('%Y-%m-%d %H:%M'),
+            }, {'id': ddl_id})
+            try:
+                if ddl_id in mylar.DDL_QUEUED:
+                    mylar.DDL_QUEUED.remove(ddl_id)
+            except (ValueError, KeyError):
+                pass
+            continue
+        if queue_ddl_postprocess(row):
+            myDB.upsert('ddl_info', {
+                'updated_date': now.strftime('%Y-%m-%d %H:%M'),
+            }, {'id': ddl_id})
+            logger.info(
+                '[DDL-WATCHDOG] %s is still Snatched after a finished download. Sent the file to post-processing.'
+                % row['series']
+            )
+
+
 def ddl_watchdog():
     """
     Watchdog function to detect stuck DDL downloads.
@@ -3121,14 +3309,15 @@ def ddl_watchdog():
                                 current_size = os.path.getsize(filepath)
                                 
                                 # If file exists and has the expected size (or is close to it), mark as Completed
-                                if remote_filesize > 0 and abs(current_size - remote_filesize) < 1024:  # Within 1KB tolerance
+                                archive_check = validate_downloaded_archive(filepath, remote_filesize, size_tolerance=1024)
+                                if archive_check['ok']:
                                     logger.info('[DDL-WATCHDOG] File %s is already downloaded (size: %s). Marking as Completed.' % (filename, current_size))
-                                    
+
                                     ctrlval = {'id': downloading_item['id']}
                                     val = {'status': 'Completed',
                                            'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}
                                     myDB.upsert('ddl_info', val, ctrlval)
-                                    
+
                                     # Remove from DDL_QUEUED if present
                                     try:
                                         item_id = downloading_item['id']
@@ -3136,9 +3325,30 @@ def ddl_watchdog():
                                             mylar.DDL_QUEUED.remove(item_id)
                                     except (ValueError, KeyError, TypeError):
                                         pass
-                                    
+
+                                    queue_ddl_postprocess(downloading_item)
                                     items_fixed += 1
                                     continue  # Skip to next item
+                                if archive_check['discard']:
+                                    try:
+                                        os.remove(filepath)
+                                        logger.warn(
+                                            '[DDL-WATCHDOG] File %s matches the expected size but is unreadable (%s). Removed for a clean retry.'
+                                            % (filename, archive_check['reason'])
+                                        )
+                                    except OSError as e:
+                                        logger.warn('[DDL-WATCHDOG] Could not remove unreadable file %s: %s' % (filepath, e))
+                                    myDB.upsert('ddl_info', {
+                                        'status': 'Queued',
+                                        'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
+                                    }, {'id': downloading_item['id']})
+                                    try:
+                                        if downloading_item['id'] in mylar.DDL_QUEUED:
+                                            mylar.DDL_QUEUED.remove(downloading_item['id'])
+                                    except (ValueError, KeyError, TypeError):
+                                        pass
+                                    items_fixed += 1
+                                    continue
                                 
                                 # File exists but doesn't have correct size yet - check if it's actively downloading
                                 # Check file modification time - if file was modified recently (within 2 minutes), it's actively downloading
@@ -3458,6 +3668,8 @@ def ddl_watchdog():
                     logger.warn('[DDL-WATCHDOG] DDL_LOCK is True but no item with status "Downloading" found. Resetting lock.')
                     mylar.DDL_LOCK = False
         
+            heal_completed_but_snatched()
+
         except Exception as e:
             logger.error('[DDL-WATCHDOG] Error in watchdog thread: %s' % e)
             time.sleep(60)  # Wait before retrying
@@ -3517,7 +3729,10 @@ def ddl_load_queued_items():
                     if (mylar.CONFIG.DDL_AUTORESUME and mylar.CONFIG.DDL_LOCATION):
                         try:
                             lt = item['link_type']
-                            fn = item.get('tmp_filename') or item.get('filename')
+                            try:
+                                fn = item['tmp_filename'] or item['filename']
+                            except (KeyError, TypeError):
+                                fn = item['filename']
                             if lt in (None, 'GC-Main', 'GC-Mirror', 'GC-Pixel', 'GC-Media') and fn:
                                 fp = os.path.join(mylar.CONFIG.DDL_LOCATION, fn)
                                 size = os.stat(fp).st_size
@@ -3539,7 +3754,7 @@ def ddl_load_queued_items():
                         'id': item['id'],
                         'link_type': item['link_type'],
                         'filename': item['filename'],
-                        'tmp_filename': item.get('tmp_filename'),
+                        'tmp_filename': item['tmp_filename'] if 'tmp_filename' in item.keys() else None,
                         'comicinfo': None,
                         'packinfo': None,
                         'site': item['site'],
@@ -3707,8 +3922,13 @@ def ddl_downloader(queue):
             if ddzstat and ddzstat.get('success') and ddzstat.get('filename') is not None:
                 filecondition = check_file_condition(ddzstat['path'])
                 if not filecondition['status']:
-                    logger.warn(f"CRC Check: File {ddzstat['path']} failed condition check ({filecondition['quality']}).  Marking as failed.")
+                    logger.warn(
+                        'CRC Check: File %s failed condition check (%s). Returning it to the queue.'
+                        % (ddzstat['path'], filecondition['quality'])
+                    )
                     ddzstat['success'] = False
+                    ddzstat['incomplete'] = True
+                    ddzstat['discard_partial'] = True
                     ddzstat['link_type_failure'] = item['link_type']
 
             if ddzstat and ddzstat.get('success') is True:
@@ -3778,6 +3998,29 @@ def ddl_downloader(queue):
                     path = os.path.join(path, ddzstat['filename'])
                 logger.info('File successfully downloaded. Post Processing is not enabled - item retained here: %s' % (path,))
                 ddl_cleanup(item['id'])
+            elif ddzstat and ddzstat.get('incomplete'):
+                # Short or unreadable archive. Do not mark Failed: resume (or a clean
+                # retry, if the partial was discarded) has to be able to pick it up.
+                partial_path = ddzstat.get('path')
+                if ddzstat.get('discard_partial') and partial_path and os.path.isfile(partial_path):
+                    try:
+                        os.remove(partial_path)
+                        logger.warn('[DDL-DOWNLOADER] Removed unreadable archive so the next attempt starts clean: %s' % partial_path)
+                    except OSError as e:
+                        logger.warn('[DDL-DOWNLOADER] Could not remove unreadable archive %s: %s' % (partial_path, e))
+                logger.warn(
+                    '[DDL-DOWNLOADER] Incomplete download for %s. Returning it to the queue for resume.'
+                    % item.get('series', item['id'])
+                )
+                myDB.upsert('ddl_info', {
+                    'status': 'Queued',
+                    'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
+                }, ctrlval)
+                try:
+                    if item['id'] in mylar.DDL_QUEUED:
+                        mylar.DDL_QUEUED.remove(item['id'])
+                except (ValueError, KeyError):
+                    pass
             else:
                 if item['site'] == 'DDL(GetComics)':
                     extraction_failed_zip_ok = False
@@ -5710,6 +5953,105 @@ magic_numbers = {
     'RAR' : bytes([0x52, 0x61, 0x72, 0x21, 0x1A, 0x07]), # Should cover both v4 and v5
     '7Z' :  bytes([0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C])
 }
+
+def validate_downloaded_archive(file_path, expected_size=None, size_tolerance=0):
+    """Decide whether a DDL file is complete enough to mark Completed.
+
+    CHECK_CBR_INTEGRITY is ignored here. That switch is for library scans.
+    A download is accepted only when the byte count matches (if known) and a
+    ZIP or RAR archive actually opens.
+
+    Returns a dict with:
+      ok: True when the file may be marked complete
+      short: True when the file looks truncated and should be resumed
+      discard: True when the size matches but the archive is unreadable
+      reason: short text for logs
+    """
+    result = {'ok': False, 'short': False, 'discard': False, 'reason': ''}
+    if not file_path or not os.path.isfile(file_path):
+        result['reason'] = 'file is missing'
+        return result
+    try:
+        current_size = os.path.getsize(file_path)
+    except OSError as e:
+        result['reason'] = 'could not read size: %s' % e
+        return result
+    try:
+        expected = int(expected_size) if expected_size else 0
+    except (TypeError, ValueError):
+        expected = 0
+    try:
+        tolerance = int(size_tolerance) if size_tolerance else 0
+    except (TypeError, ValueError):
+        tolerance = 0
+    if expected > 0 and abs(current_size - expected) > tolerance:
+        result['short'] = True
+        result['reason'] = 'got %s bytes, expected %s' % (current_size, expected)
+        return result
+
+    ext = os.path.splitext(file_path)[1].lower()
+    archive_type = None
+    if ext in ('.cbz', '.zip'):
+        archive_type = 'ZIP'
+    elif ext in ('.cbr', '.rar'):
+        archive_type = 'RAR'
+    elif ext in ('.cb7', '.7z'):
+        archive_type = '7Z'
+    elif ext == '.pdf':
+        archive_type = 'PDF'
+    else:
+        try:
+            with open(file_path, 'rb') as handle:
+                header = handle.read(8)
+        except OSError as e:
+            result['reason'] = 'could not read header: %s' % e
+            return result
+        if header.startswith(magic_numbers['ZIP']):
+            archive_type = 'ZIP'
+        elif header.startswith(magic_numbers['RAR']):
+            archive_type = 'RAR'
+        elif header.startswith(magic_numbers['7Z']):
+            archive_type = '7Z'
+        elif header.startswith(magic_numbers['PDF']):
+            archive_type = 'PDF'
+
+    if archive_type == 'ZIP':
+        try:
+            with zipfile.ZipFile(file_path, mode='r') as zf:
+                bad = zf.testzip()
+            if bad is not None:
+                result['reason'] = 'CRC error in %s' % bad
+            else:
+                result['ok'] = True
+                result['reason'] = 'zip ok'
+        except Exception as e:
+            result['reason'] = 'zip open failed: %s' % e
+    elif archive_type == 'RAR':
+        try:
+            with rarfile.RarFile(file_path, mode='r') as rf:
+                bad = rf.testrar()
+            if bad is not None:
+                result['reason'] = 'CRC error in %s' % bad
+            else:
+                result['ok'] = True
+                result['reason'] = 'rar ok'
+        except Exception as e:
+            result['reason'] = 'rar open failed: %s' % e
+    elif archive_type in ('7Z', 'PDF'):
+        result['ok'] = True
+        result['reason'] = '%s accepted without a deep test' % archive_type
+    else:
+        result['reason'] = 'unknown archive type'
+
+    if not result['ok']:
+        # A known full size that still will not open cannot be fixed by appending.
+        # An unknown size may be a truncated chunked download, so keep the partial.
+        if expected > 0:
+            result['discard'] = True
+        else:
+            result['short'] = True
+    return result
+
 
 def check_file_condition(file_path):
     """ Use magic numbers to confirm a file type, and do some sanity checks for quality of

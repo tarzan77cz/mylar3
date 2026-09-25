@@ -1896,27 +1896,37 @@ class GC(object):
                                 "link_type": link_type,
                             }
 
-                        # Verify full download before marking complete (server may close connection early)
-                        try:
-                            current_size = os.path.getsize(dst_path)
-                        except OSError:
-                            current_size = 0
+                        # Verify size and that the archive opens before marking complete.
+                        # A short or corrupt file stays on disk for resume instead of Completed.
                         try:
                             expected_size = int(remote_filesize) if remote_filesize else 0
                         except (TypeError, ValueError):
                             expected_size = 0
-                        if expected_size and current_size != expected_size:
-                            logger.warn(
-                                '[DDL] Incomplete download: %s (got %s bytes, expected %s). '
-                                'Not extracting. Status left as Downloading for retry/watchdog.'
-                                % (filename, current_size, expected_size)
-                            )
+                        archive_check = helpers.validate_downloaded_archive(dst_path, expected_size)
+                        if not archive_check['ok']:
+                            if archive_check['discard'] and os.path.isfile(dst_path):
+                                try:
+                                    os.remove(dst_path)
+                                    logger.warn(
+                                        '[DDL] Removed unreadable archive %s (%s). Next attempt will start clean.'
+                                        % (filename, archive_check['reason'])
+                                    )
+                                except OSError as e:
+                                    logger.warn('[DDL] Could not remove unreadable archive %s: %s' % (dst_path, e))
+                            else:
+                                logger.warn(
+                                    '[DDL] Incomplete download: %s (%s). '
+                                    'Not extracting. Left for resume.'
+                                    % (filename, archive_check['reason'])
+                                )
                             mylar.DDL_LOCK = False
                             return {
                                 "success": False,
                                 "filename": filename,
-                                "path": None,
+                                "path": None if archive_check['discard'] else dst_path,
                                 "link_type": link_type,
+                                "incomplete": True,
+                                "discard_partial": archive_check['discard'],
                             }
 
                         # Download succeeded - mark completed, extract, return
