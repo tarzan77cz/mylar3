@@ -490,6 +490,7 @@ class FileHandlers(object):
                 logger.fdebug('Setting this to Unicode format as requested: %s' % prettycomiss)
                 prettycomiss = unicodeissue
 
+            issuedate, provisional_date = helpers.filename_issue_date(issueinfo, publisher)
             issueyear = issuedate[:4]
             month = issuedate[5:7].replace('-', '').strip()
             month_name = helpers.fullmonth(month)
@@ -642,6 +643,9 @@ class FileHandlers(object):
 
             logger.fdebug('Source: ' + ofilename)
             logger.fdebug('Destination: ' + dst)
+
+            if provisional_date and not arc and file_format != '':
+                helpers.register_provisional_rename(issueid, nfilename)
 
             rename_this = {"destination_dir": dst,
                            "nfilename": nfilename,

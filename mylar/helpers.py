@@ -317,6 +317,45 @@ def effective_store_date(issue_row):
         return shipdate, 'pull'
     return None, None
 
+# Marvel and DC print a cover date about two months after the on-sale date; others use the on-sale month.
+COVER_DATE_OFFSET_MONTHS = (('marvel', 2), ('dc', 2))
+
+def filename_issue_date(issue_row, publisher):
+    """Return (date, estimated) for the $Year/$month filename tokens.
+
+    Uses the CV cover date when present. Otherwise estimates it from the CV store date or the
+    pull-list ship date shifted by the publisher's cover date offset, so files are not named
+    with '0000-00'. Falls back to the stored IssueDate when nothing better is known.
+    """
+    issuedate = _row_value(issue_row, 'IssueDate')
+    if _valid_iso_date(issuedate) is not None:
+        return issuedate, False
+    base = _valid_iso_date(_row_value(issue_row, 'ReleaseDate'))
+    if base is None:
+        base = weekly_shipdate(_row_value(issue_row, 'IssueID'))
+    if base is None:
+        return issuedate if issuedate else '0000-00-00', False
+    offset = 0
+    publisher_lower = (publisher or '').strip().lower()
+    for prefix, months in COVER_DATE_OFFSET_MONTHS:
+        if publisher_lower.startswith(prefix):
+            offset = months
+            break
+    total = int(base[:4]) * 12 + int(base[5:7]) - 1 + offset
+    return '%04d-%02d-01' % (total // 12, total % 12 + 1), True
+
+def register_provisional_rename(issueid, filename):
+    """Record a file named with an estimated cover date so it is corrected once CV provides one."""
+    try:
+        registry = load_provisional_renames()
+        if registry.get(str(issueid)) == filename:
+            return
+        registry[str(issueid)] = filename
+        save_provisional_renames(registry)
+        logger.fdebug('[PLACEHOLDER-RENAME] Recorded provisional filename for IssueID %s: %s' % (issueid, filename))
+    except Exception as e:
+        logger.warn('[PLACEHOLDER-RENAME] Unable to record provisional filename for IssueID %s: %s' % (issueid, e))
+
 def issue_store_date_key(issue_row):
     """Return YYYYMMDD store date string for an issue row, or 00000000 if unknown."""
     store_date, _source = effective_store_date(issue_row)
@@ -649,6 +688,7 @@ def rename_param(comicid, comicname, issue, ofilename, comicyear=None, issueid=N
                 logger.fdebug('Setting this to Unicode format as requested: %s' % prettycomiss)
                 prettycomiss = unicodeissue
 
+            issuedate = filename_issue_date(issuenzb, publisher)[0]
             issueyear = issuedate[:4]
             month = issuedate[5:7].replace('-', '').strip()
             month_name = fullmonth(month)

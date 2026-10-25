@@ -3145,10 +3145,13 @@ class PostProcessor(object):
             if annchk == "yes":
                 self._log("Annual detected.")
             logger.fdebug('%s Pretty Comic Issue is : %s' % (module, prettycomiss))
-            issueyear = issuenzb['IssueDate'][:4]
+            filename_date, provisional_date = helpers.filename_issue_date(issuenzb, comicnzb['ComicPublisher'])
+            if provisional_date:
+                logger.info('%s Estimated cover date %s for the filename (no cover date on CV yet).' % (module, filename_date[:7]))
+            issueyear = filename_date[:4]
             self._log("Issue Year: %s" % issueyear)
             logger.fdebug('%s Issue Year : %s' % (module, issueyear))
-            month = issuenzb['IssueDate'][5:7].replace('-', '').strip()
+            month = filename_date[5:7].replace('-', '').strip()
             month_name = helpers.fullmonth(month)
             if month_name is None:
                 month_name = 'None'
@@ -3567,6 +3570,8 @@ class PostProcessor(object):
                           "Location":     os.path.basename(dst)}
                 logger.fdebug('writing: %s -- %s' % (newVal, ctrlVal))
                 myDB.upsert(updatetable, newVal, ctrlVal)
+                if provisional_date:
+                    helpers.register_provisional_rename(issueid, os.path.basename(dst))
 
             try:
                 if ml['IssueArcID']:
