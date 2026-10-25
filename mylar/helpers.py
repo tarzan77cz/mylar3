@@ -192,6 +192,25 @@ def weekly_shipdate(issueid):
             return shipdate
     return None
 
+def weekly_series_year(comicid):
+    """Return the year (YYYY) of the earliest pull-list ship date recorded for a ComicID, or None."""
+    if comicid is None:
+        return None
+    try:
+        myDB = db.DBConnection()
+        rows = myDB.select(
+            "SELECT SHIPDATE FROM weekly WHERE ComicID=? AND SHIPDATE IS NOT NULL ORDER BY SHIPDATE ASC",
+            [str(comicid)],
+        )
+    except Exception as e:
+        logger.fdebug('[PULL-SHIPDATE] Unable to read weekly ship dates for ComicID %s: %s' % (comicid, e))
+        return None
+    for row in rows:
+        shipdate = _valid_iso_date(row['SHIPDATE'])
+        if shipdate is not None:
+            return shipdate[:4]
+    return None
+
 def effective_store_date(issue_row):
     """Return (date, source) for an issue: CV store date, CV cover date, then pull-list ship date.
 

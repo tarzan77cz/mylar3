@@ -401,17 +401,19 @@ def _load_watch_context_for_issue(IssueID):
 
         myDB = db.DBConnection()
         row = myDB.selectone(
-            "SELECT i.Issue_Number, c.ComicYear, c.SeriesYear, c.UseFuzzy, c.IssDateFix "
+            "SELECT i.IssueID, i.Issue_Number, i.IssueDate, i.ReleaseDate, c.ComicYear, c.UseFuzzy, c.IssDateFix "
             "FROM issues i LEFT JOIN comics c ON c.ComicID=i.ComicID WHERE i.IssueID=?",
             [IssueID],
         ).fetchone()
         if row:
+            # Same semantics as search is_info: ComicYear is the issue year, SeriesYear the series start year.
+            issue_date, _source = helpers.effective_store_date(row)
             return {
-                'ComicYear': row['ComicYear'],
+                'ComicYear': issue_date[:4] if issue_date else row['ComicYear'],
                 'IssueNumber': row['Issue_Number'],
                 'UseFuzzy': row['UseFuzzy'],
                 'IssDateFix': row['IssDateFix'],
-                'SeriesYear': row['SeriesYear'],
+                'SeriesYear': row['ComicYear'],
             }
     except Exception as e:
         logger.fdebug(

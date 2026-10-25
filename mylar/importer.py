@@ -288,6 +288,15 @@ def addComictoDB(comicid, mismatch=None, pullupd=None, imported=None, ogcname=No
         logger.info('Corrected year of ' + str(SeriesYear) + ' to corrected year for series that was manually entered previously of ' + str(csyear))
         SeriesYear = csyear
 
+    if str(SeriesYear) in ('', 'None', '0000', '2099'):
+        pull_year = helpers.weekly_series_year(comicid)
+        if pull_year is not None:
+            logger.info('[PULL-SHIPDATE] No usable Series Year from CV for %s - using pull-list ship date year %s' % (comic['ComicName'], pull_year))
+            SeriesYear = pull_year
+        else:
+            SeriesYear = str(datetime.datetime.now().year)
+            logger.info('No usable Series Year from CV or the pull-list for %s - assuming current year %s' % (comic['ComicName'], SeriesYear))
+
     logger.info('Sucessfully retrieved details for ' + comic['ComicName'])
 
     #since the weekly issue check could return either annuals or issues, let's initialize it here so it carries through properly.
@@ -362,7 +371,8 @@ def addComictoDB(comicid, mismatch=None, pullupd=None, imported=None, ogcname=No
         comsubpath = comlocation.replace(mylar.CONFIG.DESTINATION_DIR, '').strip()
 
         #check for year change and rename the folder to the corrected year...
-        if comic['ComicYear'] == '2099' and SeriesYear:
+        stored_year = dbcomic['ComicYear'] if dbcomic is not None else comic['ComicYear']
+        if stored_year == '2099' and SeriesYear and str(SeriesYear) != '2099':
             badyears = [i.start() for i in re.finditer('2099', comlocation)]
             num_bad = len(badyears)
             if num_bad == 1:
@@ -370,7 +380,7 @@ def addComictoDB(comicid, mismatch=None, pullupd=None, imported=None, ogcname=No
                 dir_rename = True
             elif num_bad > 1:
                 #assume right-most is the year cause anything else isn't very smart anyways...
-                new_location = comlocation[:badyears[num_bad-1]] + SeriesYear + comlocation[badyears[num_bad-1]+1:]
+                new_location = comlocation[:badyears[num_bad-1]] + SeriesYear + comlocation[badyears[num_bad-1]+4:]
                 dir_rename = True
 
         if dir_rename and all([new_location != comlocation, os.path.isdir(comlocation)]):
@@ -386,18 +396,23 @@ def addComictoDB(comicid, mismatch=None, pullupd=None, imported=None, ogcname=No
                     os.mkdir(os.path.split(new_location)[0])
                 logger.info('Renaming directory: %s --> %s' % (comlocation,new_location))
                 shutil.move(comlocation, new_location)
+                comlocation = new_location
             except Exception as e:
-                if 'No such file or directory' in e:
+                if 'No such file or directory' in str(e):
                     if mylar.CONFIG.CREATE_FOLDERS:
                         checkdirectory = filechecker.validateAndCreateDirectory(new_location, True)
                         if not checkdirectory:
                             logger.warn('Error trying to validate/create directory. Aborting this process at this time.')
+                        else:
+                            comlocation = new_location
                 else:
                     logger.warn('Unable to rename existing directory: %s' % e)
+        elif dir_rename and os.path.isdir(new_location) and not os.path.isdir(comlocation):
+            comlocation = new_location
 
     #moved this out of the above loop so it will chk for existance of comlocation in case moved
     #if it doesn't exist - create it (otherwise will bugger up later on)
-    if not dir_rename and comlocation is not None:
+    if comlocation is not None:
         if os.path.isdir(comlocation):
             logger.info('Directory (' + comlocation + ') already exists! Continuing...')
         else:
@@ -1506,9 +1521,14 @@ def updateissuedata(comicid, comicname=None, issued=None, comicIssues=None, call
         try:
             c_date = datetime.date(int(latestdate[:4]), int(latestdate[5:7]), 1)
         except:
-            logger.error('Cannot determine Latest Date for given series. This is most likely due to an issue having a date of : 0000-00-00')
-            latestdate = str(SeriesYear) + '-01-01'
-            logger.error('Setting Latest Date to be ' + str(latestdate) + '. You should inform CV that the issue data is stale.')
+            pull_latest = helpers.weekly_shipdate(latestissueid)
+            if pull_latest is not None:
+                latestdate = pull_latest
+                logger.info('[PULL-SHIPDATE] Latest issue of %s has no CV date yet - using pull-list ship date %s as Latest Date.' % (comicname, latestdate))
+            else:
+                logger.error('Cannot determine Latest Date for given series. This is most likely due to an issue having a date of : 0000-00-00')
+                latestdate = str(SeriesYear) + '-01-01'
+                logger.error('Setting Latest Date to be ' + str(latestdate) + '. You should inform CV that the issue data is stale.')
             c_date = datetime.date(int(latestdate[:4]), int(latestdate[5:7]), 1)
 
         n_date = datetime.date.today()
