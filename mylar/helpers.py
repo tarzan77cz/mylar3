@@ -152,15 +152,67 @@ def today():
     yyyymmdd = datetime.date.isoformat(today)
     return yyyymmdd
 
+def _valid_iso_date(value):
+    """Return value if it is a usable YYYY-MM-DD date string, otherwise None."""
+    if value is None:
+        return None
+    value = str(value).strip()
+    if value in ('', 'None', '0000-00-00'):
+        return None
+    try:
+        datetime.datetime.strptime(value, '%Y-%m-%d')
+    except ValueError:
+        return None
+    return value
+
+def _row_value(row, key):
+    """Read a column from a sqlite3.Row or dict, returning None when the column is absent."""
+    try:
+        return row[key]
+    except (KeyError, IndexError):
+        return None
+
+def weekly_shipdate(issueid):
+    """Return the pull-list ship date (YYYY-MM-DD) recorded for a CV IssueID, or None."""
+    if issueid is None:
+        return None
+    try:
+        myDB = db.DBConnection()
+        rows = myDB.select(
+            "SELECT SHIPDATE FROM weekly WHERE IssueID=? AND SHIPDATE IS NOT NULL"
+            " ORDER BY CAST(year AS INTEGER) DESC, CAST(weeknumber AS INTEGER) DESC",
+            [str(issueid)],
+        )
+    except Exception as e:
+        logger.fdebug('[PULL-SHIPDATE] Unable to read weekly ship date for IssueID %s: %s' % (issueid, e))
+        return None
+    for row in rows:
+        shipdate = _valid_iso_date(row['SHIPDATE'])
+        if shipdate is not None:
+            return shipdate
+    return None
+
+def effective_store_date(issue_row):
+    """Return (date, source) for an issue: CV store date, CV cover date, then pull-list ship date.
+
+    Only the 'pull' source is a fallback; it is never written back into the CV date columns, so
+    real CV dates take precedence again as soon as a refresh brings them in.
+    """
+    for key in ('ReleaseDate', 'IssueDate'):
+        cv_date = _valid_iso_date(_row_value(issue_row, key))
+        if cv_date is not None:
+            return cv_date, 'cv'
+    shipdate = weekly_shipdate(_row_value(issue_row, 'IssueID'))
+    if shipdate is not None:
+        return shipdate, 'pull'
+    return None, None
+
 def issue_store_date_key(issue_row):
     """Return YYYYMMDD store date string for an issue row, or 00000000 if unknown."""
-    if issue_row['ReleaseDate'] not in (None, '', '0000-00-00'):
-        dk = re.sub('-', '', issue_row['ReleaseDate']).strip()
-    else:
-        dk = re.sub('-', '', issue_row['IssueDate']).strip()
-    if dk in (None, '', '00000000'):
+    store_date, _source = effective_store_date(issue_row)
+    if store_date is None:
         return '00000000'
-    return dk
+    return re.sub('-', '', store_date)
 
 def is_within_autowant_reeval_window(dk, weeks=None):
     """Return True when issue store date is within the configured re-evaluation window."""

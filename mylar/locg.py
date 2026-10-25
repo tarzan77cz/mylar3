@@ -36,18 +36,18 @@ def _locg_in_backoff():
 def _locg_set_backoff():
     global _locg_backoff_until
     _locg_backoff_until = datetime.datetime.now() + datetime.timedelta(hours=_locg_backoff_hours)
-    logger.fdebug('[PULL-LIST] Walksoftly backoff active until %s' % _locg_backoff_until.strftime('%Y-%m-%d %H:%M:%S'))
+    logger.fdebug('[PULL-LIST] Release provider backoff active until %s' % _locg_backoff_until.strftime('%Y-%m-%d %H:%M:%S'))
 
 def _locg_mark_down(status_code=None):
     mylar.BACKENDSTATUS_WS = 'down'
     if status_code is not None:
-        logger.warn('[%s] Walksoftly backend is unavailable. Pull-list data may be stale.' % status_code)
+        logger.warn('[%s] Release provider backend is unavailable. Pull-list data may be stale.' % status_code)
     _locg_set_backoff()
 
 def locg(pulldate=None,weeknumber=None,year=None):
 
         if _locg_in_backoff():
-            logger.fdebug('[PULL-LIST] Skipping Walksoftly request during backoff period.')
+            logger.fdebug('[PULL-LIST] Skipping release provider request during backoff period.')
             mylar.BACKENDSTATUS_WS = 'down'
             return {'status': 'failure'}
 
@@ -79,7 +79,8 @@ def locg(pulldate=None,weeknumber=None,year=None):
         params = {'week': str(weeknumber),
                   'year': str(year)}
 
-        url = 'https://walksoftly.itsaninja.party/newcomics.php'
+        provider_url = (mylar.CONFIG.RELEASE_PROVIDER_URL or 'https://talkhard.notaninja.party').rstrip('/')
+        url = '%s/newcomics.php' % provider_url
 
         try:
             r = requests.get(url, params=params, verify=True, headers={'User-Agent': mylar.USER_AGENT[:mylar.USER_AGENT.find('/')+7] + mylar.USER_AGENT[mylar.USER_AGENT.find('(')+1]})

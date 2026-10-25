@@ -122,6 +122,7 @@ _CONFIG_DEFINITIONS = OrderedDict({
     'BLOCKLIST_TIMER': (int, 'Scheduler', 3600),
 
     'ALT_PULL' : (int, 'Weekly', 2),
+    'RELEASE_PROVIDER_URL' : (str, 'Weekly', 'https://talkhard.notaninja.party'),
     'PULL_REFRESH': (str, 'Weekly', None),
     'WEEKFOLDER': (bool, 'Weekly', False),
     'WEEKFOLDER_LOC': (str, 'Weekly', None),

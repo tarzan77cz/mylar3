@@ -25,6 +25,8 @@ import mylar
 from mylar import logger, filechecker, helpers, search
 import time
 
+PULL_SHIPDATE_TOLERANCE_DAYS = 7
+
 
 def _normalize_id_value(value):
     """Normalize nzbid/link id values so None and '' compare equal."""
@@ -1056,20 +1058,36 @@ class search_check(object):
         else:
             # use store date instead of publication date for comparisons since
             # publication date is usually +2 months
+            cv_cover_missing = IssueDate is None or IssueDate == '0000-00-00'
+            pull_shipdate = None
+            if cv_cover_missing:
+                pull_shipdate = helpers.weekly_shipdate(IssueID)
             if StoreDate is None or StoreDate == '0000-00-00':
-                if IssueDate is None or IssueDate == '0000-00-00':
-                    logger.fdebug(
-                        'Invalid store date & issue date detected - you'
-                        ' probably should refresh the series or wait for CV'
-                        ' to correct the data'
-                    )
-                    return None
+                if cv_cover_missing:
+                    if pull_shipdate is None:
+                        logger.fdebug(
+                            'Invalid store date & issue date detected - you'
+                            ' probably should refresh the series or wait for CV'
+                            ' to correct the data'
+                        )
+                        return None
+                    stdate = pull_shipdate
                 else:
                     stdate = IssueDate
                 logger.fdebug('issue date used is : %s' % stdate)
             else:
                 stdate = StoreDate
                 logger.fdebug('store date used is : %s' % stdate)
+            if cv_cover_missing and pull_shipdate is not None and stdate == pull_shipdate:
+                # Pull-list ship dates are distributor estimates; allow posts that appear slightly earlier.
+                stdate = (
+                    datetime.datetime.strptime(pull_shipdate, '%Y-%m-%d')
+                    - datetime.timedelta(days=PULL_SHIPDATE_TOLERANCE_DAYS)
+                ).strftime('%Y-%m-%d')
+                logger.fdebug(
+                    '[PULL-SHIPDATE] No CV date yet - comparing against pull-list ship date %s'
+                    ' minus %s days (%s)' % (pull_shipdate, PULL_SHIPDATE_TOLERANCE_DAYS, stdate)
+                )
             logger.fdebug('date used is : %s' % stdate)
 
             postdate_int = None

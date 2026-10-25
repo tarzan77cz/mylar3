@@ -1159,10 +1159,7 @@ def issue_collection(issuedata, nostatus, serieslast_updated=None, suppress_adda
                 # Only change the status & add DateAdded if the issue is already in the database
                 if iss_exists is None:
                     newValueDict['DateAdded'] = helpers.today()
-                    if issue['ReleaseDate'] == '0000-00-00':
-                        dk = re.sub('-', '', issue['IssueDate']).strip()
-                    else:
-                        dk = re.sub('-', '', issue['ReleaseDate']).strip() # converts date to 20140718 format
+                    dk = helpers.issue_store_date_key(issue) # converts date to 20140718 format, pull-list ship date as fallback
                     if dk == '00000000':
                         logger.warn('Issue Data is invalid for Issue Number %s. Marking this issue as Skipped' % issue['Issue_Number'])
                         newValueDict['Status'] = "Skipped"

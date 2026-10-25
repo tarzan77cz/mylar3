@@ -1697,7 +1697,7 @@ def searchforissue(issueid=None, new=False, rsschecker=None, manual=False):
                                         'IssueID': iss['IssueID'],
                                         'Issue_Number': iss['Issue_Number'],
                                         'IssueDate': iss['IssueDate'],
-                                        'StoreDate': iss['ReleaseDate'],
+                                        'StoreDate': checkit['shipdate'] or iss['ReleaseDate'],
                                         'DigitalDate': iss['DigitalDate'],
                                         'SARC': None,
                                         'StoryArcID': None,
@@ -1753,7 +1753,7 @@ def searchforissue(issueid=None, new=False, rsschecker=None, manual=False):
                                             'IssueID': iss['IssueID'],
                                             'Issue_Number': iss['IssueNumber'],
                                             'IssueDate': iss['IssueDate'],
-                                            'StoreDate': iss['ReleaseDate'],
+                                            'StoreDate': checkit['shipdate'] or iss['ReleaseDate'],
                                             'DigitalDate': iss['DigitalDate'],
                                             'SARC': iss['StoryArc'],
                                             'StoryArcID': iss['StoryArcID'],
@@ -1808,7 +1808,7 @@ def searchforissue(issueid=None, new=False, rsschecker=None, manual=False):
                                         'IssueID': iss['IssueID'],
                                         'Issue_Number': iss['Issue_Number'],
                                         'IssueDate': iss['IssueDate'],
-                                        'StoreDate': iss['ReleaseDate'],
+                                        'StoreDate': checkit['shipdate'] or iss['ReleaseDate'],
                                         'DigitalDate': iss['DigitalDate'],
                                         'SARC': None,
                                         'StoryArcID': None,
@@ -1934,10 +1934,12 @@ def searchforissue(issueid=None, new=False, rsschecker=None, manual=False):
                     StoreDate = result['StoreDate']
                     DigitalDate = result['DigitalDate']
 
-                    if result['IssueDate'] is None:
-                        ComicYear = SeriesYear
-                    else:
+                    if result['IssueDate'] not in (None, '0000-00-00'):
                         ComicYear = str(result['IssueDate'])[:4]
+                    elif result['StoreDate'] not in (None, '0000-00-00'):
+                        ComicYear = str(result['StoreDate'])[:4]
+                    else:
+                        ComicYear = SeriesYear
 
                     if result['DateAdded'] is None:
                         DA = datetime.datetime.today()
@@ -2473,6 +2475,19 @@ def searchforissue(issueid=None, new=False, rsschecker=None, manual=False):
                     ignore_booktype = bool(comic['IgnoreType'])
                     if any([comic['AllowPacks'] == 1, comic['AllowPacks'] == '1']):
                         allow_packs = True
+
+                if (
+                    smode != 'pullwant'
+                    and StoreDate in (None, '0000-00-00')
+                    and IssueDate in (None, '0000-00-00')
+                ):
+                    shipdate = helpers.weekly_shipdate(actissueid)
+                    if shipdate is not None:
+                        logger.fdebug(
+                            '[PULL-SHIPDATE] %s #%s [IssueID:%s] has no CV date yet - searching with'
+                            ' pull-list ship date %s.' % (ComicName, IssueNumber, actissueid, shipdate)
+                        )
+                        StoreDate = shipdate
 
                 if all([IssueDate == '0000-00-00', StoreDate == '0000-00-00']):
                     IssueYear = SeriesYear
@@ -4351,7 +4366,7 @@ def searchforissue_checker(issueid, storedate, issuedate, digitaldate, info):
             #   '[CID:%s] %s %s is already in a Downloaded / Snatched status.'
             #   % (info['ComicID'], info['ComicName'], info['Issue_Number'])
             #)
-            return {'status': False, 'reason': 'already downloaded/snatched'}
+            return {'status': False, 'reason': 'already downloaded/snatched', 'shipdate': None}
 
         if (
             storedate == '0000-00-00'
@@ -4366,15 +4381,23 @@ def searchforissue_checker(issueid, storedate, issuedate, digitaldate, info):
                 )
                 and digitaldate == '0000-00-00'
                 ):
+                    shipdate = helpers.weekly_shipdate(issueid)
+                    if shipdate is not None:
+                        logger.fdebug(
+                            '[PULL-SHIPDATE] %s #%s [IssueID:%s] has no CV date yet - searching with'
+                            ' pull-list ship date %s.'
+                            % (info['ComicName'], info['Issue_Number'], issueid, shipdate)
+                        )
+                        return {'status': True, 'reason': None, 'shipdate': shipdate}
                     #logger.fdebug(
                     #    '[CID:%s] %s has invalid Date-data for issue #%s.'
                     #    ' Skipping searching for this issue.'
                     #    % (info['ComicID'], info['ComicName'], info['Issue_Number'])
                     #)
-                    return {'status': False, 'reason': 'invalid date-data'}
-        return {'status': True, 'reason': None}
+                    return {'status': False, 'reason': 'invalid date-data', 'shipdate': None}
+        return {'status': True, 'reason': None, 'shipdate': None}
     else:
-        return {'status': False, 'reason': 'invalid issueid'}
+        return {'status': False, 'reason': 'invalid issueid', 'shipdate': None}
 
 def get_findcomiciss(IssueNumber):
     findcomiciss = IssueNumber

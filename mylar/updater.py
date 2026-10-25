@@ -352,10 +352,7 @@ def dbUpdate(ComicIDList=None, calledfrom=None, sched=False):
                     newiss = []
 
                     for iss in issuesnew:
-                        if iss['ReleaseDate'] == '0000-00-00':
-                            dk = re.sub('-', '', iss['IssueDate']).strip()
-                        else:
-                            dk = re.sub('-', '', iss['ReleaseDate']).strip() # converts date to 20140718 format
+                        dk = helpers.issue_store_date_key(iss) # converts date to 20140718 format, pull-list ship date as fallback
                         if dk == '00000000':
                             logger.warn('Issue Data is invalid for Issue Number %s. Marking this issue as Skipped' % iss['Issue_Number'])
                             newstatus = "Skipped"
@@ -569,12 +566,15 @@ def upcoming_update(ComicID, ComicName, IssueNumber, IssueDate, forcecheck=None,
             og_status = issuechk['Status']
             #safety check - make sure the date for the issue in the db matches or is close to the one being polled against (ie. pull date)
             wk_info = helpers.weekly_info(weekinfo['weeknumber'], weekinfo['year'])
-            if all([issuechk['ReleaseDate'] is not None, issuechk['ReleaseDate'] != '0000-00-00']):
-               issue_checkdate = issuechk['ReleaseDate']
-            elif all([issuechk['DigitalDate'] is not None, issuechk['DigitalDate'] != '0000-00-00']):
-               issue_checkdate = issuechk['DigitalDate']
-            else:
-               issue_checkdate = issuechk['IssueDate']
+            issue_checkdate = None
+            for date_key in ('ReleaseDate', 'DigitalDate', 'IssueDate'):
+                if issuechk[date_key] not in (None, '', '0000-00-00'):
+                    issue_checkdate = issuechk[date_key]
+                    break
+            if issue_checkdate is None:
+                issue_checkdate = helpers.weekly_shipdate(issuechk['IssueID'])
+                if issue_checkdate is not None:
+                    logger.info('[PULL-SHIPDATE] %s #%s [IssueID:%s] has no CV store/cover date yet - using pull-list ship date %s.' % (ComicName, IssueNumber, issuechk['IssueID'], issue_checkdate))
 
             wkds = datetime.datetime.strptime(wk_info['startweek'], '%B %d, %Y')
             wkstr = wkds - datetime.timedelta(days = 2)
@@ -742,7 +742,9 @@ def upcoming_update(ComicID, ComicName, IssueNumber, IssueDate, forcecheck=None,
         logger.fdebug('UpcomingNewValue: ' + str(newValue))
         logger.fdebug('UpcomingcontrolValue: ' + str(controlValue))
         if issuechk['IssueDate'] == '0000-00-00' and newValue['IssueDate'] != '0000-00-00':
-            logger.fdebug('Found a 0000-00-00 issue - force updating series to try and get it proper.')
+            # The CV date columns are left untouched so a later CV refresh supplies the real dates;
+            # the pull-list ship date is resolved on demand via helpers.effective_store_date().
+            logger.fdebug('Found a 0000-00-00 issue - pull-list ship date %s will be used until CV provides a date.' % newValue['IssueDate'])
             dateVal = {"IssueDate":        newValue['IssueDate'],
                        "ComicName":        issuechk['ComicName'],
                        "Status":           newValue['Status'],
@@ -750,8 +752,6 @@ def upcoming_update(ComicID, ComicName, IssueNumber, IssueDate, forcecheck=None,
             logger.fdebug('updating date in upcoming table to : ' + str(newValue['IssueDate']) + '[' + newValue['Status'] + ']')
             logger.fdebug('ComicID:' + str(controlValue))
             myDB.upsert("upcoming", dateVal, controlValue)
-            logger.fdebug('Temporarily putting the Issue Date for ' + str(issuechk['Issue_Number']) + ' to ' + str(newValue['IssueDate']))
-            values = {"IssueDate":  newValue['IssueDate']}
             #if ComicID[:1] == "G": mylar.importer.GCDimport(ComicID,pullupd='yes')
             #else: mylar.importer.addComictoDB(ComicID,mismatch,pullupd='yes')
 
