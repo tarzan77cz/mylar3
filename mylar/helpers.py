@@ -211,10 +211,32 @@ def weekly_series_year(comicid):
             return shipdate[:4]
     return None
 
-def rename_placeholder_dated_files(comicid):
-    """Rename downloaded files named with a '0000-00' placeholder date once CV provides the cover date.
+PROVISIONAL_RENAMES_FILE = 'provisional_renames.json'
 
-    Returns the number of files renamed.
+def load_provisional_renames():
+    """Return {IssueID: filename} for files renamed with an estimated date while CV had no cover date."""
+    path = os.path.join(mylar.DATA_DIR, PROVISIONAL_RENAMES_FILE)
+    if not os.path.isfile(path):
+        return {}
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception as e:
+        logger.warn('[PLACEHOLDER-RENAME] Unable to read %s: %s' % (path, e))
+        return {}
+
+def save_provisional_renames(registry):
+    path = os.path.join(mylar.DATA_DIR, PROVISIONAL_RENAMES_FILE)
+    tmp_path = path + '.tmp'
+    with open(tmp_path, 'w', encoding='utf-8') as f:
+        json.dump(registry, f, indent=2, sort_keys=True)
+    os.replace(tmp_path, path)
+
+def rename_placeholder_dated_files(comicid):
+    """Rename downloaded files whose filename date is a placeholder once CV provides the cover date.
+
+    Covers files named with '0000-00' and files recorded in the provisional renames registry
+    (named with an estimated date). Returns the number of files renamed.
     """
     file_format = mylar.CONFIG.FILE_FORMAT
     if not file_format or not any(tag in file_format for tag in ('$Year', '$month', '$monthname')):
@@ -225,15 +247,28 @@ def rename_placeholder_dated_files(comicid):
     comic = myDB.selectone('SELECT ComicName, ComicLocation FROM comics WHERE ComicID=?', [comicid]).fetchone()
     if comic is None or not comic['ComicLocation']:
         return 0
+    registry = load_provisional_renames()
+    registry_changed = False
+    provisional_ids = list(registry.keys())
+    id_filter = ''
+    if provisional_ids:
+        id_filter = ' OR IssueID IN (%s)' % ','.join('?' * len(provisional_ids))
     rows = myDB.select(
-        "SELECT IssueID, Issue_Number, Location, IssueDate FROM issues WHERE ComicID=? AND Location LIKE ?"
-        " AND Status IN ('Downloaded', 'Archived')",
-        [comicid, '%0000-00%'],
+        "SELECT IssueID, Issue_Number, Location, IssueDate FROM issues WHERE ComicID=?"
+        " AND Status IN ('Downloaded', 'Archived') AND (Location LIKE ?%s)" % id_filter,
+        [comicid, '%0000-00%'] + provisional_ids,
     )
     renamed = 0
     for row in rows:
         if _valid_iso_date(row['IssueDate']) is None:
             continue
+        issueid = str(row['IssueID'])
+        if issueid in registry:
+            # The estimate is resolved either way once CV has a cover date.
+            provisional_name = registry.pop(issueid)
+            registry_changed = True
+            if row['Location'] != provisional_name and '0000-00' not in (row['Location'] or ''):
+                continue
         try:
             src = os.path.join(comic['ComicLocation'], row['Location'])
             if not os.path.isfile(src):
@@ -260,6 +295,11 @@ def rename_placeholder_dated_files(comicid):
             logger.info('[PLACEHOLDER-RENAME] %s #%s: %s --> %s' % (comic['ComicName'], row['Issue_Number'], row['Location'], nfilename))
         except Exception as e:
             logger.warn('[PLACEHOLDER-RENAME] %s #%s: rename failed: %s' % (comic['ComicName'], row['Issue_Number'], e))
+    if registry_changed:
+        try:
+            save_provisional_renames(registry)
+        except Exception as e:
+            logger.warn('[PLACEHOLDER-RENAME] Unable to update the provisional renames registry: %s' % e)
     return renamed
 
 def effective_store_date(issue_row):
