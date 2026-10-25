@@ -440,6 +440,11 @@ def dbUpdate(ComicIDList=None, calledfrom=None, sched=False):
                     logger.info('I have added ' + str(len(newiss)) + ' new issues for this series that were not present before.')
                     forceRescan(ComicID)
 
+                    try:
+                        helpers.rename_placeholder_dated_files(ComicID)
+                    except Exception as e:
+                        logger.warn('[PLACEHOLDER-RENAME] Unable to check placeholder-dated files for ComicID %s: %s' % (ComicID, e))
+
                     #series.json updater here (after all data written out)
                     if not calledfrom == 'json_api' and mylar.CONFIG.SERIES_METADATA_LOCAL is True:
                         sm = mylar.series_metadata.metadata_Series(ComicID, bulk=False, api=False)

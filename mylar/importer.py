@@ -1601,6 +1601,13 @@ def updateissuedata(comicid, comicname=None, issued=None, comicIssues=None, call
         sm = series_metadata.metadata_Series(comicid, bulk=False, api=False)
         sm.update_metadata()
 
+    # dbUpdate rewrites issue rows after this returns, so it runs the rename itself once statuses are restored.
+    if calledfrom != 'dbupdate':
+        try:
+            helpers.rename_placeholder_dated_files(comicid)
+        except Exception as e:
+            logger.warn('[PLACEHOLDER-RENAME] Unable to check placeholder-dated files for ComicID %s: %s' % (comicid, e))
+
     if calledfrom == 'weeklycheck':
         return weeklyissue_check
 

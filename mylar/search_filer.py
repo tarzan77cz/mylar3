@@ -401,18 +401,28 @@ def _load_watch_context_for_issue(IssueID):
 
         myDB = db.DBConnection()
         row = myDB.selectone(
-            "SELECT i.IssueID, i.Issue_Number, i.IssueDate, i.ReleaseDate, c.ComicYear, c.UseFuzzy, c.IssDateFix "
+            "SELECT i.IssueID, i.Issue_Number, i.IssueDate, i.ReleaseDate, c.ComicYear, c.UseFuzzy "
             "FROM issues i LEFT JOIN comics c ON c.ComicID=i.ComicID WHERE i.IssueID=?",
             [IssueID],
         ).fetchone()
         if row:
             # Same semantics as search is_info: ComicYear is the issue year, SeriesYear the series start year.
             issue_date, _source = helpers.effective_store_date(row)
+            # IssDateFix is not stored; derive it like search.search_init does.
+            iss_date_fix = 'no'
+            if row['ReleaseDate'] is not None:
+                month = str(row['ReleaseDate'])[5:7]
+                if month in ('10', '11', '12', '01', '02', '03'):
+                    iss_date_fix = month
+            else:
+                month = str(row['IssueDate'])[5:7]
+                if month in ('11', '12', '01', '02', '03'):
+                    iss_date_fix = month
             return {
                 'ComicYear': issue_date[:4] if issue_date else row['ComicYear'],
                 'IssueNumber': row['Issue_Number'],
                 'UseFuzzy': row['UseFuzzy'],
-                'IssDateFix': row['IssDateFix'],
+                'IssDateFix': iss_date_fix,
                 'SeriesYear': row['ComicYear'],
             }
     except Exception as e:

@@ -211,6 +211,57 @@ def weekly_series_year(comicid):
             return shipdate[:4]
     return None
 
+def rename_placeholder_dated_files(comicid):
+    """Rename downloaded files named with a '0000-00' placeholder date once CV provides the cover date.
+
+    Returns the number of files renamed.
+    """
+    file_format = mylar.CONFIG.FILE_FORMAT
+    if not file_format or not any(tag in file_format for tag in ('$Year', '$month', '$monthname')):
+        return 0
+    from mylar import filers
+
+    myDB = db.DBConnection()
+    comic = myDB.selectone('SELECT ComicName, ComicLocation FROM comics WHERE ComicID=?', [comicid]).fetchone()
+    if comic is None or not comic['ComicLocation']:
+        return 0
+    rows = myDB.select(
+        "SELECT IssueID, Issue_Number, Location, IssueDate FROM issues WHERE ComicID=? AND Location LIKE ?"
+        " AND Status IN ('Downloaded', 'Archived')",
+        [comicid, '%0000-00%'],
+    )
+    renamed = 0
+    for row in rows:
+        if _valid_iso_date(row['IssueDate']) is None:
+            continue
+        try:
+            src = os.path.join(comic['ComicLocation'], row['Location'])
+            if not os.path.isfile(src):
+                logger.warn('[PLACEHOLDER-RENAME] %s #%s: file not found, skipping: %s' % (comic['ComicName'], row['Issue_Number'], src))
+                continue
+            annualize = 'yes' if 'annual' in row['Location'].lower() else None
+            result = filers.FileHandlers(ComicID=comicid, IssueID=row['IssueID']).rename_file(row['Location'], annualize=annualize)
+            if not result:
+                logger.warn('[PLACEHOLDER-RENAME] %s #%s: unable to build the new filename, skipping.' % (comic['ComicName'], row['Issue_Number']))
+                continue
+            nfilename = result['nfilename']
+            dst = result['destination_dir']
+            if nfilename == row['Location'] or '0000-00' in nfilename:
+                continue
+            if '$' in nfilename:
+                logger.warn('[PLACEHOLDER-RENAME] %s #%s: unresolved token in new filename, skipping: %s' % (comic['ComicName'], row['Issue_Number'], nfilename))
+                continue
+            if os.path.exists(dst):
+                logger.warn('[PLACEHOLDER-RENAME] %s #%s: target already exists, skipping: %s' % (comic['ComicName'], row['Issue_Number'], dst))
+                continue
+            shutil.move(src, dst)
+            myDB.upsert('issues', {'Location': nfilename}, {'IssueID': row['IssueID']})
+            renamed += 1
+            logger.info('[PLACEHOLDER-RENAME] %s #%s: %s --> %s' % (comic['ComicName'], row['Issue_Number'], row['Location'], nfilename))
+        except Exception as e:
+            logger.warn('[PLACEHOLDER-RENAME] %s #%s: rename failed: %s' % (comic['ComicName'], row['Issue_Number'], e))
+    return renamed
+
 def effective_store_date(issue_row):
     """Return (date, source) for an issue: CV store date, CV cover date, then pull-list ship date.
 
