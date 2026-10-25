@@ -1607,6 +1607,13 @@ class GC(object):
         myDB = db.DBConnection()
         mylar.DDL_QUEUED.append(id)
         filename = None
+        try:
+            remote_filesize = int(remote_filesize) if remote_filesize else 0
+        except (TypeError, ValueError):
+            remote_filesize = 0
+        if 0 < remote_filesize < helpers.MIN_PLAUSIBLE_ARCHIVE_BYTES:
+            logger.fdebug('[DDL] Ignoring implausible stored remote filesize of %s bytes.' % remote_filesize)
+            remote_filesize = 0
         self.cookie_receipt()
 
         MAX_AUTO_RESUME_ATTEMPTS = 6
@@ -1645,6 +1652,7 @@ class GC(object):
 
                         logger.fdebug('filename: %s' % filename)
 
+                        already_complete = False
                         # Resume: verify server supports Range (206). If 200, server returned full file - appending would corrupt.
                         if resume is not None:
                             status = t.status_code
@@ -1655,8 +1663,35 @@ class GC(object):
                                 '[DDL-RESUME] Server response: status=%s, Content-Range=%s, Content-Length=%s, Accept-Ranges=%s'
                                 % (status, content_range, content_len, accept_ranges)
                             )
+                            range_total = helpers.content_range_total(content_range)
                             if status == 206:
                                 logger.info('[DDL-RESUME] Server supports Range (206 Partial Content). Appending remaining bytes.')
+                                if range_total:
+                                    remote_filesize = range_total
+                            elif status == 416 and range_total is not None and range_total == resume:
+                                logger.info(
+                                    '[DDL-RESUME] Server returned 416 and the local file already has the full size (%s bytes). '
+                                    'Skipping the download and validating the file.' % range_total
+                                )
+                                t.close()
+                                self.headers.pop('Range', None)
+                                remote_filesize = range_total
+                                already_complete = True
+                            elif status == 429 or status >= 500:
+                                logger.warn(
+                                    '[DDL-RESUME] Server returned %s. Keeping the partial file and retrying later.' % status
+                                )
+                                t.close()
+                                self.headers.pop('Range', None)
+                                mylar.DDL_LOCK = False
+                                return {
+                                    "success": False,
+                                    "filename": filename,
+                                    "path": None,
+                                    "link_type": link_type,
+                                    "incomplete": True,
+                                    "transient": True,
+                                }
                             elif status == 200:
                                 logger.warn(
                                     '[DDL-RESUME] Server returned 200 OK instead of 206 - Range not supported. '
@@ -1717,7 +1752,28 @@ class GC(object):
                                     "link_type": link_type,
                                 }
 
-                        if remote_filesize == 0:
+                        if not already_complete:
+                            expected_status = 206 if resume is not None else 200
+                            if t.status_code != expected_status:
+                                transient = t.status_code == 429 or t.status_code >= 500
+                                logger.warn(
+                                    '[DDL] Server returned %s instead of %s. %s'
+                                    % (t.status_code, expected_status,
+                                       'Keeping any partial file and retrying later.' if transient else 'Considering this download as invalid.')
+                                )
+                                t.close()
+                                mylar.DDL_LOCK = False
+                                result = {
+                                    "success": False,
+                                    "filename": filename,
+                                    "path": None,
+                                    "link_type": link_type,
+                                }
+                                if transient:
+                                    result.update({"incomplete": True, "transient": True})
+                                return result
+
+                        if remote_filesize == 0 and resume is None and not already_complete:
                             cl = t.headers.get('Content-Length')
                             if cl is not None:
                                 try:
@@ -1832,7 +1888,9 @@ class GC(object):
                         flush_interval = 1048576  # Flush every 1MB to keep file modification time updated for watchdog
                         download_aborted = False
 
-                        if resume is not None:
+                        if already_complete:
+                            pass
+                        elif resume is not None:
                             with open(dst_path, 'ab') as f:
                                 bytes_written = 0
                                 for chunk in t.iter_content(chunk_size=chunk_size):

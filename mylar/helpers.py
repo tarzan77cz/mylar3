@@ -3976,9 +3976,14 @@ def resolve_getcomics_dlds(url, timeout=(10, 25)):
     return (resolved_link, resolved_type)
 
 
+DDL_MAX_INCOMPLETE_ATTEMPTS = 6
+DDL_INCOMPLETE_RETRY_DELAY = 30
+DDL_TRANSIENT_RETRY_DELAY = 120
+
 def ddl_downloader(queue):
     myDB = db.DBConnection()
     link_type_failure = {}
+    incomplete_attempts = {}
     loop_count = 0
     last_status_log = time.time()
     
@@ -4137,6 +4142,7 @@ def ddl_downloader(queue):
                     link_type_failure.pop(item['id'])
                 except KeyError:
                     pass
+                incomplete_attempts.pop(item['id'], None)
 
                 try:
                     pck_cnt = 0
@@ -4170,14 +4176,30 @@ def ddl_downloader(queue):
                         logger.warn('[DDL-DOWNLOADER] Removed unreadable archive so the next attempt starts clean: %s' % partial_path)
                     except OSError as e:
                         logger.warn('[DDL-DOWNLOADER] Could not remove unreadable archive %s: %s' % (partial_path, e))
-                logger.warn(
-                    '[DDL-DOWNLOADER] Incomplete download for %s. Returning it to the queue for resume.'
-                    % item.get('series', item['id'])
-                )
-                myDB.upsert('ddl_info', {
-                    'status': 'Queued',
-                    'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
-                }, ctrlval)
+                attempts = incomplete_attempts.get(item['id'], 0) + 1
+                incomplete_attempts[item['id']] = attempts
+                if attempts >= DDL_MAX_INCOMPLETE_ATTEMPTS:
+                    logger.warn(
+                        '[DDL-DOWNLOADER] %s is still incomplete after %s attempts. Marking it as Failed.'
+                        % (item.get('series', item['id']), attempts)
+                    )
+                    incomplete_attempts.pop(item['id'], None)
+                    myDB.upsert('ddl_info', {
+                        'status': 'Failed',
+                        'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
+                    }, ctrlval)
+                    ddl_cleanup(item['id'])
+                else:
+                    delay = DDL_TRANSIENT_RETRY_DELAY if ddzstat.get('transient') else DDL_INCOMPLETE_RETRY_DELAY
+                    logger.warn(
+                        '[DDL-DOWNLOADER] Incomplete download for %s (attempt %s/%s). Returning it to the queue for resume in %ss.'
+                        % (item.get('series', item['id']), attempts, DDL_MAX_INCOMPLETE_ATTEMPTS, delay)
+                    )
+                    time.sleep(delay)
+                    myDB.upsert('ddl_info', {
+                        'status': 'Queued',
+                        'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
+                    }, ctrlval)
                 try:
                     if item['id'] in mylar.DDL_QUEUED:
                         mylar.DDL_QUEUED.remove(item['id'])
@@ -6116,6 +6138,16 @@ magic_numbers = {
     '7Z' :  bytes([0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C])
 }
 
+# Smaller sizes come from error pages (e.g. a 155 byte 502 body), never from a real comic archive.
+MIN_PLAUSIBLE_ARCHIVE_BYTES = 100 * 1024
+
+def content_range_total(content_range):
+    """Return the total size from a Content-Range header ('bytes 0-9/100' or 'bytes */100'), or None."""
+    if not content_range:
+        return None
+    match = re.search(r'/(\d+)\s*$', str(content_range))
+    return int(match.group(1)) if match else None
+
 def validate_downloaded_archive(file_path, expected_size=None, size_tolerance=0):
     """Decide whether a DDL file is complete enough to mark Completed.
 
@@ -6141,6 +6173,9 @@ def validate_downloaded_archive(file_path, expected_size=None, size_tolerance=0)
     try:
         expected = int(expected_size) if expected_size else 0
     except (TypeError, ValueError):
+        expected = 0
+    if 0 < expected < MIN_PLAUSIBLE_ARCHIVE_BYTES:
+        logger.fdebug('[DDL] Ignoring implausible expected size of %s bytes for %s' % (expected, os.path.basename(file_path)))
         expected = 0
     try:
         tolerance = int(size_tolerance) if size_tolerance else 0

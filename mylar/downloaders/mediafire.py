@@ -154,6 +154,10 @@ class MediaFire(object):
                                 timeout=(30, 120)
                             )
                             open_mode = 'wb'
+                        elif response.status_code == 416 and helpers.content_range_total(response.headers.get('Content-Range')) == int(resume):
+                            response.close()
+                            logger.info('[MediaFire] Server returned 416 and the local file already has the full size (%s bytes). Skipping the download.' % resume)
+                            break
                         elif response.status_code == 416:
                             response.close()
                             logger.warn('[MediaFire] Server returned 416 Range Not Satisfiable. Restarting from 0.')
