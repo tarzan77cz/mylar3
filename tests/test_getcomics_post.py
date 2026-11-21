@@ -278,6 +278,42 @@ def test_fallback_finds_current_dls_buttons(gc_env):
     assert queued[0]['link'] == 'https://getcomics.org/dls/main1'
 
 
+# ---- buttons without a title attribute (review R7) -------------------------------------
+
+BTN_NOTITLE = '<p style="text-align: center;"><div class="aio-pulse"><a href="%s">%s</a></div></p>\n'
+MISSING_TITLE_LINK = (HDR % ('Batman #123', '2023', '40 MB')
+                      + BTN_NOTITLE % ('https://getcomics.org/dls/nt', 'Download Now')
+                      + _btn('n-pixel', 'PIXELDRAIN Link') + READ + END)
+MISSING_TITLE_THEN_READ = (HDR % ('Batman #123', '2023', '40 MB') + _btn('n-main', 'Download Now')
+                           + BTN_NOTITLE % ('https://getcomics.org/read/1', 'Read Online')
+                           + HDR % ('Batman #123 (Variant)', '2023', '41 MB') + _btn('v-pixel', 'PIXELDRAIN Link')
+                           + READ + END)
+
+
+def test_button_without_title_is_read_from_its_text(gc_env):
+    res, queued = _run(gc_env, MISSING_TITLE_LINK, _single('123', '2023'))
+    assert [(q['link'], q['link_type']) for q in queued] == [('https://getcomics.org/dls/nt', 'GC-Main')]
+
+
+def test_button_without_title_and_failed_hosts(gc_env):
+    res, queued = _run(gc_env, MISSING_TITLE_LINK, _single('123', '2023'), ltf=['GC-Main'])
+    assert [q['link_type'] for q in queued] == ['GC-Pixel']
+    gc_env.mylar.DDL_QUEUE.items[:] = []
+    # The working Download Now without a title used to be lost once Pixeldrain failed.
+    res, queued = _run(gc_env, MISSING_TITLE_LINK, _single('123', '2023'), ltf=['GC-Pixel'])
+    assert res['success'] is True
+    assert [(q['link'], q['link_type']) for q in queued] == [('https://getcomics.org/dls/nt', 'GC-Main')]
+
+
+def test_read_online_without_title_is_not_a_download(gc_env):
+    res, queued = _run(gc_env, MISSING_TITLE_THEN_READ, _single('123', '2023'))
+    assert res['success'] is True
+    assert [q['link'] for q in queued] == ['https://getcomics.org/dls/v-pixel']
+    gc_env.mylar.DDL_QUEUE.items[:] = []
+    res, queued = _run(gc_env, MISSING_TITLE_THEN_READ, _single('123', '2023'), ltf=['GC-Pixel'])
+    assert [q['link'] for q in queued] == ['https://getcomics.org/dls/n-main']
+
+
 @pytest.mark.parametrize('url,expected', [
     ('https://getcomics.org/dls/abc', True),
     ('https://getcomics.org/dlds/abc', True),

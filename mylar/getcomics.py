@@ -757,6 +757,11 @@ class GC(object):
             else:
                 lk = f.find('a')
                 lk_title = (lk.get('title') or '') if lk is not None else ''
+                if lk is not None and not lk_title.strip():
+                    # No title attribute: the button label is the link text ("Download Now").
+                    lk_title = lk.get_text(strip=True)
+                    if lk_title.lower() == 'read online':
+                        lk_title = 'Read Online'
                 #logger.fdebug('lk: %s' % lk)
                 #logger.fdebug('looped_thru_once: %s / lk[title]: %s' % (looped_thru_once, lk_title))
                 if looped_thru_once is False and lk_title == 'Read Online':
@@ -766,6 +771,9 @@ class GC(object):
                     gather_links = []
                     i = 0
                     series = None
+                elif lk is not None and lk.get('href') and not re.sub('link', '', lk_title.lower()).strip():
+                    # Neither title nor text: no host to pick, and the fallbacks may still find it.
+                    logger.fdebug('[DDL-GATHERER-OF-LINKAGE] Ignoring a button without a label: %s' % lk['href'][:50])
                 elif lk is not None and lk.get('href'):
                     t_site = re.sub('link', '', lk_title.lower()).strip()
                     # A failed host stays in its section (marked), so the section keeps its
