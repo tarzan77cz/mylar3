@@ -32,7 +32,7 @@ import zipfile
 import json
 import mylar
 from operator import itemgetter
-from mylar import db, logger, helpers, search_filer
+from mylar import db, logger, helpers, search_filer, getcomics_parse
 
 class GC(object):
 
@@ -157,7 +157,8 @@ class GC(object):
 
         self.search_format = ['"%s #%s (%s)"', '%s #%s (%s)', '%s #%s', '%s %s']
 
-        self.pack_receipts = ['+ TPBs', '+TPBs', '+ TPB', '+TPB', 'TPB', '+ Deluxe Books', '+ Annuals', '+Annuals', ' & ']
+        # " & " is handled by getcomics_parse.AMP_RECEIPT_RE (only "& Annuals", "& TPBs", ...).
+        self.pack_receipts = ['+ TPBs', '+TPBs', '+ TPB', '+TPB', 'TPB', '+ Deluxe Books', '+ Annuals', '+Annuals']
 
         self.provider_stat = provider_stat
 
@@ -185,7 +186,7 @@ class GC(object):
             verified_matches = []
             for sf in self.search_format:
                 sf_issue = self.query['issue']
-                if is_info['chktpb'] == 1 and self.query['comicname'] == sf:
+                if is_info is not None and is_info.get('chktpb') == 1 and self.query['comicname'] == sf:
                     comicname = re.sub(r'[\&\:\?\,\/\-]', '', self.query['comicname'])
                     comicname = re.sub("\\band\\b", '', comicname, flags=re.I)
                     comicname = re.sub("\\bthe\\b", '', comicname, flags=re.I)
@@ -236,10 +237,9 @@ class GC(object):
                 result_generator = self.perform_search_queries(queryline)
                 sfs = search_filer.search_check()
 
-                result_list = list(result_generator)
-
                 if manual_mode:
-                    matches = sfs.checker(result_list, is_info)
+                    # Manual search lists every match, so it needs all result pages.
+                    matches = sfs.checker(list(result_generator), is_info)
                     if matches:
                         verified_matches.extend(matches)
                         logger.fdebug(
@@ -248,8 +248,10 @@ class GC(object):
                         )
                         break
                 else:
+                    # Pass the generator: the next result page is fetched only while
+                    # no preferred match has been found yet.
                     match = sfs.check_for_first_result(
-                        result_list, is_info, prefer_pack=mylar.CONFIG.PACK_PRIORITY
+                        result_generator, is_info, prefer_pack=mylar.CONFIG.PACK_PRIORITY
                     )
                     if match is not None:
                         verified_matches = [match]
@@ -506,29 +508,22 @@ class GC(object):
             title = titlefind.get_text(strip=True)
             title = re.sub('\u2013', '-', title).strip()
 
+            # Weekly bundles (Marvel Week+, DC Week+, INDIE Week+, Image Week) are skipped
+            # unless the watched series is itself one of them.
+            if getcomics_parse.is_weekly_pack(title) and not getcomics_parse.is_weekly_pack(self.query.get('comicname')):
+                logger.fdebug('[DDL] Skipping weekly bundle: %s' % title)
+                continue
+
             pack_checker = self.check_for_pack(title, issue_in_pack=self.query['issue'])
-            if pack_checker:
-                issues = pack_checker['issues']
-                gc_booktype = pack_checker['gc_booktype']
-                pack = pack_checker['pack']
-                series = pack_checker['series']
-                title = pack_checker['title']
-                filename = pack_checker['filename']
-                year = pack_checker['year']
-            else:
-                if any(
-                    [
-                        'Marvel Week+' in title,
-                        'INDIE Week+' in title,
-                        'Image Week' in title,
-                        'DC Week+' in title,
-                    ]
-                ):
-                    continue
-                else:
-                    pack = False
-                    issues = None
-                    filename = series = title = None
+            issues = pack_checker['issues']
+            gc_booktype = pack_checker['gc_booktype']
+            pack = pack_checker['pack']
+            series = pack_checker['series']
+            title = pack_checker['title']
+            filename = pack_checker['filename']
+            year = pack_checker['year']
+            # Read per post: a post without a Size field must not inherit the previous post's size.
+            size = None
 
             needle_style = "text-align: center;"
             option_find = f.find("p", {"style": needle_style})
@@ -544,14 +539,21 @@ class GC(object):
                     continue
             while i <= 2 and option_find is not None:
                 option_find = option_find.findNext(text=True)
+                if option_find is None:
+                    break
                 if 'Year' in option_find:
                     year = option_find.findNext(text=True)
-                    year = re.sub(r'\|', '', year).strip()
+                    year = re.sub(r'\|', '', year or '').strip()
                     if pack is True:
-                        title = re.sub(r'\(' + year + r'\)', '', title).strip()
+                        title = re.sub(r'\(' + re.escape(year) + r'\)', '', title).strip()
                 else:
                     size = option_find.findNext(text=True)
-                    if all(
+                    if size is None:
+                        break
+                    if re.sub(r'[^0-9]', '', size) and not re.match(r'^\s*\[?\s*\d+(?:[.,]\d+)?\s*[KMGT]', size, flags=re.IGNORECASE):
+                        # The walk can leave the card (e.g. the post date) when there is no Size field.
+                        size = None
+                    elif all(
                         [
                             re.sub(':', '', size).strip() != 'Size',
                             len(re.sub(r'[^0-9]', '', size).strip()) > 0,
@@ -564,18 +566,19 @@ class GC(object):
                                   ]
                         ):
                             size = None
-                        if 'MB' in size:
-                            size = re.sub('MB', 'M', size).strip()
-                        if 'GB' in size:
-                            size = re.sub('GB', 'G', size).strip()
-                        if '//' in size:
-                            nwsize = size.find('//')
-                            size = re.sub(r'\[', '', size[:nwsize]).strip()
-                        elif '/' in size:
-                            nwsize = size.find('/')
-                            size = re.sub(r'\[', '', size[:nwsize]).strip()
-                        if '-' in size:
-                            size = None
+                        else:
+                            if 'MB' in size:
+                                size = re.sub('MB', 'M', size).strip()
+                            if 'GB' in size:
+                                size = re.sub('GB', 'G', size).strip()
+                            if '//' in size:
+                                nwsize = size.find('//')
+                                size = re.sub(r'\[', '', size[:nwsize]).strip()
+                            elif '/' in size:
+                                nwsize = size.find('/')
+                                size = re.sub(r'\[', '', size[:nwsize]).strip()
+                            if '-' in size:
+                                size = None
                     else:
                         size = '0M'
                 i += 1
@@ -589,7 +592,8 @@ class GC(object):
                         float(datestamp)
                     ).strftime('%a, %d %b %Y %H:%M:%S'),
                     "filename": filename,
-                    "size": re.sub(' ', '', size).strip(),
+                    # None when the post gives no usable size: search_filer then skips the size limits.
+                    "size": re.sub(' ', '', size).strip() if size else None,
                     "pack": pack,
                     "series": series,
                     "gc_booktype": gc_booktype,
@@ -692,13 +696,13 @@ class GC(object):
                             series = option_find
                             #logger.fdebug('series: %s' % series)
                             if 'upscaled' in series.lower():
-                                valid_links['HD-Upscaled'] = {'series': re.sub('(hd-upscaled)', '', series, re.IGNORECASE).strip()}
+                                valid_links['HD-Upscaled'] = {'series': re.sub(r'\(?\s*hd-upscaled\s*\)?', '', series, flags=re.IGNORECASE).strip()}
                                 multiple_links = 'HD-Upscaled'
                             elif 'sd-digital' in series.lower():
-                                valid_links['SD-Digital'] = {'series': re.sub('(sd-digital)', '', series, re.IGNORECASE).strip()}
+                                valid_links['SD-Digital'] = {'series': re.sub(r'\(?\s*sd-digital\s*\)?', '', series, flags=re.IGNORECASE).strip()}
                                 multiple_links = 'SD-Digital'
                             elif 'hd-digital' in series.lower():
-                                valid_links['HD-Digital'] = {'series': re.sub('(hd-digital)', '', series, re.IGNORECASE).strip()}
+                                valid_links['HD-Digital'] = {'series': re.sub(r'\(?\s*hd-digital\s*\)?', '', series, flags=re.IGNORECASE).strip()}
                                 multiple_links = 'HD-Digital'
                             else:
                                 # if no distinction btwn HD/SD and it's just one section...
@@ -824,13 +828,13 @@ class GC(object):
                                         fallback_series = option_find
                                         if 'upscaled' in fallback_series.lower():
                                             fallback_multiple_links = 'HD-Upscaled'
-                                            fallback_series = re.sub('(hd-upscaled)', '', fallback_series, re.IGNORECASE).strip()
+                                            fallback_series = re.sub(r'\(?\s*hd-upscaled\s*\)?', '', fallback_series, flags=re.IGNORECASE).strip()
                                         elif 'sd-digital' in fallback_series.lower():
                                             fallback_multiple_links = 'SD-Digital'
-                                            fallback_series = re.sub('(sd-digital)', '', fallback_series, re.IGNORECASE).strip()
+                                            fallback_series = re.sub(r'\(?\s*sd-digital\s*\)?', '', fallback_series, flags=re.IGNORECASE).strip()
                                         elif 'hd-digital' in fallback_series.lower():
                                             fallback_multiple_links = 'HD-Digital'
-                                            fallback_series = re.sub('(hd-digital)', '', fallback_series, re.IGNORECASE).strip()
+                                            fallback_series = re.sub(r'\(?\s*hd-digital\s*\)?', '', fallback_series, flags=re.IGNORECASE).strip()
                                     elif 'Year' in str(option_find):
                                         # option_find is a NavigableString containing "Year", findNext will find next text node
                                         try:
@@ -1644,7 +1648,7 @@ class GC(object):
                             urllib.parse.unquote(t.url)
                         )
                         if 'GetComics.INFO' in filename:
-                            filename = re.sub('GetComics.INFO', '', filename, re.I).strip()
+                            filename = re.sub(r'GetComics\.INFO', '', filename, flags=re.IGNORECASE).strip()
 
                         if filename is not None:
                             file, ext = os.path.splitext(filename)
@@ -1797,7 +1801,7 @@ class GC(object):
                                     )
                                     if 'GetComics.INFO' in filename:
                                         filename = re.sub(
-                                            'GetComics.INFO', '', filename, re.I
+                                            r'GetComics\.INFO', '', filename, flags=re.IGNORECASE
                                         ).strip()
                                     if filename is not None:
                                         file, ext = os.path.splitext(filename)
@@ -2122,53 +2126,29 @@ class GC(object):
         volume_issues = None
         title_length = len(title)
 
-        # find the year
-        year = None
-        year_check = re.search(r'(\d{4}-\d{4})', title, flags=re.I)
-        if not year_check:
-            year_check = re.findall(r'(\d{4})', title, flags=re.I)
-            if year_check:
-                for yc in year_check:
-                    if title[title.find(yc)-1] != '#':
-                        if yc.startswith('19') or yc.startswith('20'):
-                            year = yc
-                            logger.fdebug('year: %s' % year)
-                            break
-            else:
-                #logger.fdebug('no year found within name...')
-                year = None
-        else:
-            year = year_check.group()
-            #logger.fdebug('year range: %s' % year)
-
+        # find the year: a bracketed year wins ("2000 AD #1999 (2016)" is 2016, not 2000)
+        year = getcomics_parse.title_year(title)
         if year is not None:
-            title = re.sub(year, '', title).strip()
-            title = re.sub('\(\)', '', title).strip()
+            logger.fdebug('year: %s' % year)
+            title = title.replace(year, '').strip()
+            title = re.sub(r'\(\)', '', title).strip()
 
         issfind_st = title.find('#')
         #logger.fdebug('issfind_st: %s' % issfind_st)
         if issfind_st != -1:
             issfind_en = title.find('-', issfind_st)
         else:
-           # if it's -1, odds are it's a range, so need to work back
+            # No '#': a range like "Batman 12 - 15" or "Saga Vol. 10 - 12". Take the whole
+            # number left of the dash (taking dash-2 lost the first digit of "12").
             issfind_en = title.find('-')
-            #logger.fdebug('issfind_en: %s' % issfind_en)
-            #logger.fdebug('issfind_en-2: %s' % issfind_en -2)
-            if issfind_en != -1 and issfind_en >= 2 and title[issfind_en - 2].isdigit():
-                issfind_st = issfind_en - 2
-                #logger.fdebug('issfind_st: %s' % issfind_st)
-            #logger.fdebug('rfind: %s' % title.lower().rfind('vol'))
-            if title.lower().rfind('vol') != -1:
-                #logger.fdebug('yes')
-                vol_find = title.lower().rfind('vol')
-                logger.fdebug('vol_find: %s' % vol_find)
-                if vol_find+2 == issfind_st:  #vol 1 - 5
-                    issfind_st = vol_find+3
-                if vol_find+3 == issfind_st:  #vol. 1 - 5
-                    issfind_st = vol_find+4
+            if issfind_en > 0:
+                issfind_st = getcomics_parse.number_start_before(title, issfind_en)
+                if issfind_st != -1 and getcomics_parse.is_year_span(title[issfind_st:]):
+                    # "Miss Fury Sensational Sundays 1941-1944 (2013)": years, not issues
+                    issfind_st = -1
 
         #logger.fdebug('issfind_en: %s' % issfind_en)
-        if issfind_en != -1:
+        if issfind_en != -1 and issfind_st != -1:
             if issfind_en + 2 < len(title) and all([title[issfind_en + 1] == ' ', title[issfind_en + 2].isdigit()]):
                 iss_en = title.find(' ', issfind_en + 2)
                 #logger.info('iss_en: %s [%s]' % (iss_en, title[iss_en +2]))
@@ -2177,20 +2157,13 @@ class GC(object):
                 if iss_en != -1:
                     #logger.info('issfind_st: %s' % issfind_st)
                     issues = title[issfind_st : iss_en]
-                    if title.lower().rfind('vol') == issfind_st -5 or title.lower().rfind('vol') == issfind_st -4:
+                    # "Vol. 1 - 9", "Vol 1 - 9", "Vol.1 - 9", "Vol1 - 9"
+                    if title.lower().rfind('vol') in (issfind_st - 5, issfind_st - 4, issfind_st - 3):
                         series = '%s %s' % (title[:title.lower().rfind('vol')].strip(), title[iss_en:].strip())
                         logger.info('new series: %s' % series)
                         volume_issues = issues
-                        if len(title) - 6 > title.lower().rfind('tpb') > 1:
-                            gc_booktype = 'TPB'
-                        elif len(title) - 6 > title.lower().rfind('gn') > 1:
-                            gc_booktype = 'GN'
-                        elif len(title) - 6 > title.lower().rfind('hc') > 1:
-                            gc_booktype = 'HC'
-                        elif len(title) - 6 > title.lower().rfind('one-shot') > 1:
-                            gc_booktype = 'One-Shot'
-                        else:
-                            gc_booktype = 'TPB/GN/HC/One-Shot'
+                        # whole word anywhere, including the end ("Saga Vol. 1 - 9 TPB")
+                        gc_booktype = getcomics_parse.volume_booktype(title)
                         tpb = True
                     #else:
                     t1 = title.lower().rfind('volume')
@@ -2215,50 +2188,18 @@ class GC(object):
                     pack = True
                     logger.fdebug('issues: %s' % issues)
             elif issfind_en + 1 < len(title) and title[issfind_en + 1].isdigit():
+                # "#1-15": the range may also be the last token of the title
                 iss_en = title.find(' ', issfind_en + 1)
-                if iss_en != -1:
-                    issues = title[issfind_st + 1 : iss_en]
-                    pack = True
+                if iss_en == -1:
+                    iss_en = len(title)
+                skip_hash = 1 if title[issfind_st] == '#' else 0
+                issues = title[issfind_st + skip_hash : iss_en]
+                pack = True
 
-
-        # to handle packs that are denoted without a # sign being present.
-        # if there's a dash, check to see if both sides of the dash are numeric.
+        # (A second pass for ranges without '#' used to search for an en-dash here. Titles
+        # are normalised to '-' before parsing, so it never matched; the branch above now
+        # handles those ranges.)
         logger.fdebug('pack: [%s] %s' % (type(pack),pack))
-        if not pack and title.find('-') != -1 and issfind_en != -1 and issfind_en >= 1 and issfind_en + 2 < len(title):
-            #logger.fdebug('title: %s' % title)
-            #logger.fdebug('title[issfind_en+1]: %s' % title[issfind_en +1])
-            #logger.fdebug('title[issfind_en+2]: %s' % title[issfind_en +2])
-            #logger.fdebug('title[issfind_en-1]: %s' % title[issfind_en -1])
-            if all(
-                   [
-                       title[issfind_en + 1] == ' ',
-                       title[issfind_en + 2].isdigit(),
-                   ]
-            ) and all(
-                   [
-                       title[issfind_en - 1] == ' ',
-                   ]
-            ):
-                spaces = [m.start() for m in re.finditer(' ', title)]
-                dashfind = title.find('–')
-                space_beforedash = title.find(' ', dashfind - 1)
-                space_afterdash = title.find(' ', dashfind + 1)
-                if not title[space_afterdash+1].isdigit():
-                    pass
-                else:
-                    iss_end = title.find(' ', space_afterdash + 1)
-                    if iss_end == -1:
-                        iss_end = len(title)
-                    set_sp = None
-                    for sp in spaces:
-                        if sp < space_beforedash:
-                            prior_sp = sp
-                        else:
-                            set_sp = prior_sp
-                            break
-                    if title[set_sp:space_beforedash].strip().isdigit():
-                        issues = title[set_sp:iss_end].strip()
-                        pack = True
         # if it's a pack - remove the issue-range and the possible issue years
         # (cause it most likely will span) and pass thru as separate items
         if series is None:
@@ -2304,8 +2245,19 @@ class GC(object):
             if crap:
                 title= re.sub(r'[\(\)\[\]]', '', title).strip()
 
-            pr = [x for x in self.pack_receipts if x in title]
             nott = title
+            # "& Annuals" / "& TPBs" ... ends the series name; "Batman & Robin" keeps its "&".
+            amp = getcomics_parse.AMP_RECEIPT_RE.search(nott)
+            if amp:
+                if re.search('annual', amp.group(), flags=re.IGNORECASE):
+                    annuals = True
+                if re.search('tpb', amp.group(), flags=re.IGNORECASE):
+                    if gc_booktype is None:
+                        gc_booktype = 'TPB'
+                    tpb = True
+                nott = nott[:amp.start()].strip()
+
+            pr = [x for x in self.pack_receipts if x in title]
             for x in pr:
                 #logger.fdebug('removing %s from %s' % (x, title))
                 try:
@@ -2316,8 +2268,6 @@ class GC(object):
                     # may have to put HC/GN/One_shot in here as well...
                     if 'Annual' in x:
                         annuals = True
-                    if ' &' in x and title.rfind(x) <= len(title) + 3:
-                        x = title[title.rfind(x):]
                     nt = nott.replace(x, '').strip()
                     #logger.fdebug('[%s] new nott: %s' % (x, nott))
                 except Exception as e:
@@ -2348,7 +2298,7 @@ class GC(object):
             #logger.fdebug('final title: %s' % (title))
 
             if volume_label:
-                series = re.sub(volume_label, '', series, flags=re.I).strip()
+                series = re.sub(re.escape(volume_label), '', series, flags=re.I).strip()
                 volume_label = re.sub('[^0-9]', '', volume_label).strip()
 
             if tpb and gc_booktype is None:
@@ -2405,33 +2355,10 @@ class GC(object):
         return False
 
     def issue_list(self, pack):
-        # packlist = [x.strip() for x in pack.split(',)]
-        packlist = pack.replace('+', ' ').replace(',', ' ').split()
-        #logger.fdebug(packlist)
-        plist = []
-        pack_issues = []
-        for pl in packlist:
-            if '-' in pl:
-                plist.append(
-                    list(
-                        range(int(pl[: pl.find('-')]), int(pl[pl.find('-') + 1 :]) + 1)
-                    )
-                )
-            else:
-                if 'TPBs' not in pl:
-                    plist.append(int(pl))
-                else:
-                    plist.append('TPBs')
-
-        for pi in plist:
-            if type(pi) == list:
-                for x in pi:
-                    pack_issues.append(x)
-            else:
-                pack_issues.append(pi)
-
-        pack_issues.sort()
+        # '1 - 5, 7 + TPBs' -> [1, 2, 3, 4, 5, 7]; spaces around the dash used to break int().
+        pack_issues = getcomics_parse.issue_numbers(pack)
         logger.fdebug("pack_issues: %s" % pack_issues)
+        return pack_issues
 
 
 # if __name__ == '__main__':
