@@ -227,7 +227,9 @@ def choose_sections(sections, wanted=None, year=None, pack=False):
       ``year``, when that narrows the choice.
     - Sections with the same issue numbers are alternatives: the last one is kept
       (Mylar used to download the last section of a page).
-    - A single issue gets one section. A pack gets every remaining section.
+    - A single issue gets one section. A pack gets every remaining section; the year
+      only decides between sections whose issue numbers overlap (volumes), so sub-packs
+      with other year spans stay (see _choose_pack_sections).
     """
     if len(sections) <= 1:
         return list(range(len(sections)))
@@ -237,6 +239,8 @@ def choose_sections(sections, wanted=None, year=None, pack=False):
         hits = [i for i in chosen if wanted & set(sections[i]['numbers'])]
         if hits:
             chosen = hits
+    if pack:
+        return _choose_pack_sections(sections, chosen, wanted, year)
     if year and len(chosen) > 1:
         in_year = [
             i for i in chosen
@@ -248,9 +252,58 @@ def choose_sections(sections, wanted=None, year=None, pack=False):
     for i in chosen:
         by_numbers[tuple(sections[i]['numbers'])] = i
     chosen = sorted(by_numbers.values())
-    if not pack:
-        return [chosen[-1]]
-    return chosen
+    return [chosen[-1]]
+
+
+def _overlap_groups(sections, indexes):
+    """Connected groups of sections whose issue numbers overlap (or are equal, also when
+    unknown), in page order."""
+    groups = []
+    for i in indexes:
+        numbers = set(sections[i]['numbers'])
+        touching = [
+            g for g in groups
+            if any((numbers & set(sections[j]['numbers'])) or sections[j]['numbers'] == sections[i]['numbers']
+                   for j in g)
+        ]
+        merged = [i]
+        for g in touching:
+            merged.extend(g)
+            groups.remove(g)
+        groups.append(sorted(merged))
+    return sorted(groups, key=lambda g: g[0])
+
+
+def _choose_pack_sections(sections, chosen, wanted, year):
+    """Sections of a pack: every group of overlapping sections gives one section.
+
+    Sub-packs ("#1 - 70", "#71 - 140") do not overlap and are all kept, whatever their
+    years. Within a group the year narrows the choice (volumes "#1 - 64" 1943-1956 and
+    "#1 - 20" 1966-1967), the last of equal numbers is kept, and when different sections
+    still overlap, the one with the most wanted issues (the last on a tie).
+    """
+    result = []
+    for group in _overlap_groups(sections, chosen):
+        if len(group) > 1 and year:
+            in_year = [
+                i for i in group
+                if sections[i]['years'] and sections[i]['years'][0] <= year <= sections[i]['years'][1]
+            ]
+            if in_year:
+                group = in_year
+        by_numbers = {}
+        for i in group:
+            by_numbers[tuple(sections[i]['numbers'])] = i
+        for rest in _overlap_groups(sections, sorted(by_numbers.values())):
+            if len(rest) == 1:
+                result.extend(rest)
+                continue
+
+            def score(i):
+                numbers = set(sections[i]['numbers'])
+                return (len(numbers & wanted) if wanted else len(numbers), i)
+            result.append(max(rest, key=score))
+    return sorted(result)
 
 
 def is_year_span(text):

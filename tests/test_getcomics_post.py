@@ -314,3 +314,45 @@ def test_choose_sections_rules(gc_parse):
     unknown = [{'numbers': [], 'years': None}, {'numbers': [], 'years': None}]
     assert gc_parse.choose_sections(unknown, [5]) == [1]
     assert gc_parse.choose_sections([{'numbers': [5], 'years': None}], [7]) == [0]
+
+
+# ---- year of a pack decides only between overlapping sections (review R3) -------------
+
+
+def test_pack_keeps_subpacks_with_other_years(gc_parse):
+    subpacks = [{'numbers': list(range(1, 71)), 'years': (1950, 1960)},
+                {'numbers': list(range(71, 141)), 'years': (1960, 1972)}]
+    assert gc_parse.choose_sections(subpacks, list(range(1, 141)), 1950, pack=True) == [0, 1]
+    assert gc_parse.choose_sections(subpacks, list(range(1, 141)), 1965, pack=True) == [0, 1]
+
+
+def test_pack_year_picks_the_volume(gc_parse):
+    volumes = [{'numbers': list(range(1, 65)), 'years': (1943, 1956)},
+               {'numbers': list(range(1, 21)), 'years': (1966, 1967)}]
+    assert gc_parse.choose_sections(volumes, list(range(1, 65)), 1943, pack=True) == [0]
+    assert gc_parse.choose_sections(volumes, list(range(1, 21)), 1966, pack=True) == [1]
+
+
+def test_pack_overlap_without_year_keeps_most_wanted_then_last(gc_parse):
+    volumes = [{'numbers': list(range(1, 65)), 'years': None},
+               {'numbers': list(range(1, 21)), 'years': None}]
+    assert gc_parse.choose_sections(volumes, list(range(1, 65)), None, pack=True) == [0]
+    same = [{'numbers': list(range(1, 11)), 'years': None},
+            {'numbers': list(range(5, 15)), 'years': None}]
+    assert gc_parse.choose_sections(same, list(range(5, 11)), None, pack=True) == [1]
+
+
+def test_pack_overlap_groups_and_free_subpacks(gc_parse):
+    # Two volumes of #1-10 (overlap, year decides) next to a sub-pack #11-20 of its own.
+    sections = [{'numbers': list(range(1, 11)), 'years': (1950, 1952)},
+                {'numbers': list(range(1, 11)), 'years': (1990, 1992)},
+                {'numbers': list(range(11, 21)), 'years': (1953, 1955)}]
+    assert gc_parse.choose_sections(sections, list(range(1, 21)), 1950, pack=True) == [0, 2]
+
+
+def test_plastic_man_pack_takes_only_its_volume(gc_env):
+    packinfo = {'pack': True, 'pack_numbers': '1 - 64',
+                'pack_issuelist': {'issue_range': list(range(1, 65)), 'issues': [], 'valid': True}}
+    comicinfo = [dict(_single('1', '1943', '1943-08-01')[0], pack=True)]
+    res, queued = _run(gc_env, read_fixture('post_plastic_man_volumes.html'), comicinfo, packinfo)
+    assert [q['series'] for q in queued] == ['Plastic Man Vol. 1 #1 – 64']
