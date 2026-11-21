@@ -2725,6 +2725,31 @@ def reverse_ddl_item_snatch(item, **kwargs):
     )
 
 
+def revert_unqueued_pack_sections(pack_id, comicid, pack_issuelist, unqueued_sections, only_issueids=None):
+    """Put the issues of pack sections that could not be queued back to Wanted.
+
+    ``unqueued_sections`` comes from parse_downloadresults ('unqueued_sections'). Call it
+    after the pack was marked Snatched. The other sections still download, so the pack is
+    not marked Failed. A section without issue numbers is left alone (its issues are not
+    known). ``only_issueids`` limits the reversal to the issues the caller marked.
+    """
+    issueids = []
+    for sec in unqueued_sections or []:
+        ids = pack_section_issueids({'pack_issuelist': pack_issuelist}, sec.get('issues'), sec.get('annual'))
+        if ids is None:
+            logger.warn('[DDL-SECTIONS] Section %s was not queued and names no issue numbers - its issues stay as they are.'
+                        % sec.get('series'))
+            continue
+        issueids.extend(x for x in ids if x not in issueids)
+    if only_issueids is not None:
+        issueids = [x for x in issueids if x in only_issueids]
+    if not issueids:
+        return []
+    logger.warn('[DDL-SECTIONS] Returning %s issue(s) of pack %s that could not be queued to Wanted: %s'
+                % (len(issueids), pack_id, [sec.get('series') for sec in unqueued_sections]))
+    return reverse_the_pack_snatch(pack_id, comicid, issueids=issueids)
+
+
 def pack_queued_for_download(issueid):
     """True when the pack that holds ``issueid`` has an item in DDL_QUEUED.
 

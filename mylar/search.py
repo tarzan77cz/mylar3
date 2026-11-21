@@ -1509,6 +1509,14 @@ def verification(verified_matches, is_info):
                         mode='want_ann' if isid.get('annual') else is_info['smode'],
                         provider=is_info['nzbprov']
                     )
+                # Sections of a multi-section DDL pack that could not be queued: back to
+                # Wanted now, after foundsearch marked them Snatched.
+                foundinfo = is_info['foundc'].get('info')
+                if isinstance(foundinfo, dict) and foundinfo.get('unqueued_sections'):
+                    helpers.revert_unqueued_pack_sections(
+                        verified_matches[verified_index]['nzbid'], is_info['ComicID'],
+                        issinfo, foundinfo['unqueued_sections']
+                    )
                 notify_snatch(
                     sent_to,
                     verified_matches[verified_index]['entry']['series'], #is_info['ComicName'],
@@ -3231,6 +3239,8 @@ def searcher(
     # blackhole
     sent_to = None
     t_hash = None
+    # pack sections parse_downloadresults could not queue (revert them after marking Snatched)
+    unqueued_sections = None
     if mylar.CONFIG.ENABLE_DDL is True and 'DDL' in nzbprov:
         if all([IssueID is None, IssueArcID is not None]):
             tmp_issueid = IssueArcID
@@ -3248,6 +3258,7 @@ def searcher(
             ggc.loadsite(nzbid, link)
             ddl_it = ggc.parse_downloadresults(nzbid, link, comicinfo, pack_info)
             tnzbprov = nzbprov
+            unqueued_sections = ddl_it.get('unqueued_sections')
             if ddl_it['success'] is True:
                 logger.info(
                     '[%s] Successfully snatched %s from DDL site. It is currently being queued'
@@ -3747,6 +3758,7 @@ def searcher(
         "SARC": SARC,
         "alt_nzbname": alt_nzbname,
         "t_hash": t_hash,
+        "unqueued_sections": unqueued_sections,
     }
 
     # if it's a directsend link (ie. via a retry).

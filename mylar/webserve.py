@@ -4146,6 +4146,17 @@ class WebInterface(object):
                         logger.info('[SELECT-REJECTED-MATCH] Updated status to Snatched for IssueID %s' % IssueID)
                     except Exception as e:
                         logger.error('[SELECT-REJECTED-MATCH] Error updating status to Snatched: %s' % e)
+                    # A DDL pack queued only partly: the issue goes back to Wanted when its
+                    # section was not queued (only this issue was marked Snatched here).
+                    if isinstance(searchresult, dict) and searchresult.get('unqueued_sections'):
+                        try:
+                            helpers.revert_unqueued_pack_sections(
+                                searchresult.get('nzbid'), issue['ComicID'],
+                                comicinfo[0].get('pack_issuelist'), searchresult['unqueued_sections'],
+                                only_issueids=[IssueID],
+                            )
+                        except Exception as e:
+                            logger.error('[SELECT-REJECTED-MATCH] Error reverting sections that were not queued: %s' % e)
                     
                     # Remove from rejected matches
                     if match_index_to_remove is not None:
@@ -4299,6 +4310,17 @@ class WebInterface(object):
                         logger.info('[SELECT-REJECTED-MATCH] Updated status to Snatched for IssueID %s' % IssueID)
                     except Exception as e:
                         logger.error('[SELECT-REJECTED-MATCH] Error updating status to Snatched: %s' % e)
+                    # A DDL pack queued only partly: the issue goes back to Wanted when its
+                    # section was not queued (only this issue was marked Snatched here).
+                    if isinstance(searchresult, dict) and searchresult.get('unqueued_sections'):
+                        try:
+                            helpers.revert_unqueued_pack_sections(
+                                searchresult.get('nzbid'), issue['ComicID'],
+                                comicinfo[0].get('pack_issuelist'), searchresult['unqueued_sections'],
+                                only_issueids=[IssueID],
+                            )
+                        except Exception as e:
+                            logger.error('[SELECT-REJECTED-MATCH] Error reverting sections that were not queued: %s' % e)
                     
                     # Remove from rejected matches
                     if match_index_to_remove is not None:

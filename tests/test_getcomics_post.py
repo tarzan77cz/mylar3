@@ -356,3 +356,34 @@ def test_plastic_man_pack_takes_only_its_volume(gc_env):
     comicinfo = [dict(_single('1', '1943', '1943-08-01')[0], pack=True)]
     res, queued = _run(gc_env, read_fixture('post_plastic_man_volumes.html'), comicinfo, packinfo)
     assert [q['series'] for q in queued] == ['Plastic Man Vol. 1 #1 – 64']
+
+
+# ---- a pack queued only partly (review R4) ---------------------------------------------
+
+# Review scenario P4: only Pixeldrain is allowed, sub-pack #11 - 20 has only Download Now.
+P4_HTML = (HDR % ('Old Comic #1 - 10', '1952', '300 MB') + _btn('s0-pixel', 'PIXELDRAIN Link') + READ
+           + HDR % ('Old Comic #11 - 20', '1952', '300 MB') + _btn('s1-main', 'Download Now') + READ + END)
+
+
+def test_partly_queued_pack_reports_the_missing_section(gc_env):
+    gc_env.config.DDL_PRIORITY_ORDER = ['pixeldrain']
+    res, queued = _run(gc_env, P4_HTML, _packci(), _packinfo(1, 20))
+    assert res['success'] is True
+    assert [q['id'] for q in queued] == ['1-1']
+    assert res['unqueued_sections'] == [
+        {'series': 'Old Comic #11 - 20', 'issues': list(range(11, 21)), 'annual': False}
+    ]
+
+
+def test_fully_queued_pack_has_no_missing_sections(gc_env):
+    res, queued = _run(gc_env, P4_HTML, _packci(), _packinfo(1, 20))
+    assert res['success'] is True
+    assert len(queued) == 2
+    assert not res.get('unqueued_sections')
+
+
+def test_pack_with_nothing_queued_still_fails(gc_env):
+    gc_env.config.DDL_PRIORITY_ORDER = ['mega']
+    res, queued = _run(gc_env, P4_HTML, _packci(), _packinfo(1, 20))
+    assert res['success'] is False
+    assert queued == []

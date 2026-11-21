@@ -1062,6 +1062,7 @@ class GC(object):
 
         multi = len(chosen) > 1
         result = None
+        unqueued = []
         for n, (gi, valid_links) in enumerate(chosen):
             section_result = self._queue_section(
                 '%s-%s' % (id, n + 1) if multi else id,
@@ -1080,8 +1081,22 @@ class GC(object):
                 section_annual=getcomics_parse.section_is_annual(all_groups[gi]['series']),
                 section_key=all_keys[gi],
             )
+            if section_result.get('success') is not True:
+                unqueued.append({
+                    'series': all_groups[gi]['series'],
+                    'issues': list(all_groups[gi]['numbers']),
+                    'annual': getcomics_parse.section_is_annual(all_groups[gi]['series']),
+                })
             if result is None or (section_result.get('success') is True and result.get('success') is not True):
                 result = section_result
+        if multi and unqueued and result.get('success') is True:
+            # Some sections went to the queue, these did not (no allowed host). The caller
+            # puts their issues back to Wanted after it marked the pack Snatched.
+            logger.warn(
+                '[DDL-SECTIONS] Only part of this pack could be queued. Not queued: %s'
+                % [u['series'] for u in unqueued]
+            )
+            result = dict(result, unqueued_sections=unqueued)
         return result
 
     def _wanted_issues(self, comicinfo, pack, pack_numbers, pack_issuelist):
