@@ -671,9 +671,13 @@ class GC(object):
         gather_links = []
         count_bees = 0
         looped_thru_once = True
+        # header <p> of the section the main pass is opening (the second fallback uses it
+        # to find the section a button belongs to)
+        opening_header = [None]
 
         def open_section(variant, section_series):
-            new_section = {'variant': variant, 'series': section_series, 'links': []}
+            new_section = {'variant': variant, 'series': section_series, 'links': [],
+                           'header': opening_header[0]}
             sections.append(new_section)
             return new_section
 
@@ -723,6 +727,7 @@ class GC(object):
 
                 if looped_thru_once and is_header:
                     #logger.fdebug('detected headers of title - ignoring this portion...')
+                    opening_header[0] = f
                     while True:
                         prev_option = option_find
                         option_find = option_find.findNext(text=True)
@@ -795,6 +800,7 @@ class GC(object):
                         })
                         #logger.fdebug('gather_links so far: %s' % gather_links)
             count_bees +=1
+        opening_header[0] = None  # sections the fallbacks open have no header of their own
 
         #logger.fdebug('final valid_links: %s' % (valid_links))
         
@@ -948,6 +954,8 @@ class GC(object):
                         except (AttributeError, TypeError):
                             break
                     break
+        # (the 'id' argument shadows the builtin here, so headers are compared with 'is')
+        header_sections = [(s['header'], s) for s in sections if s.get('header') is not None]
         for a in soup.findAll('a', href=True):
             href = a.get('href', '')
             if not getcomics_parse.is_button_link(href) or 'sh.st' in href:
@@ -967,21 +975,39 @@ class GC(object):
                 # back here made the alternate-link retry pick it again, forever.
                 logger.fdebug('[REDO-FAILURE-DETECTION] detected previous invalid link for %s (fallback) - ignoring it.' % t_site)
                 continue
-            target = last_section('normal')
-            if target is None:
-                target = open_section('normal', dlds_fallback_series)
-            if not target.get('series') and dlds_fallback_series is not None:
-                target['series'] = dlds_fallback_series
-            if not target.get('year') and dlds_fallback_year is not None:
-                target['year'] = dlds_fallback_year
-            if not target.get('size') and dlds_fallback_size is not None:
-                target['size'] = dlds_fallback_size
+            link_series, link_year, link_size = dlds_fallback_series, dlds_fallback_year, dlds_fallback_size
+            if len(sections) > 1:
+                # Several sections: the button belongs to the one whose header comes before
+                # it on the page (it used to go to the last section, whatever its issues).
+                target = None
+                for prev in a.previous_elements:
+                    if getattr(prev, 'name', None) != 'p':
+                        continue
+                    target = next((s for h, s in header_sections if h is prev), None)
+                    if target is not None:
+                        break
+                if target is None:
+                    logger.fdebug('[FALLBACK-DLDS] Cannot tell which section %s belongs to - skipping it.' % href[:50])
+                    continue
+                link_series = target.get('series') or dlds_fallback_series
+                link_year = target.get('year') or dlds_fallback_year
+                link_size = target.get('size') or dlds_fallback_size
+            else:
+                target = last_section('normal')
+                if target is None:
+                    target = open_section('normal', dlds_fallback_series)
+                if not target.get('series') and dlds_fallback_series is not None:
+                    target['series'] = dlds_fallback_series
+                if not target.get('year') and dlds_fallback_year is not None:
+                    target['year'] = dlds_fallback_year
+                if not target.get('size') and dlds_fallback_size is not None:
+                    target['size'] = dlds_fallback_size
             target['links'].append({
-                "series": dlds_fallback_series,
+                "series": link_series,
                 "site": t_site,
-                "year": dlds_fallback_year,
+                "year": link_year,
                 "issues": None,
-                "size": dlds_fallback_size,
+                "size": link_size,
                 "links": href,
                 "pack": pack
             })

@@ -278,6 +278,35 @@ def test_fallback_finds_current_dls_buttons(gc_env):
     assert queued[0]['link'] == 'https://getcomics.org/dls/main1'
 
 
+# ---- second fallback on a page with several sections (review R6) -----------------------
+
+# Review scenario P3: section #1 - 10 has Pixeldrain and Mirror in one <p> (the main pass
+# reads only the first <a>), section #11 - 20 only Pixeldrain.
+P3_HTML = (HDR % ('Old Comic #1 - 10', '1952', '300 MB')
+           + '<p style="text-align: center;"><div class="aio-pulse"><a href="https://getcomics.org/dls/s0-pixel"'
+             ' title="PIXELDRAIN Link">PIXELDRAIN</a> <a href="https://getcomics.org/dls/s0-mirror"'
+             ' title="Mirror Download">Mirror</a></div></p>\n' + READ
+           + HDR % ('Old Comic #11 - 20', '1952', '300 MB') + _btn('s1-pixel', 'PIXELDRAIN Link') + READ + END)
+
+
+def test_fallback_button_belongs_to_the_section_before_it(gc_env):
+    res, queued = _run(gc_env, P3_HTML, _single('15', '1953', '1953-01-01'))
+    assert [q['link'] for q in queued] == ['https://getcomics.org/dls/s1-pixel']
+    gc_env.mylar.DDL_QUEUE.items[:] = []
+    res, queued = _run(gc_env, P3_HTML, _single('5', '1953', '1953-01-01'))
+    # #5 lives in section #1 - 10: its Mirror (found by the fallback) beats Pixeldrain.
+    assert [(q['link'], q['series']) for q in queued] == [
+        ('https://getcomics.org/dls/s0-mirror', 'Old Comic #1 - 10')]
+
+
+def test_fallback_button_without_a_section_is_skipped(gc_env):
+    html = ('<a href="https://getcomics.org/dls/stray" title="Download Now">Download Now</a>\n'
+            + HDR % ('Old Comic #1 - 10', '1952', '300 MB') + _btn('s0-pixel', 'PIXELDRAIN Link') + READ
+            + HDR % ('Old Comic #11 - 20', '1952', '300 MB') + _btn('s1-pixel', 'PIXELDRAIN Link') + READ + END)
+    res, queued = _run(gc_env, html, _single('15', '1953', '1953-01-01'))
+    assert [q['link'] for q in queued] == ['https://getcomics.org/dls/s1-pixel']
+
+
 # ---- buttons without a title attribute (review R7) -------------------------------------
 
 BTN_NOTITLE = '<p style="text-align: center;"><div class="aio-pulse"><a href="%s">%s</a></div></p>\n'
