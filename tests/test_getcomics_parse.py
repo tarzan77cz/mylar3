@@ -130,6 +130,19 @@ def test_split_annual_numbers(gc_parse, text, expected):
     assert gc_parse.split_annual_numbers(text) == expected
 
 
+@pytest.mark.parametrize('issue_range,expected', [
+    ('Annual 1-3', '1'),           # review R8: used to be 'Annual 1'
+    ('Annuals #2 - 4', '2'),
+    ('1-10 + Annual 1-3', '1'),
+    ('#1 - 6', '1'),
+    ('0-25', '0'),
+    ('26-50', '26'),
+    ('7', '7'),
+])
+def test_direct_ddl_check_issue(gc_parse, issue_range, expected):
+    assert gc_parse.direct_ddl_check_issue(issue_range) == expected
+
+
 # ---- search result page ------------------------------------------------------------
 
 

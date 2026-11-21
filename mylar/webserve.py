@@ -4435,10 +4435,9 @@ class WebInterface(object):
             return json.dumps({'status': 'error', 'message': 'Comic not found'})
         ComicName = comic['ComicName']
         ComicYear = comic['ComicYear'] or ''
-        # First issue in range for issue_find_ids check (e.g. "0" for "0-25", "26" for "26-50")
-        first_issue = issue_range.strip().lstrip('#').strip()
-        if '-' in first_issue:
-            first_issue = first_issue.split('-')[0].strip()
+        # First issue in range for issue_find_ids check (e.g. "0" for "0-25", "26" for "26-50",
+        # "1" for "Annual 1-3")
+        first_issue = getcomics_parse.direct_ddl_check_issue(issue_range)
         pack_id = 'manual-%s' % int(time.time())
         try:
             issueid_info = helpers.issue_find_ids(ComicName, ComicID, issue_range, first_issue, pack_id)

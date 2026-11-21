@@ -78,6 +78,19 @@ def split_annual_numbers(pack):
     return issue_numbers(text[:m.start()]), issue_numbers(text[m.end():]), True
 
 
+def direct_ddl_check_issue(issue_range):
+    """Issue number a direct DDL range is checked with (queue_direct_ddl -> issue_find_ids).
+
+    The first number of the range: '26-50' -> '26', '1-10 + Annual 1-3' -> '1', and for
+    an annual-only range 'Annual 1-3' -> '1' (it used to be 'Annual 1', never valid).
+    """
+    text = re.sub(r'\bannuals?\b', ' ', str(issue_range or ''), flags=re.IGNORECASE)
+    text = text.replace('#', ' ').strip()
+    if '-' in text:
+        text = text.split('-')[0].strip()
+    return text
+
+
 def title_year(title):
     """Year of a post title: a bracketed year wins ('2000 AD #1999 (2016)' -> '2016'),
     then a 'YYYY-YYYY' span, then the first 19xx/20xx that is not an issue number."""
