@@ -54,8 +54,16 @@ závorkované víceřádkové `with (...)`. Nové závislosti musí jít na 3.8 
 
 ## Ověření
 
-Testy repo nemá. Před nasazením zkontroluj syntaxi změněných souborů Pythonem 3.8 z image
-(Docker socket patří Z2, proto hostitelská cesta `/share/...`):
+Testy jsou jen pro parser GetComics (`tests/`, fixtures se skutečnými stránkami v
+`tests/fixtures/getcomics/`). `tests/conftest.py` nahradí globály Mylaru stuby, takže testy
+nespouštějí aplikaci ani síť. Pouštěj je Pythonem 3.8 z image (Docker socket patří Z2, proto
+hostitelská cesta `/share/...`; pytest se doinstaluje jen do dočasného kontejneru):
+
+```sh
+docker run --rm -e PYTHONDONTWRITEBYTECODE=1 -v /share/Tarzan/Cursor/Mylar:/src:ro mylar3:local sh -c "pip install -q pytest >/dev/null 2>&1; cd /src && python3 -m pytest -q -p no:cacheprovider tests"
+```
+
+Před nasazením zkontroluj i syntaxi změněných souborů:
 
 ```sh
 docker run --rm -v /share/Tarzan/Cursor/Mylar:/src:ro mylar3:local python3 -c "import ast,sys; [ast.parse(open(f).read(), f) for f in sys.argv[1:]]" /src/mylar/helpers.py /src/mylar/webserve.py
@@ -63,6 +71,14 @@ docker run --rm -v /share/Tarzan/Cursor/Mylar:/src:ro mylar3:local python3 -c "i
 
 `ast.parse` chytí jen syntaxi, ne volání z novějšího Pythonu (`str.removeprefix`), na ta dej
 pozor sám. Chyby v Mako šablonách se ukážou až za běhu: po nasazení otevři dotčenou stránku.
+
+## Review
+
+Review a jeho opravy jsou v `review/`. Zadání review `REVIEW_PROMPT-<datum>.md`, zpráva
+`REVIEW-<datum>.md` (nálezy `R<n>`, ID navazují na minulé review), souhrn oprav
+`FOLLOWUPS-<datum>.md`. Review dělá samostatná session bez kontextu vývoje a kód nemění.
+U opravy nálezu nejdřív napiš test, který před opravou selže a po ní projde. Když neselže, nález
+se nereprodukuje: neopravuj ho a napiš proč. Reprodukční skripty patří do `.scratch/` (mimo git).
 
 ## Nasazení (kontejner `mylar`, stack `comics`, Z2)
 

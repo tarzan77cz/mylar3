@@ -52,6 +52,9 @@ wheels/
 .installed.cfg
 *.egg
 
+# Review reproduction scripts and temporary data
+.scratch/
+
 # Claude Code: personal permissions and agent worktrees (shared settings.json stays)
 .claude/settings.local.json
 .claude/worktrees/
