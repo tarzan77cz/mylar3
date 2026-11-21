@@ -52,5 +52,7 @@ wheels/
 .installed.cfg
 *.egg
 
-# Cursor rules
-.cursorrules
+# Claude Code: personal permissions and agent worktrees (shared settings.json stays)
+.claude/settings.local.json
+.claude/worktrees/
+!.claude/settings.json

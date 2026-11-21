@@ -15,9 +15,11 @@ __pycache__/
 README*
 LICENSE
 
-# IDE
+# IDE and agents
 .vscode/
 .idea/
+.claude/
+.cursor/
 *.swp
 *.swo
 
