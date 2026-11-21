@@ -111,6 +111,14 @@ def number_start_before(title, dash):
     return j + 1
 
 
+_BUTTON_PATH_RE = re.compile(r'/dld?s/')
+
+
+def is_button_link(url):
+    """GetComics button redirect: '/dls/...' (current site) or the older '/dlds/...'."""
+    return bool(_BUTTON_PATH_RE.search(str(url or '')))
+
+
 def link_type_for_site(site):
     """Queue link_type of a GetComics button label ('download now', 'mirror download', 'mega link' ...)."""
     low = re.sub(r'\blink\b', '', str(site or '').lower()).strip()

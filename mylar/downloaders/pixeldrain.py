@@ -23,7 +23,7 @@ import urllib
 import urllib.parse
 
 import mylar
-from mylar import db, helpers, logger, search, search_filer
+from mylar import db, helpers, logger, search, search_filer, getcomics_parse
 
 class PixelDrain(object):
 
@@ -44,13 +44,15 @@ class PixelDrain(object):
     def ddl_download(self, link, id, issueid, resume=None, remote_filesize=0):
         self.id = id
         self.url = link
-        # If link is getcomics dlds, resolve to final Pixeldrain URL first (without Pixeldrain Referer so getcomics redirects)
+        # If link is a getcomics button (/dls/ now, /dlds/ before), resolve to the final Pixeldrain URL
+        # first (without the Pixeldrain Referer, which stops getcomics from redirecting)
         try:
             parsed = urllib.parse.urlparse(link)
             netloc = (parsed.netloc or '').lower()
-            if '/dlds/' in (parsed.path or '') and ('getcomics.org' in netloc or 'getcomics.info' in netloc):
+            if getcomics_parse.is_button_link(parsed.path) and ('getcomics.org' in netloc or 'getcomics.info' in netloc):
                 resolve_headers = {'User-Agent': self.headers['User-Agent']}
-                r = self.session.get(link, allow_redirects=True, headers=resolve_headers, timeout=(10, 15))
+                r = self.session.get(link, allow_redirects=True, headers=resolve_headers, timeout=(10, 15), stream=True)
+                r.close()
                 final_netloc = (urllib.parse.urlparse(r.url).netloc or '').lower()
                 if 'pixeldrain.com' in final_netloc:
                     self.url = r.url

@@ -881,13 +881,14 @@ class GC(object):
                             })
                             logger.fdebug('[FALLBACK] Found link: %s - %s' % (t_site, lk['href'][:50]))
         
-        # Second fallback: always scan for <a href*="/dlds/"> with title/text "Download Now" or "Mirror Download"
-        # and add them if not already in valid_links (so GC-Main/Mirror are found even when other links were parsed first)
+        # Second fallback: always scan for <a href*="/dls/"> (or the older "/dlds/") with title/text "Download Now"
+        # or "Mirror Download" and add them if not already gathered (so GC-Main/Mirror are found even when
+        # other links were parsed first)
         existing_hrefs = set()
         for s in sections:
             for a in s['links']:
                 existing_hrefs.add(a.get('links'))
-        logger.info('[DDL-GATHERER-OF-LINKAGE] Scanning page for /dlds/ main and mirror links...')
+        logger.info('[DDL-GATHERER-OF-LINKAGE] Scanning page for /dls/ and /dlds/ main and mirror links...')
         dlds_fallback_series = None
         dlds_fallback_year = None
         dlds_fallback_size = None
@@ -930,7 +931,7 @@ class GC(object):
                     break
         for a in soup.findAll('a', href=True):
             href = a.get('href', '')
-            if '/dlds/' not in href or 'sh.st' in href:
+            if not getcomics_parse.is_button_link(href) or 'sh.st' in href:
                 continue
             if href in existing_hrefs:
                 continue

@@ -3877,7 +3877,7 @@ def ddl_load_queued_items():
         # Do not auto-load unresolved dlds (link has /dlds/ but link_type empty); queue_direct_ddl will resolve and put resolved item in queue
         queued_items = myDB.select(
             "SELECT * FROM ddl_info WHERE status = 'Queued' AND link IS NOT NULL AND trim(link) != '' "
-            "AND NOT (link LIKE '%/dlds/%' AND (link_type IS NULL OR trim(link_type) = '')) "
+            "AND NOT ((link LIKE '%/dlds/%' OR link LIKE '%/dls/%') AND (link_type IS NULL OR trim(link_type) = '')) "
             "ORDER BY updated_date ASC"
         )
         
@@ -3991,7 +3991,10 @@ def resolve_getcomics_dlds(url, timeout=(10, 25)):
         'User-Agent': 'Mozilla/5.0 (Windows NT 6.1; WOW64; rv:40.0) Gecko/20100101 Firefox/40.1',
         'Referer': mylar.GC_URL,
     }
-    r = requests.get(url, allow_redirects=True, headers=headers, timeout=timeout)
+    # stream=True: only the final URL is needed. A Main button ends at the file itself and
+    # a plain get() would read the whole comic (or pack) into memory.
+    r = requests.get(url, allow_redirects=True, headers=headers, timeout=timeout, stream=True)
+    r.close()
     final = urlparse(r.url)
     final_netloc = (final.netloc or '').lower()
     resolved_link = r.url
@@ -4403,7 +4406,7 @@ def ddl_downloader(queue):
                         # Do not auto-load unresolved dlds (link has /dlds/ but link_type empty); queue_direct_ddl will resolve and put resolved item in queue
                         queued_items = myDB.select(
                             "SELECT * FROM ddl_info WHERE status = 'Queued' AND link IS NOT NULL AND trim(link) != '' "
-                            "AND NOT (link LIKE '%/dlds/%' AND (link_type IS NULL OR trim(link_type) = '')) "
+                            "AND NOT ((link LIKE '%/dlds/%' OR link LIKE '%/dls/%') AND (link_type IS NULL OR trim(link_type) = '')) "
                             "ORDER BY updated_date ASC"
                         )
                         if queued_items:

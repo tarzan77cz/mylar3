@@ -166,6 +166,24 @@ def test_dlds_fallback_skips_failed_main(gc_env):
     assert res['success'] is False
 
 
+def test_fallback_finds_current_dls_buttons(gc_env):
+    # GetComics moved its buttons from /dlds/ to /dls/; the fallback only knew /dlds/.
+    html = FALLBACK_HTML.replace('/dlds/main1', '/dls/main1')
+    res, queued = _run(gc_env, html, _single('3', '1952'))
+    assert queued[0]['link'] == 'https://getcomics.org/dls/main1'
+
+
+@pytest.mark.parametrize('url,expected', [
+    ('https://getcomics.org/dls/abc', True),
+    ('https://getcomics.org/dlds/abc', True),
+    ('https://pixeldrain.com/u/abc', False),
+    ('https://getcomics.org/other-comics/dls-review/', False),
+    (None, False),
+])
+def test_is_button_link(gc_parse, url, expected):
+    assert gc_parse.is_button_link(url) is expected
+
+
 # ---- pure helpers ------------------------------------------------------------------
 
 

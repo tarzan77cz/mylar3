@@ -60,6 +60,7 @@ from mylar import (
     db,
     Failed,
     filechecker,
+    getcomics_parse,
     helpers,
     importer,
     librarysync,
@@ -4447,8 +4448,9 @@ class WebInterface(object):
         ctrlval = {'id': pack_id}
         nzbname = 'Direct Download %s (%s)' % (ComicName, issue_range)
 
-        if '/dlds/' in url:
-            # dlds URL: save record with user URL in link so we can retry resolve on requeue
+        if getcomics_parse.is_button_link(url):
+            # GetComics button (/dls/ now, /dlds/ before): save record with user URL in link so we can
+            # retry resolve on requeue; it may lead to Pixeldrain or Mediafire, not only to Main
             vals = {
                 'series': series_display,
                 'year': ComicYear,
@@ -4918,10 +4920,10 @@ class WebInterface(object):
                                     packinfo = {'pack': True, 'pack_numbers': item['issues'], 'pack_issuelist': issueid_info}
                         except Exception as e:
                             logger.debug('[DDL-REQUEUE] Could not reconstruct comicinfo for %s: %s' % (item['id'], e))
-                    # Retry resolve when link is unresolved dlds URL (link has /dlds/, link_type empty)
+                    # Retry resolve when link is an unresolved button URL (/dls/ or /dlds/, link_type empty)
                     link_to_put = item['link']
                     link_type_to_put = item['link_type']
-                    if (link_to_put and '/dlds/' in link_to_put and
+                    if (link_to_put and getcomics_parse.is_button_link(link_to_put) and
                             (not link_type_to_put or not (link_type_to_put or '').strip())):
                         try:
                             resolved_link, resolved_type = helpers.resolve_getcomics_dlds(link_to_put)
