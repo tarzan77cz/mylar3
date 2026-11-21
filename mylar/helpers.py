@@ -4424,7 +4424,7 @@ def ddl_downloader(queue):
                                 logger.fdebug('[%s] link_type_failure: %s' % (item['id'], link_type_failure))
                                 try:
                                     ggc = getcomics.GC(comicid=item['comicid'], issueid=item['issueid'], oneoff=item['oneoff'])
-                                    redo = ggc.parse_downloadresults(item['id'], item['mainlink'], item['comicinfo'], item['packinfo'], link_type_failure[item['id']], section=item.get('section'), pack_id=item.get('pack_id'))
+                                    redo = ggc.parse_downloadresults(item['id'], item['mainlink'], item['comicinfo'], item['packinfo'], link_type_failure[item['id']], section=item.get('section'), pack_id=item.get('pack_id'), section_key=item.get('section_key'))
                                     if not redo or redo.get('success') is not True:
                                         # Every host of the post has failed (or the page has no usable
                                         # link left): close the item instead of leaving it Downloading.

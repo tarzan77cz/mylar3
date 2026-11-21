@@ -11,11 +11,11 @@ def _single(issue, comyear='1950', issuedate='0000-00-00'):
              'IssueNumber': issue, 'comyear': comyear, 'IssueDate': issuedate}]
 
 
-def _run(env, html, comicinfo, packinfo=None, ltf=None, section=None, post_id='1'):
+def _run(env, html, comicinfo, packinfo=None, ltf=None, section=None, post_id='1', **kwargs):
     gc = env.module.GC(issueid='I1', comicid='C1', oneoff=False)
     with open(gc._html_cache_path(post_id) + '.html', 'w', encoding='utf-8') as fh:
         fh.write(html)
-    result = gc.parse_downloadresults(post_id, MAINLINK, comicinfo, packinfo, ltf, section=section)
+    result = gc.parse_downloadresults(post_id, MAINLINK, comicinfo, packinfo, ltf, section=section, **kwargs)
     return result, env.mylar.DDL_QUEUE.items
 
 
@@ -81,6 +81,94 @@ def test_retry_of_one_section_keeps_its_id(gc_env):
     assert [q['id'] for q in queued] == ['1-2']
     assert queued[0]['link_type'] == 'GC-Main'
     assert _hrefs(queued) == ['dAdyh5Z3']  # Download Now of "#71 - 140"
+
+
+# ---- retry of one section of a pack (review R1) --------------------------------------
+
+HDR = ('<p style="text-align: center;"><strong>%s</strong><br /><strong>Language :</strong> English | '
+       '<strong>Year :</strong> %s | <strong>Size :</strong> %s</p>\n')
+BTN = '<p style="text-align: center;"><div class="aio-pulse"><a href="%s" title="%s">%s</a></div></p>\n'
+READ = BTN % ('https://getcomics.org/read/x', 'Read Online', 'Read Online')
+END = '<p style="text-align: center;">Click HERE to give us your support and donation.</p>\n'
+
+
+def _btn(slug, title):
+    return BTN % ('https://getcomics.org/dls/' + slug, title, title)
+
+
+def _packinfo(lo, hi):
+    return {'pack': True, 'pack_numbers': '%s - %s' % (lo, hi),
+            'pack_issuelist': {'issue_range': list(range(lo, hi + 1)), 'issues': [], 'valid': True}}
+
+
+def _packci():
+    return [dict(_single('1', '1952', '1952-01-01')[0], pack=True)]
+
+
+# Section 0 has only Download Now, sections 1 and 2 also Pixeldrain (review scenario P2).
+P2_HTML = (HDR % ('Old Comic #1 - 10', '1952', '300 MB') + _btn('s0-main', 'Download Now') + READ
+           + HDR % ('Old Comic #11 - 20', '1952', '300 MB') + _btn('s1-main', 'Download Now')
+           + _btn('s1-pixel', 'PIXELDRAIN Link') + READ
+           + HDR % ('Old Comic #21 - 30', '1952', '300 MB') + _btn('s2-main', 'Download Now')
+           + _btn('s2-pixel', 'PIXELDRAIN Link') + READ + END)
+
+
+def _p2_first_queue(gc_env):
+    res, queued = _run(gc_env, P2_HTML, _packci(), _packinfo(1, 30))
+    first = list(queued)
+    gc_env.mylar.DDL_QUEUE.items[:] = []
+    assert [q['id'] for q in first] == ['1-1', '1-2', '1-3']
+    return first
+
+
+@pytest.mark.parametrize('n,slug', [(1, 's1-pixel'), (2, 's2-pixel')])
+def test_section_retry_after_host_failure_keeps_its_section(gc_env, n, slug):
+    item = _p2_first_queue(gc_env)[n]
+    res, queued = _run(gc_env, P2_HTML, _packci(), _packinfo(1, 30), ltf=['GC-Main'],
+                       section=item['section'], post_id=item['id'], pack_id=item['pack_id'],
+                       section_key=item['section_key'])
+    assert res['success'] is True
+    assert [q['id'] for q in queued] == [item['id']]  # never '1-3-1'
+    assert [q['link'] for q in queued] == ['https://getcomics.org/dls/' + slug]
+    assert queued[0]['section'] == item['section']
+    assert queued[0]['section_key'] == item['section_key']
+
+
+@pytest.mark.parametrize('section,post_id,slug', [(1, '1-2', 's1-pixel'), (2, '1-3', 's2-pixel')])
+def test_section_index_survives_the_failed_host_filter(gc_env, section, post_id, slug):
+    # Items queued before the section key existed carry only the index.
+    res, queued = _run(gc_env, P2_HTML, _packci(), _packinfo(1, 30), ltf=['GC-Main'],
+                       section=section, post_id=post_id)
+    assert [q['id'] for q in queued] == [post_id]
+    assert [q['link'] for q in queued] == ['https://getcomics.org/dls/' + slug]
+
+
+def test_section_retry_fails_when_the_section_is_gone(gc_env):
+    item = _p2_first_queue(gc_env)[1]
+    changed = P2_HTML.replace('Old Comic #11 - 20', 'Old Comic #11 - 19')
+    res, queued = _run(gc_env, changed, _packci(), _packinfo(1, 30), ltf=['GC-Main'],
+                       section=item['section'], post_id=item['id'], pack_id=item['pack_id'],
+                       section_key=item['section_key'])
+    assert res['success'] is False
+    assert queued == []
+
+
+def test_section_retry_out_of_range_fails(gc_env):
+    res, queued = _run(gc_env, P2_HTML, _packci(), _packinfo(1, 30), ltf=['GC-Main'],
+                       section=7, post_id='1-8', pack_id='1')
+    assert res['success'] is False
+    assert queued == []
+
+
+def test_section_retry_finds_a_moved_section_by_key(gc_env):
+    item = _p2_first_queue(gc_env)[2]
+    # A new section in front of it: the stored index points at the wrong one now.
+    moved = HDR % ('Old Comic #0', '1952', '30 MB') + _btn('new-pixel', 'PIXELDRAIN Link') + READ + P2_HTML
+    res, queued = _run(gc_env, moved, _packci(), _packinfo(1, 30), ltf=['GC-Main'],
+                       section=item['section'], post_id=item['id'], pack_id=item['pack_id'],
+                       section_key=item['section_key'])
+    assert [q['link'] for q in queued] == ['https://getcomics.org/dls/s2-pixel']
+    assert [q['id'] for q in queued] == ['1-3']
 
 
 @pytest.mark.parametrize('issuedate,expected', [

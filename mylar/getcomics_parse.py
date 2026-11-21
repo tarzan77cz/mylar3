@@ -157,6 +157,44 @@ def section_issue_numbers(series):
     return issue_numbers(m.group(1)) if m else []
 
 
+def section_keys(sections):
+    """Identity of each post section for a retry, in page order.
+
+    ``sections`` are dicts with ``numbers`` (header issue numbers), ``variant`` and
+    ``series`` (header text). The key is variant + numbers; the header text is added when
+    the section names no numbers or another section has the same numbers (two editions).
+    """
+    base = ['%s|%s' % (s.get('variant') or '', ','.join(str(n) for n in s.get('numbers') or []))
+            for s in sections]
+    keys = []
+    for i, s in enumerate(sections):
+        if s.get('numbers') and base.count(base[i]) == 1:
+            keys.append(base[i])
+        else:
+            text = re.sub(r'\s+', ' ', normalize_dashes(s.get('series'))).strip().lower()
+            keys.append('%s|%s' % (base[i], text))
+    return keys
+
+
+def find_section(keys, index, key=None):
+    """Index of the section a retry is for, or None when it is not on the page.
+
+    ``index`` is the stored position, ``key`` the stored section_keys value (older queue
+    items have only the index).
+    """
+    try:
+        index = int(index)
+    except (TypeError, ValueError):
+        return None
+    if not key:
+        return index if 0 <= index < len(keys) else None
+    if 0 <= index < len(keys) and keys[index] == key:
+        return index
+    if key in keys:
+        return keys.index(key)
+    return None
+
+
 def section_is_annual(series):
     """True when a section header numbers annuals: 'Batman Annual #1 - 3', not
     'Batman #1 - 50 + Annual 1 - 3' (its '#' numbers are regular issues)."""

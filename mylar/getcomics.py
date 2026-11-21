@@ -619,11 +619,13 @@ class GC(object):
 
         return resultlist, next_page
 
-    def parse_downloadresults(self, id, mainlink, comicinfo=None, packinfo=None, link_type_failure=None, section=None, pack_id=None):
+    def parse_downloadresults(self, id, mainlink, comicinfo=None, packinfo=None, link_type_failure=None, section=None, pack_id=None, section_key=None):
         """Gather the download buttons of a post and queue the right ones.
 
         ``section`` is the index of the post section to use when a multi-section post is
-        retried with an alternate link (the queue item carries it). ``pack_id`` is the post
+        retried with an alternate link, ``section_key`` its identity (header numbers and
+        variant); the queue item carries both. When that section is not on the page any
+        more the retry fails instead of choosing sections again. ``pack_id`` is the post
         id the snatch was logged under (nzblog, PACK_ISSUEIDS_DONT_QUEUE) when ``id`` is a
         sub-pack id like '<post id>-2'.
         """
@@ -766,10 +768,13 @@ class GC(object):
                     series = None
                 elif lk is not None and lk.get('href'):
                     t_site = re.sub('link', '', lk_title.lower()).strip()
-                    if getcomics_parse.site_failed(t_site, link_type_failure):
+                    # A failed host stays in its section (marked), so the section keeps its
+                    # place for a retry; it is left out when a link is picked.
+                    link_failed = getcomics_parse.site_failed(t_site, link_type_failure)
+                    if link_failed:
                         logger.fdebug('[REDO-FAILURE-DETECTION] detected previous invalid link for %s - ignoring this result'
                                     ' and seeing if anything else can be downloaded.' % t_site)
-                    elif 'sh.st' not in lk['href']:
+                    if 'sh.st' not in lk['href']:
                         gather_links.append({
                              "series": series,
                              "site": t_site,
@@ -777,7 +782,8 @@ class GC(object):
                              "issues": None,
                              "size": size,
                              "links": lk['href'],
-                             "pack": pack
+                             "pack": pack,
+                             "failed": link_failed,
                         })
                         #logger.fdebug('gather_links so far: %s' % gather_links)
             count_bees +=1
@@ -785,7 +791,7 @@ class GC(object):
         #logger.fdebug('final valid_links: %s' % (valid_links))
         
         # Fallback: If no links were found in <p> tags, try to find <div class="aio-pulse"> directly in document
-        links_found_in_paragraphs = any(len(s['links']) > 0 for s in sections)
+        links_found_in_paragraphs = any(not a.get('failed') for s in sections for a in s['links'])
 
         if not links_found_in_paragraphs:
             logger.info('[DDL-GATHERER-OF-LINKAGE] No links found in <p> tags, trying fallback: searching for <div class="aio-pulse"> directly in document...')
@@ -891,7 +897,8 @@ class GC(object):
         existing_hrefs = set()
         for s in sections:
             for a in s['links']:
-                existing_hrefs.add(a.get('links'))
+                if not a.get('failed'):
+                    existing_hrefs.add(a.get('links'))
         logger.info('[DDL-GATHERER-OF-LINKAGE] Scanning page for /dls/ and /dlds/ main and mirror links...')
         dlds_fallback_series = None
         dlds_fallback_year = None
@@ -977,32 +984,70 @@ class GC(object):
         # HD-Digital, ...) are alternatives of the same download and stay together; a header
         # with other issues, or a second section of the same variant, is another download
         # (sub-pack "#71 - 140", another volume, another edition).
-        groups = []
-        for s in sections:
-            if not s['links']:
-                continue
-            numbers = getcomics_parse.section_issue_numbers(s.get('series'))
-            if groups and groups[-1]['numbers'] == numbers and s['variant'] not in groups[-1]['valid_links']:
-                groups[-1]['valid_links'][s['variant']] = s
-            else:
-                groups.append({
-                    'numbers': numbers,
-                    'years': getcomics_parse.year_bounds(s.get('year')),
-                    'series': s.get('series'),
-                    'valid_links': {s['variant']: s},
-                })
+        def group_sections(usable_only):
+            out = []
+            for s in sections:
+                links = [a for a in s['links'] if not (usable_only and a.get('failed'))]
+                if not links:
+                    continue
+                sec = dict(s, links=links) if usable_only else s
+                numbers = getcomics_parse.section_issue_numbers(s.get('series'))
+                if out and out[-1]['numbers'] == numbers and s['variant'] not in out[-1]['valid_links']:
+                    out[-1]['valid_links'][s['variant']] = sec
+                    out[-1]['members'].append(s)
+                else:
+                    out.append({
+                        'numbers': numbers,
+                        'years': getcomics_parse.year_bounds(s.get('year')),
+                        'series': s.get('series'),
+                        'variant': s['variant'],
+                        'valid_links': {s['variant']: sec},
+                        'members': [s],
+                    })
+            return out
+
+        def usable_links(group):
+            usable = {}
+            for variant, sec in group['valid_links'].items():
+                links = [a for a in sec['links'] if not a.get('failed')]
+                if links:
+                    usable[variant] = dict(sec, links=links)
+            return usable
+
+        # ``groups``: downloads with a usable (not failed) link, to choose from.
+        # ``all_groups``: every section with a link, failed hosts included. The queue item
+        # keeps its index and key, so a retry finds the same section after a host failed.
+        groups = group_sections(True)
+        all_groups = group_sections(False)
+        all_keys = getcomics_parse.section_keys(all_groups)
+
+        def all_index(group):
+            first = group['members'][0]
+            for j, g in enumerate(all_groups):
+                if any(m is first for m in g['members']):
+                    return j
+            return None
 
         if not groups:
             logger.info('No valid items available that I am able to download from. Not downloading...')
             return {'success': False, 'links_exhausted': link_type_failure}
 
         wanted, wanted_year = self._wanted_issues(comicinfo, pack, pack_numbers, pack_issuelist)
-        if section is not None and 0 <= section < len(groups):
+        if section is not None:
             # Retry of one section of a multi-section post (alternate link after a failure).
-            chosen = [section]
+            # Never choose again: that queued other sections under new ids ('1-3-1').
+            gi = getcomics_parse.find_section(all_keys, section, section_key)
+            if gi is None:
+                logger.warn(
+                    '[DDL-SECTIONS] Section %s (%s) of this post is no longer on the page - not retrying %s.'
+                    % (section, section_key, id)
+                )
+                return {'success': False, 'links_exhausted': link_type_failure}
+            chosen = [(gi, usable_links(all_groups[gi]))]
         else:
-            chosen = getcomics_parse.choose_sections(groups, wanted, wanted_year, pack is True)
-        if len(groups) > 1:
+            chosen = [(all_index(groups[x]), groups[x]['valid_links'])
+                      for x in getcomics_parse.choose_sections(groups, wanted, wanted_year, pack is True)]
+        if len(all_groups) > 1:
             if not wanted:
                 wanted_text = 'unknown'
             elif len(wanted) > 3:
@@ -1011,28 +1056,29 @@ class GC(object):
                 wanted_text = ', '.join(str(w) for w in wanted)
             logger.info(
                 '[DDL-SECTIONS] %s download sections on this page: %s. Wanted issues: %s, year: %s. Using: %s'
-                % (len(groups), [g['series'] for g in groups], wanted_text, wanted_year,
-                   [groups[x]['series'] for x in chosen])
+                % (len(all_groups), [g['series'] for g in all_groups], wanted_text, wanted_year,
+                   [all_groups[x]['series'] for x, _ in chosen])
             )
 
         multi = len(chosen) > 1
         result = None
-        for n, gi in enumerate(chosen):
+        for n, (gi, valid_links) in enumerate(chosen):
             section_result = self._queue_section(
                 '%s-%s' % (id, n + 1) if multi else id,
                 mainlink,
                 comicinfo,
                 packinfo,
                 link_type_failure,
-                groups[gi]['valid_links'],
+                valid_links,
                 soup,
                 booktype,
                 pack,
                 include_extras=(n == len(chosen) - 1),
                 section_index=gi if (multi or section is not None) else None,
                 pack_id=pack_id,
-                section_issues=groups[gi]['numbers'],
-                section_annual=getcomics_parse.section_is_annual(groups[gi]['series']),
+                section_issues=all_groups[gi]['numbers'],
+                section_annual=getcomics_parse.section_is_annual(all_groups[gi]['series']),
+                section_key=all_keys[gi],
             )
             if result is None or (section_result.get('success') is True and result.get('success') is not True):
                 result = section_result
@@ -1065,7 +1111,7 @@ class GC(object):
                 break
         return wanted, wanted_year
 
-    def _queue_section(self, id, mainlink, comicinfo, packinfo, link_type_failure, valid_links, soup, booktype, pack, include_extras=True, section_index=None, pack_id=None, section_issues=None, section_annual=False):
+    def _queue_section(self, id, mainlink, comicinfo, packinfo, link_type_failure, valid_links, soup, booktype, pack, include_extras=True, section_index=None, pack_id=None, section_issues=None, section_annual=False, section_key=None):
         """Pick the button of one download section by DDL_PRIORITY_ORDER and queue it.
 
         ``valid_links`` maps a variant ('normal', 'HD-Upscaled', ...) to its section.
@@ -1628,6 +1674,7 @@ class GC(object):
                 queue_item['pack_id'] = pack_id if pack_id not in (None, '') else mod_id
                 queue_item['section_issues'] = list(section_issues or [])
                 queue_item['section_annual'] = bool(section_annual)
+                queue_item['section_key'] = section_key
             mylar.DDL_QUEUE.put(queue_item)
             cnt += 1
 
