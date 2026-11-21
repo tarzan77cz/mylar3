@@ -4467,7 +4467,7 @@ class WebInterface(object):
             myDB.upsert('ddl_info', vals, ctrlval)
             for isid in issueid_info['issues']:
                 updater.nzblog(isid['issueid'], nzbname, ComicName, id=pack_id, prov='DDL(GetComics)', oneoff=False)
-                updater.foundsearch(ComicID, isid['issueid'], mode='want', provider='DDL(GetComics)')
+                updater.foundsearch(ComicID, isid['issueid'], mode='want_ann' if isid.get('annual') else 'want', provider='DDL(GetComics)')
             try:
                 resolved_link, resolved_type = helpers.resolve_getcomics_dlds(url)
                 if resolved_type == 'GC-Pixel':
@@ -4547,7 +4547,7 @@ class WebInterface(object):
             logger.info('[QUEUE-DIRECT-DDL] Queued direct download for %s (issues %s)' % (ComicName, issue_range))
             for isid in issueid_info['issues']:
                 updater.nzblog(isid['issueid'], nzbname, ComicName, id=pack_id, prov='DDL(GetComics)', oneoff=False)
-                updater.foundsearch(ComicID, isid['issueid'], mode='want', provider='DDL(GetComics)')
+                updater.foundsearch(ComicID, isid['issueid'], mode='want_ann' if isid.get('annual') else 'want', provider='DDL(GetComics)')
         return json.dumps({'status': 'success', 'message': 'Direct download queued for %s (issues %s)' % (ComicName, issue_range)})
     queue_direct_ddl.exposed = True
 
@@ -4897,7 +4897,7 @@ class WebInterface(object):
                                                 isschk = myDB.selectone("SELECT Status FROM annuals WHERE IssueID=?", [isid['issueid']]).fetchone()
                                             if isschk and isschk['Status'] not in ('Downloaded', 'Archived'):
                                                 updater.nzblog(isid['issueid'], nzbname, item['series'], id=item['id'], prov='DDL(GetComics)', oneoff=False)
-                                                updater.foundsearch(item['comicid'], isid['issueid'], mode='want', provider='DDL(GetComics)')
+                                                updater.foundsearch(item['comicid'], isid['issueid'], mode='want_ann' if isid.get('annual') else 'want', provider='DDL(GetComics)')
                                                 marked += 1
                                         except Exception as e:
                                             logger.debug('[DDL-REQUEUE] Could not mark issue %s as Snatched: %s' % (isid.get('issueid'), e))

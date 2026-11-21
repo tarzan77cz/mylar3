@@ -54,7 +54,7 @@ from lib.rarfile import rarfile
 
 import mylar
 from . import logger
-from mylar import db, sabnzbd, nzbget, process, getcomics, getimage
+from mylar import db, sabnzbd, nzbget, process, getcomics, getimage, getcomics_parse
 from mylar.downloaders import mega, pixeldrain, mediafire
 
 
@@ -2448,47 +2448,16 @@ def issue_find_ids(ComicName, ComicID, pack, IssueNumber, pack_id):
 
     issuelist = myDB.select("SELECT * FROM issues WHERE ComicID=?", [ComicID])
 
-    if 'Annual' not in pack:
-        if ',' not in pack:
-            packlist = pack.split(' ')
-            pack = re.sub('#', '', pack).strip()
-        else:
-            packlist = [x.strip() for x in pack.split(',')]
-        plist = []
-        pack_issues = []
-        logger.fdebug('packlist: %s' % packlist)
-        for pl in packlist:
-            pl = re.sub('#', '', pl).strip()
-            if '-' in pl:
-                le_range = list(range(int(pack[:pack.find('-')]),int(pack[pack.find('-')+1:])+1))
-                for x in le_range:
-                    if not [y for y in plist if y == x]:
-                        plist.append(int(x))
-                #logger.fdebug('plist: %s' % plist)
-            else:
-                #logger.fdebug('starting single: %s' % pl)
-                if not [x for x in plist if x == int(pl)]:
-                    #logger.fdebug('single not present')
-                    plist.append(int(pl))
-            #logger.fdebug('plist:%s' % plist)
-
-        for pi in plist:
-            if type(pi) == list:
-                for x in pi:
-                    pack_issues.append(x)
-            else:
-                pack_issues.append(pi)
-
-        pack_issues.sort()
-        annualize = False
-    else:
-        #remove the annuals wording
-        tmp_annuals = pack[pack.find('Annual'):]
-        tmp_ann = re.sub('[annual/annuals/+]', '', tmp_annuals.lower()).strip()
-        tmp_pack = re.sub('[annual/annuals/+]', '', pack.lower()).strip()
-        pack_issues_numbers = re.findall(r'\d+', tmp_pack)
-        pack_issues = list(range(int(pack_issues_numbers[0]),int(pack_issues_numbers[1])+1))
-        annualize = True
+    # '1-5, 7-9', '#1 - 21', '1-50 + Annual 1-3'. Every range is expanded on its own
+    # (the whole pack text used to be sliced, so '1-5, 7-9' failed). Annual numbers
+    # after the word "Annual(s)" are looked up in the annuals table below; a bare
+    # "& Annuals" names no numbers, so no annual is marked for it.
+    pack_issues, annual_issues, annualize = getcomics_parse.split_annual_numbers(pack)
+    logger.fdebug('pack: %s -> issues %s, annuals %s' % (pack, pack_issues, annual_issues))
+    if not pack_issues and not annual_issues:
+        raise ValueError('No issue numbers found in pack range: %s' % pack)
+    if annualize and not annual_issues:
+        logger.fdebug('[%s] Pack mentions annuals without numbers - annuals are not marked as part of it.' % pack)
 
     issues = {}
     issueinfo = []
@@ -2515,6 +2484,27 @@ def issue_find_ids(ComicName, ComicID, pack, IssueNumber, pack_id):
            else:
                ignores.append(iss)
 
+    if annual_issues:
+        # Annuals live in their own table; the issues table never has them.
+        annuallist = myDB.select(
+            "SELECT * FROM annuals WHERE ComicID=? AND (Deleted IS NULL OR Deleted = 0)", [ComicID]
+        )
+        for iss in annual_issues:
+            int_iss = issue_number_parser(str(iss)).asInt
+            for xb in annuallist:
+                if xb['Status'] == 'Downloaded' or xb['Int_IssueNumber'] != int_iss:
+                    continue
+                # An annual-only range ("Annual 1-3") is valid for the annual searched for.
+                if not pack_issues and Int_IssueNumber == int_iss:
+                    valid = True
+                issueinfo.append({'issueid':      xb['IssueID'],
+                                  'int_iss':      int_iss,
+                                  'issuenumber':  xb['Issue_Number'],
+                                  'annual':       True})
+                write_valids.append({'issueid': xb['IssueID'],
+                                     'pack_id': pack_id})
+                break
+
     if ignores:
         logger.info('[%s] These issues already exist in the pack and is already in a Downloaded state. Mark the issue as anything'
                     'other than Wanted if you want the pack to be downloaded.' % ignores)
@@ -2526,12 +2516,13 @@ def issue_find_ids(ComicName, ComicID, pack, IssueNumber, pack_id):
     issues['issues'] = issueinfo
     logger.fdebug('pack_issueids_dont_queue: %s' % mylar.PACK_ISSUEIDS_DONT_QUEUE)
 
-    if len(issues['issues']) == len(pack_issues):
-        logger.fdebug('Complete issue count of %s issues are available within this pack for %s' % (len(pack_issues), ComicName))
+    if len(issues['issues']) == len(pack_issues) + len(annual_issues):
+        logger.fdebug('Complete issue count of %s issues are available within this pack for %s' % (len(issues['issues']), ComicName))
     else:
         logger.fdebug('Issue counts are not complete (not a COMPLETE pack) for %s' % ComicName)
 
     issues['issue_range'] = pack_issues
+    issues['annual_range'] = annual_issues
     issues['valid'] = valid
     return issues
 

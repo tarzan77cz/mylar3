@@ -1503,8 +1503,11 @@ def verification(verified_matches, is_info):
                         prov=is_info['nzbprov'],
                         oneoff=is_info['oneoff'],
                     )
+                    # annuals of the pack are read from the annuals table ('want_ann')
                     updater.foundsearch(
-                        is_info['ComicID'], isid['issueid'], mode=is_info['smode'], provider=is_info['nzbprov']
+                        is_info['ComicID'], isid['issueid'],
+                        mode='want_ann' if isid.get('annual') else is_info['smode'],
+                        provider=is_info['nzbprov']
                     )
                 notify_snatch(
                     sent_to,
