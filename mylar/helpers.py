@@ -2561,7 +2561,7 @@ def get_pack_snatched_issueids(pack_id, comicid=None):
     return issueids
 
 
-def reverse_the_pack_snatch(pack_id, comicid, issueids=None, mark_failed=False, provider='DDL(GetComics)', nzbname=None):
+def reverse_the_pack_snatch(pack_id, comicid, issueids=None, mark_failed=False, provider='DDL(GetComics)', nzbname=None, issue_number=None):
     """Revert pack-snatched issues from Snatched back to Wanted.
 
     When ``issueids`` is None, use in-memory ``PACK_ISSUEIDS_DONT_QUEUE``
@@ -2570,7 +2570,8 @@ def reverse_the_pack_snatch(pack_id, comicid, issueids=None, mark_failed=False, 
 
     Only issues currently in Snatched are reset; Downloaded/Archived are left alone.
     When ``mark_failed`` is True, record the pack release id in the failed table
-    so Failed Download Handling will not snatch the same pack again.
+    so Failed Download Handling will not snatch the same pack again. ``issue_number``
+    marks a single issue: the failed row gets its number (not 'pack') and its IssueID.
     """
     logger.info(
         '[REVERSE UNO] Reversal of issues marked as Snatched via pack download '
@@ -2627,8 +2628,9 @@ def reverse_the_pack_snatch(pack_id, comicid, issueids=None, mark_failed=False, 
                 {
                     'Status': 'Failed',
                     'ComicName': comicname,
-                    'Issue_Number': 'pack',
-                    'IssueID': reverted[0] if reverted else None,
+                    'Issue_Number': issue_number if issue_number is not None else 'pack',
+                    'IssueID': reverted[0] if reverted else (
+                        reverselist[0] if issue_number is not None and reverselist else None),
                     'ComicID': comicid,
                     'DateFailed': now(),
                 },
@@ -2722,6 +2724,49 @@ def reverse_ddl_item_snatch(item, **kwargs):
     """reverse_the_pack_snatch for a DDL queue item: the issues of its section only."""
     return reverse_the_pack_snatch(
         ddl_item_pack_id(item), item['comicid'], issueids=ddl_item_section_issueids(item), **kwargs
+    )
+
+
+def ddl_item_is_single_issue(item):
+    """True for a DDL queue item of one issue (not a pack, not a manual direct download)."""
+    if str(item.get('id') or '').startswith('manual-'):
+        return False
+    packinfo = item.get('packinfo')
+    if isinstance(packinfo, dict) and packinfo.get('pack') is True:
+        return False
+    comicinfo = item.get('comicinfo')
+    try:
+        if comicinfo[0].get('pack') is True:
+            return False
+    except (IndexError, KeyError, TypeError, AttributeError):
+        pass
+    return item.get('issueid') not in (None, '')
+
+
+def release_exhausted_ddl_item(item):
+    """Every host of a DDL item failed: put its issues back to Wanted.
+
+    A single issue goes back to Wanted and its post goes to the failed table, so the next
+    search takes another release (with Failed Download Handling on). A pack reverts the
+    issues of its section, as before.
+    """
+    if not ddl_item_is_single_issue(item):
+        return reverse_ddl_item_snatch(item)
+    issue_number = None
+    nzbname = None
+    try:
+        issue_number = item['comicinfo'][0].get('IssueNumber')
+        nzbname = item['comicinfo'][0].get('nzbtitle')
+    except (IndexError, KeyError, TypeError, AttributeError):
+        pass
+    return reverse_the_pack_snatch(
+        ddl_item_pack_id(item),
+        item['comicid'],
+        issueids=[item['issueid']],
+        mark_failed=True,
+        provider='DDL(GetComics)',
+        nzbname=nzbname or item.get('series'),
+        issue_number=str(issue_number) if issue_number is not None else '',
     )
 
 
@@ -4456,7 +4501,7 @@ def ddl_downloader(queue):
                                         failed_links = link_type_failure.get(item['id'], [item.get('link_type', 'Unknown')])
                                         logger.info('[REDO] Exhausted all available links [%s] for issueid %s and was not able to download anything' % (failed_links, item['issueid']))
                                         myDB.upsert('ddl_info', {'status': 'Failed', 'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}, ctrlval)
-                                        reverse_ddl_item_snatch(item)
+                                        release_exhausted_ddl_item(item)
                                         link_type_failure.pop(item['id'], None)
                                         ddl_cleanup(item['id'])
                                         try:
@@ -4483,8 +4528,9 @@ def ddl_downloader(queue):
                             nval = {'status':  'Failed',
                                     'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}
                             myDB.upsert('ddl_info', nval, ctrlval)
-                            #undo all snatched items, to previous status via item['id'] - this will be set to Skipped currently regardless of previous status
-                            reverse_ddl_item_snatch(item)
+                            # Back to Wanted: the issues of a pack section, or a single issue
+                            # (its post goes to the failed table so the next search takes another).
+                            release_exhausted_ddl_item(item)
                             try:
                                 link_type_failure.pop(item['id'])
                             except KeyError:
