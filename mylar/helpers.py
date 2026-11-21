@@ -2469,6 +2469,7 @@ def issue_find_ids(ComicName, ComicID, pack, IssueNumber, pack_id):
     ignores = []
     for iss in pack_issues:
        int_iss = issue_number_parser(str(iss)).asInt
+       found = False
        for xb in issuelist:
            if xb['Status'] != 'Downloaded':
                if xb['Int_IssueNumber'] == int_iss:
@@ -2480,9 +2481,12 @@ def issue_find_ids(ComicName, ComicID, pack, IssueNumber, pack_id):
 
                    write_valids.append({'issueid': xb['IssueID'],
                                         'pack_id': pack_id})
+                   found = True
                    break
-           else:
-               ignores.append(iss)
+       # Only for the log: pack numbers skipped because their issue is Downloaded (the
+       # else branch used to add the current number for every Downloaded issue of the series).
+       if not found and any(xb['Status'] == 'Downloaded' and xb['Int_IssueNumber'] == int_iss for xb in issuelist):
+           ignores.append(iss)
 
     if annual_issues:
         # Annuals live in their own table; the issues table never has them.

@@ -20,6 +20,26 @@ def test_direct_ddl_range_is_valid_with_its_check_issue(series, issue_range):
     assert info['valid'] is True
 
 
+def test_ignores_lists_each_downloaded_issue_once(series, monkeypatch):
+    series.set_status(['I1', 'I2'], 'Downloaded')
+    messages = []
+    monkeypatch.setattr(helpers.logger, 'info', lambda msg, *a, **k: messages.append(msg))
+    info = helpers.issue_find_ids('Batman', 'C1', '1-5', '3', '9')
+    assert [x['issueid'] for x in info['issues']] == ['I3', 'I4', 'I5']
+    assert info['valid'] is True
+    logged = [m for m in messages if 'already in a Downloaded state' in m]
+    assert len(logged) == 1
+    assert logged[0].startswith('[[1, 2]]')
+
+
+def test_ignores_not_logged_without_downloaded_issues(series, monkeypatch):
+    messages = []
+    monkeypatch.setattr(helpers.logger, 'info', lambda msg, *a, **k: messages.append(msg))
+    info = helpers.issue_find_ids('Batman', 'C1', '1-5', '3', '9')
+    assert [x['issueid'] for x in info['issues']] == ['I1', 'I2', 'I3', 'I4', 'I5']
+    assert not [m for m in messages if 'already in a Downloaded state' in m]
+
+
 def test_old_check_issue_rejected_annual_ranges(series):
     # queue_direct_ddl used the text before the first dash ('Annual 1'): "No Wanted issues".
     assert helpers.issue_find_ids('Batman', 'C1', 'Annual 1-3', 'Annual 1', 'manual-1')['valid'] is False
