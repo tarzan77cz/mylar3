@@ -2660,6 +2660,85 @@ def reverse_the_pack_snatch(pack_id, comicid, issueids=None, mark_failed=False, 
     return reverted
 
 
+def ddl_item_pack_id(item):
+    """Post id a DDL queue item was snatched under (nzblog, PACK_ISSUEIDS_DONT_QUEUE).
+
+    Sections of a multi-section post are queued as '<post id>-N' and carry the post id in
+    'pack_id'. Items without it (restored from ddl_info, TPB extras, manual-...) use their id.
+    """
+    pack_id = item.get('pack_id')
+    if pack_id in (None, ''):
+        return item['id']
+    return pack_id
+
+
+def pack_section_issueids(packinfo, section_issues, section_annual=False):
+    """IssueIDs of a pack that belong to one post section, or None for the whole pack.
+
+    ``section_issues`` are the issue numbers of the section header (ints); annuals of the
+    pack belong to the section only when the section itself is an annual one.
+    """
+    if not section_issues:
+        return None
+    try:
+        pack_issues = packinfo['pack_issuelist']['issues']
+    except (KeyError, TypeError):
+        return None
+    numbers = set(issue_number_parser(str(n)).asInt for n in section_issues)
+    issueids = []
+    for isid in pack_issues or []:
+        if bool(isid.get('annual')) != bool(section_annual):
+            continue
+        if isid.get('int_iss') in numbers:
+            issueids.append(isid['issueid'])
+    return issueids
+
+
+def ddl_item_section_issueids(item):
+    """IssueIDs a DDL queue item downloads when it is one section of a multi-section pack.
+
+    None when the item is the whole pack (one section, no section numbers, no pack info).
+    """
+    if ddl_item_pack_id(item) == item['id']:
+        return None
+    return pack_section_issueids(item.get('packinfo'), item.get('section_issues'), item.get('section_annual'))
+
+
+def ddl_download_info(item):
+    """download_info handed from ddl_downloader to post-processing.
+
+    'id' stays the queue item id; 'pack_id' and 'section_issueids' (None = whole pack)
+    let the pack self-heal find the snatch in nzblog and revert only this section.
+    """
+    return {
+        'provider': 'DDL',
+        'id': item['id'],
+        'pack_id': ddl_item_pack_id(item),
+        'section_issueids': ddl_item_section_issueids(item),
+    }
+
+
+def reverse_ddl_item_snatch(item, **kwargs):
+    """reverse_the_pack_snatch for a DDL queue item: the issues of its section only."""
+    return reverse_the_pack_snatch(
+        ddl_item_pack_id(item), item['comicid'], issueids=ddl_item_section_issueids(item), **kwargs
+    )
+
+
+def pack_queued_for_download(issueid):
+    """True when the pack that holds ``issueid`` has an item in DDL_QUEUED.
+
+    PACK_ISSUEIDS_DONT_QUEUE maps to the post id; the queued items of a multi-section post
+    are '<post id>-N'.
+    """
+    pack_id = mylar.PACK_ISSUEIDS_DONT_QUEUE.get(issueid)
+    if pack_id in (None, ''):
+        return False
+    pack_id = str(pack_id)
+    prefix = pack_id + '-'
+    return any(str(q) == pack_id or str(q).startswith(prefix) for q in list(mylar.DDL_QUEUED))
+
+
 def conversion(value):
     if type(value) == str:
         try:
@@ -4150,7 +4229,7 @@ def ddl_downloader(queue):
                                             'comicid':      item['comicid'],
                                             'apicall':      True,
                                             'ddl':          True,
-                                            'download_info': {'provider': 'DDL', 'id': item['id']}})
+                                            'download_info': ddl_download_info(item)})
                     else:
                         logger.info('%s successfully downloaded - now initiating post-processing for %s' % (ddzstat['filename'], ddzstat['path']))
                         mylar.PP_QUEUE.put({'nzb_name':     ddzstat['filename'],
@@ -4160,7 +4239,7 @@ def ddl_downloader(queue):
                                             'comicid':      item['comicid'],
                                             'apicall':      True,
                                             'ddl':          True,
-                                            'download_info': {'provider': 'DDL', 'id': item['id']}})
+                                            'download_info': ddl_download_info(item)})
                     mylar.PP_DDL_IDS.add(item['id'])
                 except Exception as e:
                     logger.error('process error: %s [%s]' %(e, ddzstat))
@@ -4183,8 +4262,11 @@ def ddl_downloader(queue):
                     if (item.get('comicinfo') and len(item['comicinfo']) > 0 and
                             item['comicinfo'][0].get('pack') is True):
                         logger.fdebug('[PACK DETECTION] Attempting to remove issueids from the pack dont-queue list')
+                        # A finished sub-pack '<post id>-N' clears only its own issues.
+                        done_pack_id = ddl_item_pack_id(item)
+                        done_issueids = ddl_item_section_issueids(item)
                         for x,y in dict(mylar.PACK_ISSUEIDS_DONT_QUEUE).items():
-                            if y == item['id']:
+                            if y == done_pack_id and (done_issueids is None or x in done_issueids):
                                 pck_cnt +=1
                                 del mylar.PACK_ISSUEIDS_DONT_QUEUE[x]
                         logger.fdebug('Successfully removed %s issueids from pack queue list as download is completed.' % pck_cnt)
@@ -4294,7 +4376,7 @@ def ddl_downloader(queue):
                                                 'comicid': item['comicid'],
                                                 'apicall': True,
                                                 'ddl': True,
-                                                'download_info': {'provider': 'DDL', 'id': item['id']},
+                                                'download_info': ddl_download_info(item),
                                             })
                                             mylar.PP_DDL_IDS.add(item['id'])
                                             logger.info('[DDL-DOWNLOADER] Partial extract folder found; sent to post-processing: %s' % extracted_path)
@@ -4312,7 +4394,7 @@ def ddl_downloader(queue):
                             nval = {'status': 'Failed', 'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}
                             myDB.upsert('ddl_info', nval, ctrlval)
                             if item.get('pack') or (item.get('id') and str(item['id']).startswith('manual-')):
-                                reverse_the_pack_snatch(item['id'], item['comicid'])
+                                reverse_ddl_item_snatch(item)
                             ddl_cleanup(item['id'])
                             try:
                                 if item['id'] in mylar.DDL_QUEUED:
@@ -4327,7 +4409,7 @@ def ddl_downloader(queue):
                                 nval = {'status': 'Failed', 'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}
                                 myDB.upsert('ddl_info', nval, ctrlval)
                                 if item.get('pack') or (item.get('id') and str(item['id']).startswith('manual-')):
-                                    reverse_the_pack_snatch(item['id'], item['comicid'])
+                                    reverse_ddl_item_snatch(item)
                                 ddl_cleanup(item['id'])
                                 try:
                                     if item['id'] in mylar.DDL_QUEUED:
@@ -4342,14 +4424,14 @@ def ddl_downloader(queue):
                                 logger.fdebug('[%s] link_type_failure: %s' % (item['id'], link_type_failure))
                                 try:
                                     ggc = getcomics.GC(comicid=item['comicid'], issueid=item['issueid'], oneoff=item['oneoff'])
-                                    redo = ggc.parse_downloadresults(item['id'], item['mainlink'], item['comicinfo'], item['packinfo'], link_type_failure[item['id']], section=item.get('section'))
+                                    redo = ggc.parse_downloadresults(item['id'], item['mainlink'], item['comicinfo'], item['packinfo'], link_type_failure[item['id']], section=item.get('section'), pack_id=item.get('pack_id'))
                                     if not redo or redo.get('success') is not True:
                                         # Every host of the post has failed (or the page has no usable
                                         # link left): close the item instead of leaving it Downloading.
                                         failed_links = link_type_failure.get(item['id'], [item.get('link_type', 'Unknown')])
                                         logger.info('[REDO] Exhausted all available links [%s] for issueid %s and was not able to download anything' % (failed_links, item['issueid']))
                                         myDB.upsert('ddl_info', {'status': 'Failed', 'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}, ctrlval)
-                                        reverse_the_pack_snatch(item['id'], item['comicid'])
+                                        reverse_ddl_item_snatch(item)
                                         link_type_failure.pop(item['id'], None)
                                         ddl_cleanup(item['id'])
                                         try:
@@ -4362,7 +4444,7 @@ def ddl_downloader(queue):
                                     nval = {'status': 'Failed', 'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}
                                     myDB.upsert('ddl_info', nval, ctrlval)
                                     if item.get('pack') or (item.get('id') and str(item['id']).startswith('manual-')):
-                                        reverse_the_pack_snatch(item['id'], item['comicid'])
+                                        reverse_ddl_item_snatch(item)
                                     ddl_cleanup(item['id'])
                                     try:
                                         if item['id'] in mylar.DDL_QUEUED:
@@ -4377,7 +4459,7 @@ def ddl_downloader(queue):
                                     'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}
                             myDB.upsert('ddl_info', nval, ctrlval)
                             #undo all snatched items, to previous status via item['id'] - this will be set to Skipped currently regardless of previous status
-                            reverse_the_pack_snatch(item['id'], item['comicid'])
+                            reverse_ddl_item_snatch(item)
                             try:
                                 link_type_failure.pop(item['id'])
                             except KeyError:
@@ -4637,10 +4719,9 @@ def search_queue(queue):
             gumbo_line = True
             #logger.fdebug('pack_issueids_dont_queue: %s' % mylar.PACK_ISSUEIDS_DONT_QUEUE)
             #logger.fdebug('ddl_queued: %s' % mylar.DDL_QUEUED)
-            if item['issueid'] in mylar.PACK_ISSUEIDS_DONT_QUEUE:
-                if mylar.PACK_ISSUEIDS_DONT_QUEUE[item['issueid']] in mylar.DDL_QUEUED:
-                    logger.fdebug('[SEARCH-QUEUE-PACK-DETECTION] %s already queued to download via pack...Ignoring' % item['issueid'])
-                    gumbo_line = False
+            if pack_queued_for_download(item['issueid']):
+                logger.fdebug('[SEARCH-QUEUE-PACK-DETECTION] %s already queued to download via pack...Ignoring' % item['issueid'])
+                gumbo_line = False
 
             if gumbo_line:
                 if not item.get('manual'):

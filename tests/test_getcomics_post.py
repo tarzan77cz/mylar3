@@ -55,6 +55,23 @@ def test_pack_queues_every_matching_subpack(gc_env):
     assert [q['series'] for q in queued] == ['Tomahawk #1 – 70', 'Tomahawk #71 – 140']
 
 
+def test_subpacks_carry_the_pack_id_and_their_issues(gc_env):
+    # Review R2: PACK_ISSUEIDS_DONT_QUEUE and nzblog hold the post id '1', not '1-1' / '1-2'.
+    packinfo = {'pack': True, 'pack_numbers': '1 - 140',
+                'pack_issuelist': {'issue_range': list(range(1, 141)), 'issues': [], 'valid': True}}
+    comicinfo = [dict(_single('1')[0], pack=True)]
+    res, queued = _run(gc_env, read_fixture('post_tomahawk_subpacks.html'), comicinfo, packinfo)
+    assert [q['pack_id'] for q in queued] == ['1', '1']
+    assert [q['section_issues'] for q in queued] == [list(range(1, 71)), list(range(71, 141))]
+    assert [q['section_annual'] for q in queued] == [False, False]
+
+
+def test_single_issue_item_has_its_own_pack_id(gc_env):
+    res, queued = _run(gc_env, read_fixture('post_tomahawk_subpacks.html'), _single('75'))
+    assert queued[0]['pack_id'] == '1'
+    assert queued[0]['id'] == '1'
+
+
 def test_retry_of_one_section_keeps_its_id(gc_env):
     packinfo = {'pack': True, 'pack_numbers': '1 - 140',
                 'pack_issuelist': {'issue_range': list(range(1, 141)), 'issues': [], 'valid': True}}

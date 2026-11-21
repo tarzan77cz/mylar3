@@ -619,12 +619,16 @@ class GC(object):
 
         return resultlist, next_page
 
-    def parse_downloadresults(self, id, mainlink, comicinfo=None, packinfo=None, link_type_failure=None, section=None):
+    def parse_downloadresults(self, id, mainlink, comicinfo=None, packinfo=None, link_type_failure=None, section=None, pack_id=None):
         """Gather the download buttons of a post and queue the right ones.
 
         ``section`` is the index of the post section to use when a multi-section post is
-        retried with an alternate link (the queue item carries it).
+        retried with an alternate link (the queue item carries it). ``pack_id`` is the post
+        id the snatch was logged under (nzblog, PACK_ISSUEIDS_DONT_QUEUE) when ``id`` is a
+        sub-pack id like '<post id>-2'.
         """
+        if pack_id in (None, ''):
+            pack_id = id
         try:
             booktype = comicinfo[0]['booktype']
         except Exception:
@@ -1026,6 +1030,9 @@ class GC(object):
                 pack,
                 include_extras=(n == len(chosen) - 1),
                 section_index=gi if (multi or section is not None) else None,
+                pack_id=pack_id,
+                section_issues=groups[gi]['numbers'],
+                section_annual=getcomics_parse.section_is_annual(groups[gi]['series']),
             )
             if result is None or (section_result.get('success') is True and result.get('success') is not True):
                 result = section_result
@@ -1058,10 +1065,13 @@ class GC(object):
                 break
         return wanted, wanted_year
 
-    def _queue_section(self, id, mainlink, comicinfo, packinfo, link_type_failure, valid_links, soup, booktype, pack, include_extras=True, section_index=None):
+    def _queue_section(self, id, mainlink, comicinfo, packinfo, link_type_failure, valid_links, soup, booktype, pack, include_extras=True, section_index=None, pack_id=None, section_issues=None, section_annual=False):
         """Pick the button of one download section by DDL_PRIORITY_ORDER and queue it.
 
         ``valid_links`` maps a variant ('normal', 'HD-Upscaled', ...) to its section.
+        ``pack_id`` (post id), ``section_issues`` (issue numbers of the section header) and
+        ``section_annual`` go into the queue item, so a failed or finished sub-pack touches
+        only its own issues of the pack.
         """
         myDB = db.DBConnection()
         tmp_links = []
@@ -1592,8 +1602,7 @@ class GC(object):
                 # (it will get renamed upon completion anyways)
                 #tmp_filename = comicinfo[0]['nzbtitle']
 
-            mylar.DDL_QUEUE.put(
-                {
+            queue_item = {
                     'link': x['links'],
                     'mainlink': mainlink,
                     'series': x['series'],
@@ -1612,8 +1621,14 @@ class GC(object):
                     'resume': None,
                     # post section of a multi-section page, for the alternate-link retry
                     'section': section_index,
-                }
-            )
+            }
+            if x is link:
+                # The section's own download (not an extra TPB list item): the snatch is
+                # logged under the post id, the queue id may be '<post id>-N'.
+                queue_item['pack_id'] = pack_id if pack_id not in (None, '') else mod_id
+                queue_item['section_issues'] = list(section_issues or [])
+                queue_item['section_annual'] = bool(section_annual)
+            mylar.DDL_QUEUE.put(queue_item)
             cnt += 1
 
         return {'success': True, 'site': link_type}

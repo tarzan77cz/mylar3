@@ -63,6 +63,14 @@ hostitelská cesta `/share/...`; pytest se doinstaluje jen do dočasného kontej
 docker run --rm -e PYTHONDONTWRITEBYTECODE=1 -v /share/Tarzan/Cursor/Mylar:/src:ro mylar3:local sh -c "pip install -q pytest >/dev/null 2>&1; cd /src && python3 -m pytest -q -p no:cacheprovider tests"
 ```
 
+Druhá sada `tests_db/` importuje skutečný balík `mylar` (`helpers`, `db`, smyčku `ddl_downloader`)
+nad dočasnou SQLite (`mylar.DATA_DIR` v tempu, žádná síť ani živá DB). Se stuby z `tests/` v jednom
+procesu nepoběží, pouštěj ji druhým příkazem:
+
+```sh
+docker run --rm -e PYTHONDONTWRITEBYTECODE=1 -v /share/Tarzan/Cursor/Mylar:/src:ro mylar3:local sh -c "pip install -q pytest >/dev/null 2>&1; cd /src && python3 -m pytest -q -p no:cacheprovider tests_db"
+```
+
 Před nasazením zkontroluj i syntaxi změněných souborů:
 
 ```sh

@@ -114,12 +114,18 @@ class PostProcessor(object):
         ):
             return []
 
-        pack_id = self.download_info.get('id')
+        # nzblog holds the post id; a sub-pack '<post id>-N' carries it in 'pack_id' and
+        # reverts only the issues of its own section (None = the whole pack).
+        pack_id = self.download_info.get('pack_id') or self.download_info.get('id')
+        section_issueids = self.download_info.get('section_issueids')
         provider = self.download_info.get('provider') or 'DDL(GetComics)'
         if provider == 'DDL':
             provider = 'DDL(GetComics)'
 
         issueids = helpers.get_pack_snatched_issueids(pack_id, comicid=self.comicid)
+        if section_issueids is not None:
+            section_set = set(section_issueids)
+            issueids = [x for x in issueids if x in section_set]
         if not issueids:
             logger.fdebug(
                 '%s[PACK-PP-SELF-HEAL] No leftover Snatched issues for pack %s (%s)'

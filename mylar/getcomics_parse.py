@@ -157,6 +157,15 @@ def section_issue_numbers(series):
     return issue_numbers(m.group(1)) if m else []
 
 
+def section_is_annual(series):
+    """True when a section header numbers annuals: 'Batman Annual #1 - 3', not
+    'Batman #1 - 50 + Annual 1 - 3' (its '#' numbers are regular issues)."""
+    text = str(series or '')
+    hash_at = text.find('#')
+    head = text if hash_at < 0 else text[:hash_at]
+    return bool(re.search(r'\bannuals?\b', head, re.IGNORECASE))
+
+
 def year_bounds(text):
     """(first, last) year named in a text ('1950-1972', '1952-1966 + 1996-2013'), else None."""
     years = [int(y) for y in re.findall(r'(?<!\d)(?:19|20)\d{2}(?!\d)', str(text or ''))]
