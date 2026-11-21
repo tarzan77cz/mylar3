@@ -111,6 +111,93 @@ def number_start_before(title, dash):
     return j + 1
 
 
+def link_type_for_site(site):
+    """Queue link_type of a GetComics button label ('download now', 'mirror download', 'mega link' ...)."""
+    low = re.sub(r'\blink\b', '', str(site or '').lower()).strip()
+    if low in ('download now', 'main server'):
+        return 'GC-Main'
+    if low == 'mirror download':
+        return 'GC-Mirror'
+    if 'mega' in low:
+        return 'GC-Mega'
+    if 'pixel' in low:
+        return 'GC-Pixel'
+    if 'mediafire' in low:
+        return 'GC-Media'
+    return None
+
+
+def site_failed(site, link_type_failure):
+    """True when the button's host already failed for this download.
+
+    A failed GC-Main excludes only "Download Now", not "Mirror Download" (the old check
+    matched every label containing "download").
+    """
+    if not link_type_failure:
+        return False
+    link_type = link_type_for_site(site)
+    if link_type is None:
+        return False
+    failed = set(str(x).lower() for x in link_type_failure if x)
+    return link_type.lower() in failed
+
+
+def section_issue_numbers(series):
+    """Issue numbers a section header names: 'Tomahawk #71 - 140' -> 71..140,
+    'Journey Into Mystery #1 - 125 + 503 - 655' -> 1..125 and 503..655. [] when unknown."""
+    m = re.search(r'#\s*(\d[\d\s,+\-]*)', normalize_dashes(series))
+    return issue_numbers(m.group(1)) if m else []
+
+
+def year_bounds(text):
+    """(first, last) year named in a text ('1950-1972', '1952-1966 + 1996-2013'), else None."""
+    years = [int(y) for y in re.findall(r'(?<!\d)(?:19|20)\d{2}(?!\d)', str(text or ''))]
+    return (min(years), max(years)) if years else None
+
+
+def leading_int(value):
+    """15 for '15', '15.1' or '15AU'; None when the value does not start with digits."""
+    m = re.match(r'^\s*#?\s*(\d+)', str(value or ''))
+    return int(m.group(1)) if m else None
+
+
+def choose_sections(sections, wanted=None, year=None, pack=False):
+    """Indexes of the post sections to download.
+
+    ``sections`` is a list of dicts with ``numbers`` (issue numbers of the header) and
+    ``years`` (year_bounds of the header), in page order. A post can hold sub-packs
+    ("#1 - 70", "#71 - 140"), volumes or two editions of one issue.
+
+    - Sections that contain a wanted issue are kept; then a section whose years include
+      ``year``, when that narrows the choice.
+    - Sections with the same issue numbers are alternatives: the last one is kept
+      (Mylar used to download the last section of a page).
+    - A single issue gets one section. A pack gets every remaining section.
+    """
+    if len(sections) <= 1:
+        return list(range(len(sections)))
+    wanted = set(wanted or [])
+    chosen = list(range(len(sections)))
+    if wanted:
+        hits = [i for i in chosen if wanted & set(sections[i]['numbers'])]
+        if hits:
+            chosen = hits
+    if year and len(chosen) > 1:
+        in_year = [
+            i for i in chosen
+            if sections[i]['years'] and sections[i]['years'][0] <= year <= sections[i]['years'][1]
+        ]
+        if in_year:
+            chosen = in_year
+    by_numbers = {}
+    for i in chosen:
+        by_numbers[tuple(sections[i]['numbers'])] = i
+    chosen = sorted(by_numbers.values())
+    if not pack:
+        return [chosen[-1]]
+    return chosen
+
+
 def is_year_span(text):
     """'1941-1944 ...' / '1941 - 1944': a span of years, not an issue range."""
     return bool(re.match(r'^(?:19|20)\d{2}\s*-\s*(?:19|20)\d{2}(?!\d)', str(text or '')))

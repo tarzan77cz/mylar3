@@ -619,7 +619,12 @@ class GC(object):
 
         return resultlist, next_page
 
-    def parse_downloadresults(self, id, mainlink, comicinfo=None, packinfo=None, link_type_failure=None):
+    def parse_downloadresults(self, id, mainlink, comicinfo=None, packinfo=None, link_type_failure=None, section=None):
+        """Gather the download buttons of a post and queue the right ones.
+
+        ``section`` is the index of the post section to use when a multi-section post is
+        retried with an alternate link (the queue item carries it).
+        """
         try:
             booktype = comicinfo[0]['booktype']
         except Exception:
@@ -638,7 +643,6 @@ class GC(object):
             except Exception as e:
                 pack = False
 
-        myDB = db.DBConnection()
         series = None
         year = None
         size = None
@@ -652,12 +656,26 @@ class GC(object):
         soup = BeautifulSoup(open(title + '.html', encoding='utf-8'), 'html.parser')
 
         i = 0
-        possible_more = None
-        valid_links = {}
-        multiple_links = None
+        # A post can have several download sections, each starting at a centred
+        # "Language | Year | Size" header with its own buttons: one per HD/SD/upscaled
+        # variant, one per sub-pack ("#1 - 70", "#71 - 140"), volume or edition.
+        # Each section: {'variant', 'series', 'year', 'size', 'links'}, in page order.
+        sections = []
+        current = None
         gather_links = []
         count_bees = 0
         looped_thru_once = True
+
+        def open_section(variant, section_series):
+            new_section = {'variant': variant, 'series': section_series, 'links': []}
+            sections.append(new_section)
+            return new_section
+
+        def last_section(variant):
+            for s in reversed(sections):
+                if s['variant'] == variant:
+                    return s
+            return None
 
         beeswax = soup.findAll("p", {"style": "text-align: center;"})
         logger.info('[DDL-GATHERER-OF-LINKAGE] Now compiling release information & available links...')
@@ -669,7 +687,7 @@ class GC(object):
                 linkage = f.find("div", {"class": "aio-pulse"})
             except Exception as e:
                 if looped_thru_once is False:
-                    valid_links[multiple_links].update({'links': gather_links})
+                    current['links'] = gather_links
                 break
 
             #logger.fdebug('linkage: %s' % linkage)
@@ -677,138 +695,115 @@ class GC(object):
                 linkage_test = f.text.strip()
                 if 'support and donation' in linkage_test:
                     if looped_thru_once is False:
-                        valid_links[multiple_links].update({'links': gather_links})
+                        current['links'] = gather_links
                     #logger.fdebug('detected end of links - breaking out here...')
                     break
 
-                if looped_thru_once and all(
+                is_header = all(
                     [
                      'Language' in linkage_test,
                      'Year' in linkage_test,
                      'Size' in linkage_test,
                     ]
-                ):
+                )
+                if is_header and looped_thru_once is False:
+                    # Next section without a "Read Online" button in between (sub-packs,
+                    # volumes, editions): close the open one instead of merging them.
+                    current['links'] = gather_links
+                    gather_links = []
+                    looped_thru_once = True
+                    i = 0
+                    series = None
+
+                if looped_thru_once and is_header:
                     #logger.fdebug('detected headers of title - ignoring this portion...')
                     while True:
                         prev_option = option_find
                         option_find = option_find.findNext(text=True)
+                        if option_find is None:
+                            if series is not None:
+                                looped_thru_once = False
+                            break
                         if (i == 0 and series is None):
                             series = option_find
                             #logger.fdebug('series: %s' % series)
                             if 'upscaled' in series.lower():
-                                valid_links['HD-Upscaled'] = {'series': re.sub(r'\(?\s*hd-upscaled\s*\)?', '', series, flags=re.IGNORECASE).strip()}
-                                multiple_links = 'HD-Upscaled'
+                                current = open_section('HD-Upscaled', re.sub(r'\(?\s*hd-upscaled\s*\)?', '', series, flags=re.IGNORECASE).strip())
                             elif 'sd-digital' in series.lower():
-                                valid_links['SD-Digital'] = {'series': re.sub(r'\(?\s*sd-digital\s*\)?', '', series, flags=re.IGNORECASE).strip()}
-                                multiple_links = 'SD-Digital'
+                                current = open_section('SD-Digital', re.sub(r'\(?\s*sd-digital\s*\)?', '', series, flags=re.IGNORECASE).strip())
                             elif 'hd-digital' in series.lower():
-                                valid_links['HD-Digital'] = {'series': re.sub(r'\(?\s*hd-digital\s*\)?', '', series, flags=re.IGNORECASE).strip()}
-                                multiple_links = 'HD-Digital'
+                                current = open_section('HD-Digital', re.sub(r'\(?\s*hd-digital\s*\)?', '', series, flags=re.IGNORECASE).strip())
                             else:
                                 # if no distinction btwn HD/SD and it's just one section...
-                                valid_links['normal'] = {'series': series}
-                                multiple_links = 'normal'
-                            #logger.fdebug('valid_links : %s' % (valid_links))
+                                current = open_section('normal', series)
                         elif 'Year' in option_find:
                             year = option_find.findNext(text=True)
-                            year = re.sub(r'\|', '', year).strip()
-                            if any(
-                                    [
-                                        multiple_links == 'HD-Upscaled',
-                                        multiple_links == 'SD-Digital',
-                                        multiple_links == 'HD-Digital'
-                                    ]
-                            ):
-                                valid_links[multiple_links].update({'year': year})
-                                #logger.fdebug('valid_links [%s] : %s' % (multiple_links, valid_links))
+                            year = re.sub(r'\|', '', year or '').strip()
+                            current['year'] = year
                         else:
                             if 'Size' in prev_option:
                                 size = option_find  # .findNext(text=True)
-                                possible_more = f.next_sibling
-                                if any(
-                                        [
-                                            multiple_links == 'HD-Upscaled',
-                                            multiple_links == 'SD-Digital',
-                                            multiple_links == 'HD-Digital'
-                                        ]
-                                ):
-                                    valid_links[multiple_links].update({'size': size})
-                                    #logger.fdebug('valid_links [%s] : %s' % (multiple_links, valid_links))
-
+                                current['size'] = size
                                 looped_thru_once = False
                                 break
                         i += 1
 
             else:
                 lk = f.find('a')
+                lk_title = (lk.get('title') or '') if lk is not None else ''
                 #logger.fdebug('lk: %s' % lk)
-                #logger.fdebug('looped_thru_once: %s / lk[title]: %s' % (looped_thru_once, lk['title']))
-                if looped_thru_once is False and lk['title'] == 'Read Online':
+                #logger.fdebug('looped_thru_once: %s / lk[title]: %s' % (looped_thru_once, lk_title))
+                if looped_thru_once is False and lk_title == 'Read Online':
                     #logger.fdebug('read online section discovered...bypassing and ignoring...')
-                    valid_links[multiple_links].update({'links': gather_links})
+                    current['links'] = gather_links
                     looped_thru_once = True
                     gather_links = []
                     i = 0
                     series = None
-                else:
-                    t_site = re.sub('link', '', lk['title'].lower()).strip()
-                    ltf = False
-                    if link_type_failure is not None:
-                        if [
-                            True
-                            for tst in link_type_failure
-                            if t_site[:4].lower() in tst.lower()
-                            or all(["main" in tst.lower(), "download" in t_site.lower()])
-                            or all(["mirror" in tst.lower(), "mirror" in t_site.lower()])
-                        ]:
-                            logger.fdebug('[REDO-FAILURE-DETECTION] detected previous invalid link for %s - ignoring this result'
-                                        ' and seeing if anything else can be downloaded.' % t_site)
-                            ltf = True
-
-                    if not ltf:
-                        if 'sh.st' not in lk['href']:
-                            gather_links.append({
-                                 "series": series,
-                                 "site": t_site,
-                                 "year": year,
-                                 "issues": None,
-                                 "size": size,
-                                 "links": lk['href'],
-                                 "pack": pack
-                            })
-                            #logger.fdebug('gather_links so far: %s' % gather_links)
+                elif lk is not None and lk.get('href'):
+                    t_site = re.sub('link', '', lk_title.lower()).strip()
+                    if getcomics_parse.site_failed(t_site, link_type_failure):
+                        logger.fdebug('[REDO-FAILURE-DETECTION] detected previous invalid link for %s - ignoring this result'
+                                    ' and seeing if anything else can be downloaded.' % t_site)
+                    elif 'sh.st' not in lk['href']:
+                        gather_links.append({
+                             "series": series,
+                             "site": t_site,
+                             "year": year,
+                             "issues": None,
+                             "size": size,
+                             "links": lk['href'],
+                             "pack": pack
+                        })
+                        #logger.fdebug('gather_links so far: %s' % gather_links)
             count_bees +=1
 
         #logger.fdebug('final valid_links: %s' % (valid_links))
         
         # Fallback: If no links were found in <p> tags, try to find <div class="aio-pulse"> directly in document
-        links_found_in_paragraphs = False
-        for k, y in valid_links.items():
-            if 'links' in y and len(y['links']) > 0:
-                links_found_in_paragraphs = True
-                break
-        
+        links_found_in_paragraphs = any(len(s['links']) > 0 for s in sections)
+
         if not links_found_in_paragraphs:
             logger.info('[DDL-GATHERER-OF-LINKAGE] No links found in <p> tags, trying fallback: searching for <div class="aio-pulse"> directly in document...')
             # Find all <div class="aio-pulse"> directly in document
             aio_pulse_divs = soup.findAll("div", {"class": "aio-pulse"})
             
             if aio_pulse_divs:
-                # Try to get series/year/size from valid_links if available, otherwise use defaults
+                # Try to get series/year/size from the sections if available, otherwise use defaults
                 fallback_series = None
                 fallback_year = None
                 fallback_size = None
                 fallback_multiple_links = 'normal'
-                
-                # Extract info from valid_links if available
-                for k, y in valid_links.items():
-                    if 'series' in y:
-                        fallback_series = y['series']
-                        fallback_multiple_links = k
-                    if 'year' in y:
-                        fallback_year = y['year']
-                    if 'size' in y:
-                        fallback_size = y['size']
+
+                # Extract info from the sections if available
+                for s in sections:
+                    if s.get('series'):
+                        fallback_series = s['series']
+                        fallback_multiple_links = s['variant']
+                    if s.get('year'):
+                        fallback_year = s['year']
+                    if s.get('size'):
+                        fallback_size = s['size']
                 
                 # If no info found in valid_links, try to extract from first <p> tag with metadata
                 if fallback_series is None:
@@ -860,34 +855,22 @@ class GC(object):
                         t_site = re.sub('link', '', lk.get('title', '').lower()).strip()
                         if not t_site:
                             continue
-                        
-                        ltf = False
-                        if link_type_failure is not None:
-                            if [
-                                True
-                                for tst in link_type_failure
-                                if t_site[:4].lower() in tst.lower()
-                                or all(["main" in tst.lower(), "download" in t_site.lower()])
-                                or all(["mirror" in tst.lower(), "mirror" in t_site.lower()])
-                            ]:
-                                logger.fdebug('[REDO-FAILURE-DETECTION] detected previous invalid link for %s - ignoring this result'
-                                            ' and seeing if anything else can be downloaded.' % t_site)
-                                ltf = True
-                        
-                        if not ltf:
-                            # Initialize valid_links entry if needed
-                            if fallback_multiple_links not in valid_links:
-                                valid_links[fallback_multiple_links] = {}
-                            if 'series' not in valid_links[fallback_multiple_links] and fallback_series:
-                                valid_links[fallback_multiple_links]['series'] = fallback_series
-                            if 'year' not in valid_links[fallback_multiple_links] and fallback_year:
-                                valid_links[fallback_multiple_links]['year'] = fallback_year
-                            if 'size' not in valid_links[fallback_multiple_links] and fallback_size:
-                                valid_links[fallback_multiple_links]['size'] = fallback_size
-                            if 'links' not in valid_links[fallback_multiple_links]:
-                                valid_links[fallback_multiple_links]['links'] = []
-                            
-                            valid_links[fallback_multiple_links]['links'].append({
+
+                        if getcomics_parse.site_failed(t_site, link_type_failure):
+                            logger.fdebug('[REDO-FAILURE-DETECTION] detected previous invalid link for %s - ignoring this result'
+                                        ' and seeing if anything else can be downloaded.' % t_site)
+                        else:
+                            target = last_section(fallback_multiple_links)
+                            if target is None:
+                                target = open_section(fallback_multiple_links, fallback_series)
+                            if not target.get('series') and fallback_series:
+                                target['series'] = fallback_series
+                            if not target.get('year') and fallback_year:
+                                target['year'] = fallback_year
+                            if not target.get('size') and fallback_size:
+                                target['size'] = fallback_size
+
+                            target['links'].append({
                                 "series": fallback_series,
                                 "site": t_site,
                                 "year": fallback_year,
@@ -901,21 +884,20 @@ class GC(object):
         # Second fallback: always scan for <a href*="/dlds/"> with title/text "Download Now" or "Mirror Download"
         # and add them if not already in valid_links (so GC-Main/Mirror are found even when other links were parsed first)
         existing_hrefs = set()
-        for k, y in valid_links.items():
-            if 'links' in y:
-                for a in y['links']:
-                    existing_hrefs.add(a.get('links'))
+        for s in sections:
+            for a in s['links']:
+                existing_hrefs.add(a.get('links'))
         logger.info('[DDL-GATHERER-OF-LINKAGE] Scanning page for /dlds/ main and mirror links...')
         dlds_fallback_series = None
         dlds_fallback_year = None
         dlds_fallback_size = None
-        for k, y in valid_links.items():
-            if 'series' in y:
-                dlds_fallback_series = y['series']
-            if 'year' in y:
-                dlds_fallback_year = y['year']
-            if 'size' in y:
-                dlds_fallback_size = y['size']
+        for s in sections:
+            if s.get('series'):
+                dlds_fallback_series = s['series']
+            if s.get('year'):
+                dlds_fallback_year = s['year']
+            if s.get('size'):
+                dlds_fallback_size = s['size']
         if dlds_fallback_series is None and beeswax:
             for p_tag in beeswax:
                 linkage_test = p_tag.text.strip()
@@ -960,17 +942,21 @@ class GC(object):
                 t_site = 'mirror download'
             else:
                 continue
-            if 'normal' not in valid_links:
-                valid_links['normal'] = {}
-            if 'links' not in valid_links['normal']:
-                valid_links['normal']['links'] = []
-            if dlds_fallback_series is not None:
-                valid_links['normal']['series'] = dlds_fallback_series
-            if dlds_fallback_year is not None:
-                valid_links['normal']['year'] = dlds_fallback_year
-            if dlds_fallback_size is not None:
-                valid_links['normal']['size'] = dlds_fallback_size
-            valid_links['normal']['links'].append({
+            if getcomics_parse.site_failed(t_site, link_type_failure):
+                # The main pass skipped this button because it already failed. Adding it
+                # back here made the alternate-link retry pick it again, forever.
+                logger.fdebug('[REDO-FAILURE-DETECTION] detected previous invalid link for %s (fallback) - ignoring it.' % t_site)
+                continue
+            target = last_section('normal')
+            if target is None:
+                target = open_section('normal', dlds_fallback_series)
+            if not target.get('series') and dlds_fallback_series is not None:
+                target['series'] = dlds_fallback_series
+            if not target.get('year') and dlds_fallback_year is not None:
+                target['year'] = dlds_fallback_year
+            if not target.get('size') and dlds_fallback_size is not None:
+                target['size'] = dlds_fallback_size
+            target['links'].append({
                 "series": dlds_fallback_series,
                 "site": t_site,
                 "year": dlds_fallback_year,
@@ -981,7 +967,102 @@ class GC(object):
             })
             existing_hrefs.add(href)
             logger.fdebug('[FALLBACK-DLDS] Found link: %s - %s' % (t_site, href[:50]))
-        
+
+        # Group the sections into downloads. Variants of one header (HD-Upscaled,
+        # HD-Digital, ...) are alternatives of the same download and stay together; a header
+        # with other issues, or a second section of the same variant, is another download
+        # (sub-pack "#71 - 140", another volume, another edition).
+        groups = []
+        for s in sections:
+            if not s['links']:
+                continue
+            numbers = getcomics_parse.section_issue_numbers(s.get('series'))
+            if groups and groups[-1]['numbers'] == numbers and s['variant'] not in groups[-1]['valid_links']:
+                groups[-1]['valid_links'][s['variant']] = s
+            else:
+                groups.append({
+                    'numbers': numbers,
+                    'years': getcomics_parse.year_bounds(s.get('year')),
+                    'series': s.get('series'),
+                    'valid_links': {s['variant']: s},
+                })
+
+        if not groups:
+            logger.info('No valid items available that I am able to download from. Not downloading...')
+            return {'success': False, 'links_exhausted': link_type_failure}
+
+        wanted, wanted_year = self._wanted_issues(comicinfo, pack, pack_numbers, pack_issuelist)
+        if section is not None and 0 <= section < len(groups):
+            # Retry of one section of a multi-section post (alternate link after a failure).
+            chosen = [section]
+        else:
+            chosen = getcomics_parse.choose_sections(groups, wanted, wanted_year, pack is True)
+        if len(groups) > 1:
+            if not wanted:
+                wanted_text = 'unknown'
+            elif len(wanted) > 3:
+                wanted_text = '%s-%s (%s issues)' % (min(wanted), max(wanted), len(wanted))
+            else:
+                wanted_text = ', '.join(str(w) for w in wanted)
+            logger.info(
+                '[DDL-SECTIONS] %s download sections on this page: %s. Wanted issues: %s, year: %s. Using: %s'
+                % (len(groups), [g['series'] for g in groups], wanted_text, wanted_year,
+                   [groups[x]['series'] for x in chosen])
+            )
+
+        multi = len(chosen) > 1
+        result = None
+        for n, gi in enumerate(chosen):
+            section_result = self._queue_section(
+                '%s-%s' % (id, n + 1) if multi else id,
+                mainlink,
+                comicinfo,
+                packinfo,
+                link_type_failure,
+                groups[gi]['valid_links'],
+                soup,
+                booktype,
+                pack,
+                include_extras=(n == len(chosen) - 1),
+                section_index=gi if (multi or section is not None) else None,
+            )
+            if result is None or (section_result.get('success') is True and result.get('success') is not True):
+                result = section_result
+        return result
+
+    def _wanted_issues(self, comicinfo, pack, pack_numbers, pack_issuelist):
+        """Issue numbers (ints) and year the download is for, to pick sections of a post."""
+        def value(key):
+            try:
+                return comicinfo[0][key]
+            except (KeyError, IndexError, TypeError):
+                return None
+
+        wanted = []
+        if pack is True:
+            try:
+                wanted = [int(x) for x in pack_issuelist['issue_range']]
+            except (KeyError, TypeError, ValueError):
+                wanted = getcomics_parse.issue_numbers(pack_numbers)
+        else:
+            number = getcomics_parse.leading_int(value('IssueNumber'))
+            if number is not None:
+                wanted = [number]
+
+        wanted_year = None
+        for key in ('IssueDate', 'comyear', 'ComicYear'):
+            candidate = getcomics_parse.leading_int(str(value(key) or '')[:4])
+            if candidate is not None and candidate >= 1900:
+                wanted_year = candidate
+                break
+        return wanted, wanted_year
+
+    def _queue_section(self, id, mainlink, comicinfo, packinfo, link_type_failure, valid_links, soup, booktype, pack, include_extras=True, section_index=None):
+        """Pick the button of one download section by DDL_PRIORITY_ORDER and queue it.
+
+        ``valid_links`` maps a variant ('normal', 'HD-Upscaled', ...) to its section.
+        """
+        myDB = db.DBConnection()
         tmp_links = []
         tmp_sites = []
         site_position = {}
@@ -1371,6 +1452,10 @@ class GC(object):
             return {'success': False, 'links_exhausted': link_type_failure}
 
         dl_selection = link['site']
+        # The section the button belongs to (the page-level values were the last header's).
+        series = link['series']
+        year = link['year']
+        size = link['size']
 
         logger.fdebug(
             '[%s] Now downloading: %s [%s] / %s ... this can take a while'
@@ -1381,72 +1466,11 @@ class GC(object):
 
         links = []
 
-        if link is None and possible_more.name == 'ul':
-            try:
-                bb = possible_more.findAll('li')
-            except Exception:
-                pass
-            else:
-                for x in bb:
-                    linkline = x.find('a')
-                    try:
-                        tmp = linkline['href']
-                    except Exception:
-                        continue
-
-                    site = linkline.findNext(text=True)
-                    #logger.fdebug('servertype: %s' % (site))
-
-                    if tmp:
-                        if any(
-                            [
-                                'run.php' in linkline['href'],
-                                'go.php' in linkline['href'],
-                                'comicfiles.ru' in linkline['href'],
-                                ('links.php' in linkline['href'] and site == 'Main Server'),
-                            ]
-                        ):
-                            volume = x.findNext(text=True)
-                            if '\u2013' in volume:
-                                volume = re.sub(r'\u2013', '-', volume)
-                            # volume label contains series, issue(s), year(s), and size
-                            series_st = volume.find('(')
-                            issues_st = volume.find('#')
-                            series = volume[:series_st]
-                            if any([issues_st == -1, series_st == -1]):
-                                issues = None
-                            else:
-                                series = volume[:issues_st].strip()
-                                issues = volume[issues_st + 1 : series_st].strip()
-                                ver_check = self.pack_check(issues, packinfo)
-                                if ver_check is False:
-                                    #logger.fdebug('ver_check is False - ignoring')
-                                    continue
-
-                            if issues is None and any([booktype == 'Print', booktype is None, booktype == 'Digital']):
-                                continue
-                            year_end = volume.find(')', series_st + 1)
-                            year = re.sub(
-                                r'[\(\)]', '', volume[series_st + 1 : year_end]
-                            ).strip()
-                            size_end = volume.find(')', year_end + 1)
-                            size = re.sub(
-                                r'[\(\)]', '', volume[year_end + 1 : size_end]
-                            ).strip()
-                            linked = linkline['href']
-                            #site = linkline.findNext(text=True)
-                            if site == 'Main Server':
-                                links.append(
-                                    {
-                                        "series": series,
-                                        "site": site,
-                                        "year": year,
-                                        "issues": issues,
-                                        "size": size,
-                                        "links": linked,
-                                        "pack": pack
-                                    }
-                                )
+        # (An old-layout "<ul>" link list branch used to sit here. It ran only when
+        # link was None, which already returned above, so it is gone with pack_check.)
+        if not include_extras:
+            # Extra TPB lists belong to the page, queue them once (with the last section).
+            pass
         else:
             if booktype != 'TPB' and pack is False:
                 logger.fdebug('Extra links detected, possibly different booktypes - but booktype set to %s' % booktype)
@@ -1585,6 +1609,8 @@ class GC(object):
                     'site': 'DDL(GetComics)',
                     'remote_filesize': 0,
                     'resume': None,
+                    # post section of a multi-section page, for the alternate-link retry
+                    'section': section_index,
                 }
             )
             cnt += 1
@@ -2337,22 +2363,6 @@ class GC(object):
                     'issues': issues}
         else:
             return None
-
-    def pack_check(self, issues, packinfo):
-        try:
-            pack_numbers = packinfo['pack_numbers']
-            issue_range = packinfo['pack_issuelist']['issue_range']
-            ist = re.sub('#', '', issues).strip()
-            iss = ist.find('-')
-            first_iss = issues[:iss].strip()
-            last_iss = issues[iss+1:].strip()
-            if all([int(first_iss) in issue_range, int(last_iss) in issue_range]):
-                logger.fdebug('first issue(%s) and last issue (%s) of ddl link fall within pack range of %s' % (first_iss, last_iss, pack_numbers))
-                return True
-        except Exception as e:
-            pass
-
-        return False
 
     def issue_list(self, pack):
         # '1 - 5, 7 + TPBs' -> [1, 2, 3, 4, 5, 7]; spaces around the dash used to break int().

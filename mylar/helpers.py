@@ -4348,7 +4348,21 @@ def ddl_downloader(queue):
                                 logger.fdebug('[%s] link_type_failure: %s' % (item['id'], link_type_failure))
                                 try:
                                     ggc = getcomics.GC(comicid=item['comicid'], issueid=item['issueid'], oneoff=item['oneoff'])
-                                    ggc.parse_downloadresults(item['id'], item['mainlink'], item['comicinfo'], item['packinfo'], link_type_failure[item['id']])
+                                    redo = ggc.parse_downloadresults(item['id'], item['mainlink'], item['comicinfo'], item['packinfo'], link_type_failure[item['id']], section=item.get('section'))
+                                    if not redo or redo.get('success') is not True:
+                                        # Every host of the post has failed (or the page has no usable
+                                        # link left): close the item instead of leaving it Downloading.
+                                        failed_links = link_type_failure.get(item['id'], [item.get('link_type', 'Unknown')])
+                                        logger.info('[REDO] Exhausted all available links [%s] for issueid %s and was not able to download anything' % (failed_links, item['issueid']))
+                                        myDB.upsert('ddl_info', {'status': 'Failed', 'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}, ctrlval)
+                                        reverse_the_pack_snatch(item['id'], item['comicid'])
+                                        link_type_failure.pop(item['id'], None)
+                                        ddl_cleanup(item['id'])
+                                        try:
+                                            if item['id'] in mylar.DDL_QUEUED:
+                                                mylar.DDL_QUEUED.remove(item['id'])
+                                        except (ValueError, KeyError):
+                                            pass
                                 except Exception as parse_err:
                                     logger.error('[DDL-DOWNLOADER] parse_downloadresults failed for %s: %s. Marking as Failed.' % (item['id'], parse_err))
                                     nval = {'status': 'Failed', 'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}

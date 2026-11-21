@@ -1,0 +1,193 @@
+"""GC.parse_downloadresults on real GetComics post pages: sections, hosts, failed-host retry."""
+import pytest
+
+from conftest import read_fixture
+
+MAINLINK = 'https://getcomics.org/?p=1'
+
+
+def _single(issue, comyear='1950', issuedate='0000-00-00'):
+    return [{'booktype': 'Print', 'pack': False, 'IssueID': 'I1', 'ComicID': 'C1', 'oneoff': False,
+             'IssueNumber': issue, 'comyear': comyear, 'IssueDate': issuedate}]
+
+
+def _run(env, html, comicinfo, packinfo=None, ltf=None, section=None, post_id='1'):
+    gc = env.module.GC(issueid='I1', comicid='C1', oneoff=False)
+    with open(gc._html_cache_path(post_id) + '.html', 'w', encoding='utf-8') as fh:
+        fh.write(html)
+    result = gc.parse_downloadresults(post_id, MAINLINK, comicinfo, packinfo, ltf, section=section)
+    return result, env.mylar.DDL_QUEUE.items
+
+
+def _hrefs(queued):
+    return [q['link'].split('/dls/')[-1][:8] for q in queued]
+
+
+# ---- several sections on one page (bug 16) -------------------------------------------
+
+
+def test_single_issue_takes_its_own_subpack(gc_env):
+    res, queued = _run(gc_env, read_fixture('post_tomahawk_subpacks.html'), _single('75'))
+    assert res['success'] is True
+    assert len(queued) == 1
+    # Mylar prefers the mirror of a normal section (site_position keeps the last 'normal:main').
+    assert queued[0]['link_type'] == 'GC-Mirror'
+    assert _hrefs(queued) == ['tL7bKzrJ']  # mirror of "#71 - 140"
+    assert queued[0]['series'] == 'Tomahawk #71 – 140'
+
+
+def test_single_issue_in_first_subpack(gc_env):
+    res, queued = _run(gc_env, read_fixture('post_tomahawk_subpacks.html'), _single('5'))
+    assert _hrefs(queued) == ['Tk21XqaT']  # mirror of "#1 - 70" (used to be the "#71 - 140" one)
+    assert queued[0]['series'] == 'Tomahawk #1 – 70'
+    upserted = [vals for table, vals, ctrl in gc_env.db.upserts if table == 'ddl_info']
+    assert upserted[0]['series'] == 'Tomahawk #1 – 70'
+
+
+def test_pack_queues_every_matching_subpack(gc_env):
+    packinfo = {'pack': True, 'pack_numbers': '1 - 140',
+                'pack_issuelist': {'issue_range': list(range(1, 141)), 'issues': [], 'valid': True}}
+    comicinfo = [dict(_single('1')[0], pack=True)]
+    res, queued = _run(gc_env, read_fixture('post_tomahawk_subpacks.html'), comicinfo, packinfo)
+    assert res['success'] is True
+    assert [q['id'] for q in queued] == ['1-1', '1-2']
+    assert [q['section'] for q in queued] == [0, 1]
+    assert [q['series'] for q in queued] == ['Tomahawk #1 – 70', 'Tomahawk #71 – 140']
+
+
+def test_retry_of_one_section_keeps_its_id(gc_env):
+    packinfo = {'pack': True, 'pack_numbers': '1 - 140',
+                'pack_issuelist': {'issue_range': list(range(1, 141)), 'issues': [], 'valid': True}}
+    comicinfo = [dict(_single('1')[0], pack=True)]
+    res, queued = _run(gc_env, read_fixture('post_tomahawk_subpacks.html'), comicinfo, packinfo,
+                       ltf=['GC-Mirror'], section=1, post_id='1-2')
+    assert [q['id'] for q in queued] == ['1-2']
+    assert queued[0]['link_type'] == 'GC-Main'
+    assert _hrefs(queued) == ['dAdyh5Z3']  # Download Now of "#71 - 140"
+
+
+@pytest.mark.parametrize('issuedate,expected', [
+    ('1944-03-01', 'Plastic Man Vol. 1 #1 – 64'),
+    ('1966-12-01', 'Plastic Man Vol. 2 #1 – 20'),
+])
+def test_volume_picked_by_year(gc_env, issuedate, expected):
+    res, queued = _run(gc_env, read_fixture('post_plastic_man_volumes.html'), _single('5', '1943', issuedate))
+    assert [q['series'] for q in queued] == [expected]
+
+
+EDITIONS_HTML = """
+<div class="post-contents">
+<p style="text-align: center;"><strong>The Forged #15 (Empire)</strong><br /><strong>Language :</strong> English | <strong>Year :</strong> 2026 | <strong>Size :</strong> 120 MB</p>
+<p style="text-align: center;"><div class="aio-pulse"><a href="https://getcomics.org/dls/empire-main" title="Download Now">Download Now</a></div></p>
+<p style="text-align: center;"><strong>The Forged #15 (Series)</strong><br /><strong>Language :</strong> English | <strong>Year :</strong> 2026 | <strong>Size :</strong> 128 MB</p>
+<p style="text-align: center;"><div class="aio-pulse"><a href="https://getcomics.org/dls/series-main" title="Download Now">Download Now</a></div></p>
+<p style="text-align: center;">Click HERE to give us your support and donation.</p>
+</div>
+"""
+
+
+def test_two_editions_of_one_issue_keep_the_last_section(gc_env):
+    # Same download as before the fix (the last section), now with its own header text.
+    res, queued = _run(gc_env, EDITIONS_HTML, _single('15', '2026'))
+    assert [q['link'] for q in queued] == ['https://getcomics.org/dls/series-main']
+    assert queued[0]['series'] == 'The Forged #15 (Series)'
+
+
+VARIANTS_HTML = """
+<p style="text-align: center;"><strong>Batman #123 (HD-Upscaled)</strong><br/><strong>Language :</strong> English | <strong>Year :</strong> 2023 | <strong>Size :</strong> 120 MB</p>
+<p style="text-align: center;"><div class="aio-pulse"><a href="https://getcomics.org/dls/up-main" title="Download Now">Download Now</a></div></p>
+<p style="text-align: center;"><div class="aio-pulse"><a href="https://getcomics.org/dls/up-mirror" title="Mirror Download">Mirror</a></div></p>
+<p style="text-align: center;"><div class="aio-pulse"><a href="https://getcomics.org/read/1" title="Read Online">Read Online</a></div></p>
+<p style="text-align: center;"><strong>Batman #123 (HD-Digital)</strong><br/><strong>Language :</strong> English | <strong>Year :</strong> 2023 | <strong>Size :</strong> 40 MB</p>
+<p style="text-align: center;"><div class="aio-pulse"><a href="https://getcomics.org/dls/hd-main" title="Download Now">Download Now</a></div></p>
+<p style="text-align: center;"><div class="aio-pulse"><a href="https://getcomics.org/dls/hd-pixel" title="PIXELDRAIN Link">PIXELDRAIN</a></div></p>
+<p style="text-align: center;"><div class="aio-pulse"><a href="https://getcomics.org/read/2" title="Read Online">Read Online</a></div></p>
+<p style="text-align: center;">Please consider support and donation</p>
+"""
+
+
+def test_variants_stay_one_download(gc_env):
+    res, queued = _run(gc_env, VARIANTS_HTML, _single('123', '2023'))
+    assert len(queued) == 1
+    assert queued[0]['link'] == 'https://getcomics.org/dls/up-main'
+    assert queued[0]['link_type'] == 'GC-Main'
+
+
+# ---- failed hosts (bugs 1 and 8) ---------------------------------------------------
+
+
+def test_failed_main_keeps_mirror(gc_env):
+    # A failed GC-Main used to exclude "Mirror Download" too.
+    res, queued = _run(gc_env, VARIANTS_HTML, _single('123', '2023'), ltf=['GC-Main'])
+    assert queued[0]['link'] == 'https://getcomics.org/dls/up-mirror'
+    assert queued[0]['link_type'] == 'GC-Mirror'
+
+
+def test_single_section_hosts_in_priority_order(gc_env):
+    res, queued = _run(gc_env, read_fixture('post_dynomutt_hosts.html'), _single('3', '1977'))
+    assert queued[0]['link_type'] == 'GC-Main'
+    gc_env.mylar.DDL_QUEUE.items[:] = []
+    res, queued = _run(gc_env, read_fixture('post_dynomutt_hosts.html'), _single('3', '1977'), ltf=['GC-Main'])
+    assert queued[0]['link_type'] == 'GC-Pixel'
+
+
+def test_direct_main_link_post(gc_env):
+    res, queued = _run(gc_env, read_fixture('post_journey_direct_main.html'), _single('5', '1952'))
+    assert queued[0]['link_type'] == 'GC-Mirror'
+    gc_env.mylar.DDL_QUEUE.items[:] = []
+    res, queued = _run(gc_env, read_fixture('post_journey_direct_main.html'), _single('5', '1952'), ltf=['GC-Mirror'])
+    assert queued[0]['link_type'] == 'GC-Main'
+    assert queued[0]['link'].startswith('https://light.getcomics.info/')
+    gc_env.mylar.DDL_QUEUE.items[:] = []
+    res, queued = _run(gc_env, read_fixture('post_journey_direct_main.html'), _single('5', '1952'), ltf=['GC-Mirror', 'GC-Main'])
+    assert queued[0]['link_type'] == 'GC-Media'
+
+
+FALLBACK_HTML = """
+<p style="text-align: center;"><strong>Old Comic #1 - 10</strong><br/><strong>Language :</strong> English | <strong>Year :</strong> 1952 | <strong>Size :</strong> 300 MB</p>
+<p style="text-align: center;"><div class="aio-pulse"><a href="https://getcomics.org/dlds/px1" title="PIXELDRAIN Link">PIXELDRAIN</a></div></p>
+<p style="text-align: center;">Please consider support and donation</p>
+<a href="https://getcomics.org/dlds/main1" title="Download Now">Download Now</a>
+"""
+
+
+def test_dlds_fallback_finds_plain_main_button(gc_env):
+    res, queued = _run(gc_env, FALLBACK_HTML, _single('3', '1952'))
+    assert queued[0]['link'] == 'https://getcomics.org/dlds/main1'
+
+
+def test_dlds_fallback_skips_failed_main(gc_env):
+    # The fallback used to add the failed main button back, so the retry looped on it.
+    res, queued = _run(gc_env, FALLBACK_HTML, _single('3', '1952'), ltf=['GC-Main'])
+    assert queued[0]['link'] == 'https://getcomics.org/dlds/px1'
+    gc_env.mylar.DDL_QUEUE.items[:] = []
+    res, queued = _run(gc_env, FALLBACK_HTML, _single('3', '1952'), ltf=['GC-Main', 'GC-Pixel'])
+    assert queued == []
+    assert res['success'] is False
+
+
+# ---- pure helpers ------------------------------------------------------------------
+
+
+@pytest.mark.parametrize('site,failures,expected', [
+    ('download now', ['GC-Main'], True),
+    ('mirror download', ['GC-Main'], False),
+    ('mirror download', ['GC-Mirror'], True),
+    ('pixeldrain', ['GC-Pixel'], True),
+    ('mediafire', ['GC-Pixel'], False),
+    ('ufile', ['GC-Main', 'GC-Mirror'], False),
+    ('download now', None, False),
+])
+def test_site_failed(gc_parse, site, failures, expected):
+    assert gc_parse.site_failed(site, failures) is expected
+
+
+def test_choose_sections_rules(gc_parse):
+    subpacks = [{'numbers': list(range(1, 71)), 'years': (1950, 1972)},
+                {'numbers': list(range(71, 141)), 'years': (1950, 1972)}]
+    assert gc_parse.choose_sections(subpacks, [80]) == [1]
+    assert gc_parse.choose_sections(subpacks, [5]) == [0]
+    assert gc_parse.choose_sections(subpacks, list(range(1, 141)), pack=True) == [0, 1]
+    unknown = [{'numbers': [], 'years': None}, {'numbers': [], 'years': None}]
+    assert gc_parse.choose_sections(unknown, [5]) == [1]
+    assert gc_parse.choose_sections([{'numbers': [5], 'years': None}], [7]) == [0]
