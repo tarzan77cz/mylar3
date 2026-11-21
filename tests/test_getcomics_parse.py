@@ -54,6 +54,18 @@ def test_range_at_end_of_title(gc_env):
     assert info['issues'] == '1-15'
 
 
+@pytest.mark.parametrize('title', ['Zero Hour #-1 (1994)', 'Batman #5 X-23 (2025)', 'X-Men #0-A (1995)'])
+def test_dash_after_hash_needs_a_clean_range(gc_env, title):
+    # Review R5: a single issue with a dash after '#' was taken for a pack.
+    assert _gc(gc_env).check_for_pack(title)['pack'] is False
+
+
+def test_short_range_at_end_of_title_is_a_pack(gc_env):
+    info = _gc(gc_env).check_for_pack('Batman #1-3 (2025)')
+    assert info['pack'] is True
+    assert info['issues'] == '1-3'
+
+
 def test_ampersand_inside_series_name(gc_env):
     # " & " used to cut the series down to "Batman".
     info = _gc(gc_env).check_for_pack('Batman & Robin #1 - 26 (2009-2011)')

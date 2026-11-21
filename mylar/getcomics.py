@@ -2297,8 +2297,12 @@ class GC(object):
                 if iss_en == -1:
                     iss_en = len(title)
                 skip_hash = 1 if title[issfind_st] == '#' else 0
-                issues = title[issfind_st + skip_hash : iss_en]
-                pack = True
+                candidate = title[issfind_st + skip_hash : iss_en]
+                # Only a clean "number-number" is a range: "Zero Hour #-1" and
+                # "Batman #5 X-23" are single issues.
+                if re.match(r'^\d+\s*-\s*\d+(?![\w-])', candidate):
+                    issues = candidate
+                    pack = True
 
         # (A second pass for ranges without '#' used to search for an en-dash here. Titles
         # are normalised to '-' before parsing, so it never matched; the branch above now
