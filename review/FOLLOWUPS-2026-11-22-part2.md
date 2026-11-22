@@ -204,4 +204,12 @@ docker cp data/interfaces/default/queue_management.html mylar:/app/mylar/data/in
 
 ## 7. Stav po merge
 
-(zatím prázdné)
+2026-11-22 (časy pražské):
+
+- **Merge** v 16:09 na pokyn uživatele: `python3-dev` posunuta fast-forwardem z `b912ddc4` na `aeddc549`,
+  bez merge commitu. Na `python3-dev` v hlavním stromu znovu `tests/` 96 passed, `tests_db/` 142 passed,
+  `ast.parse` šesti změněných modulů v 3.8 bez chyby.
+- **Nenasazeno:** žádný `docker cp`, kontejner `mylar` se nerestartoval. Postup v kap. 6 (s první částí).
+- **Nepushnuto** na `fork`.
+- Worktree `/data/Tarzan/Cursor/Mylar-review-2026-11-22-part2` a větev `claude/review-2026-11-22-part2` zatím
+  zůstávají (celá větev je v `python3-dev`).
