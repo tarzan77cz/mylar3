@@ -3596,11 +3596,11 @@ class PostProcessor(object):
 
             #update snatched table to change status to Downloaded
             if annchk == "no":
-                updater.foundsearch(comicid, issueid, down=downtype, module=module, crc=crcvalue)
+                status_written = updater.foundsearch(comicid, issueid, down=downtype, module=module, crc=crcvalue)
                 dispiss = '#%s' % issuenumOG
                 updatetable = 'issues'
             else:
-                updater.foundsearch(comicid, issueid, mode='want_ann', down=downtype, module=module, crc=crcvalue)
+                status_written = updater.foundsearch(comicid, issueid, mode='want_ann', down=downtype, module=module, crc=crcvalue)
                 if 'annual' in issuenzb['ReleaseComicName'].lower(): #series.lower():
                     series = issuenzb['ReleaseComicName']
                     dispiss = '#%s' % issuenumOG
@@ -3613,7 +3613,13 @@ class PostProcessor(object):
             logger.fdebug('[%s][annchk:%s] issue to update: %s' % (series, annchk, dispiss))
 
             #new method for updating status after pp
-            if os.path.isfile(dst):
+            if status_written is False:
+                # The issue row did not come back after a series refresh (R17): an upsert here
+                # would create a row with only IssueID/Status/Location.
+                logger.error('%s IssueID %s is not in the database. The file is in the library at %s, but its'
+                             ' status and location were not written. Refresh the series and rescan its files.'
+                             % (module, issueid, dst))
+            elif os.path.isfile(dst):
                 ctrlVal = {"IssueID":     issueid}
                 newVal = {"Status":       "Downloaded",
                           "Location":     os.path.basename(dst)}

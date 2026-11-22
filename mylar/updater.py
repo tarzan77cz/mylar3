@@ -313,6 +313,17 @@ def dbUpdate(ComicIDList=None, calledfrom=None, sched=False):
                                             logger.fdebug('[SKIPPED-PRESERVE] Keeping Skipped status for existing IssueID %s (#%s)' % (issue['IssueID'], issue['Issue_Number']))
 
                                     if newVAL is not None:
+                                        # Post-processing may have filed the issue since the snapshot
+                                        # was taken: the row as it is now wins over the snapshot (R17).
+                                        is_annual = any(d['IssueID'] == str(issue['IssueID']) for d in ann_list)
+                                        current = myDB.selectone(
+                                            'SELECT Status, Location FROM %s WHERE IssueID=?' % ('annuals' if is_annual else 'issues'),
+                                            [issue['IssueID']]).fetchone()
+                                        if current is not None and current['Status'] == 'Downloaded' and current['Location']:
+                                            for key in ('Status', 'Location', 'ComicSize'):
+                                                newVAL.pop(key, None)
+                                            logger.fdebug('[#%s] IssueID %s was post-processed during the refresh. Keeping its status and location.'
+                                                          % (issue['Issue_Number'], issue['IssueID']))
                                         if issue['IssueDate_Edit'] is not None:
                                             if issue['IssueDate_Edit'] == '0000-00-00':
                                                 logger.fdebug('[#%s] Reverting previously edited Issue Date and replacing with CV Issue Date.' % issue['Issue_Number'])
@@ -329,7 +340,9 @@ def dbUpdate(ComicIDList=None, calledfrom=None, sched=False):
                                                 logger.fdebug('new value : ' + str(issue['IssueDate']) + ' ... cv value : ' + str(issuenew['IssueDate']))
                                                 newVAL['IssueDate_Edit'] = issue['IssueDate_Edit']
 
-                                        if any(d['IssueID'] == str(issue['IssueID']) for d in ann_list):
+                                        if not newVAL:
+                                            pass
+                                        elif is_annual:
                                             logger.fdebug("annual detected for " + str(issue['IssueID']) + " #: " + str(issue['Issue_Number']))
                                             myDB.upsert("Annuals", newVAL, ctrlVAL)
                                         else:
@@ -892,6 +905,24 @@ def nzblog(IssueID, NZBName, ComicName, SARC=None, IssueArcID=None, id=None, pro
     myDB.upsert("nzblog", newValue, controlValue)
 
 
+FOUNDSEARCH_ROW_WAIT_ATTEMPTS = 24
+FOUNDSEARCH_ROW_WAIT_SECONDS = 5
+
+
+def _wait_for_issue_row(myDB, table, IssueID, module):
+    """The row of IssueID in ``table`` once a running series refresh has put it back, or None
+    after FOUNDSEARCH_ROW_WAIT_ATTEMPTS checks (about two minutes)."""
+    logger.warn('%s IssueID %s is not in the %s table - a series refresh is likely in progress. Waiting for it.'
+                % (module, IssueID, table))
+    for attempt in range(FOUNDSEARCH_ROW_WAIT_ATTEMPTS):
+        time.sleep(FOUNDSEARCH_ROW_WAIT_SECONDS)
+        row = myDB.selectone('SELECT * FROM %s WHERE IssueID=?' % table, [IssueID]).fetchone()
+        if row is not None:
+            logger.info('%s IssueID %s is back in the %s table. Continuing.' % (module, IssueID, table))
+            return row
+    return None
+
+
 def foundsearch(ComicID, IssueID, mode=None, down=None, provider=None, SARC=None, IssueArcID=None, module=None, hash=None, crc=None, comicname=None, issuenumber=None, pullinfo=None):
     # When doing a Force Search (Wanted tab), the resulting search calls this to update.
 
@@ -915,13 +946,20 @@ def foundsearch(ComicID, IssueID, mode=None, down=None, provider=None, SARC=None
             comic = myDB.selectone('SELECT * FROM comics WHERE ComicID=?', [ComicID]).fetchone()
             ComicName = comic['ComicName']
             seriesyear = comic['ComicYear']
+            issue_table = 'annuals' if mode == 'want_ann' else 'issues'
+            issue = myDB.selectone('SELECT * FROM %s WHERE IssueID=?' % issue_table, [IssueID]).fetchone()
+            if issue is None and down is not None:
+                # A refresh of the series (dbUpdate) deletes and reinserts its issues. After
+                # post-processing moved the file, wait for the row instead of failing (R17).
+                issue = _wait_for_issue_row(myDB, issue_table, IssueID, module)
+            if issue is None:
+                logger.error('%s IssueID %s is not in the %s table (a refresh of ComicID %s may have removed it).'
+                             ' Its status was not updated.' % (module, IssueID, issue_table, ComicID))
+                return False
             if mode == 'want_ann':
-                issue = myDB.selectone('SELECT * FROM annuals WHERE IssueID=?', [IssueID]).fetchone()
                 if ComicName != issue['ReleaseComicName'] + ' Annual':
                     ComicName = issue['ReleaseComicName']
                     modcomicname = True
-            else:
-                issue = myDB.selectone('SELECT * FROM issues WHERE IssueID=?', [IssueID]).fetchone()
             CYear = issue['IssueDate'][:4]
             IssueNum = issue['Issue_Number']
 
