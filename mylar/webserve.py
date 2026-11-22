@@ -610,10 +610,10 @@ class WebInterface(object):
                 elif os.path.exists(os.path.join(mylar.CONFIG.CACHE_DIR, ComicID + '.png')):
                     comicImage = "data:image/webp;base64,%s" % mylar.getimage.load_image(os.path.join(mylar.CONFIG.CACHE_DIR, ComicID + '.png'), 263)
                 
-                # Pokud obrázek stále není v cache, zkusit ho stáhnout
+                # If the cover is still not cached, try to download it
                 if not comicImage:
                     try:
-                        # Získat image URL
+                        # Get the image URL
                         image_url = None
                         try:
                             if comic['ComicImageURL'] is not None and comic['ComicImageURL'] != 'None':
@@ -627,7 +627,7 @@ class WebInterface(object):
                             except (KeyError, TypeError):
                                 pass
                         
-                        # Pokud není URL v DB, získat z ComicVine API
+                        # If the DB has no URL, get it from the ComicVine API
                         image_data = None
                         if not image_url:
                             fullcomicid = '4050-' + str(ComicID)
@@ -636,16 +636,16 @@ class WebInterface(object):
                             if not image_url:
                                 image_url = image_data.get('image_alt')
                         
-                        # Zkusit stáhnout obrázek
+                        # Try to download the image
                         if image_url:
                             coverchk = helpers.getImage(ComicID, image_url, overwrite=False)
                             if coverchk.get('status') == 'success':
-                                # Obrázek se úspěšně stáhl, načíst z cache
+                                # The image was downloaded, load it from the cache
                                 cache_file = os.path.join(mylar.CONFIG.CACHE_DIR, ComicID + '.jpg')
                                 if os.path.exists(cache_file):
                                     comicImage = "data:image/webp;base64,%s" % mylar.getimage.load_image(cache_file, 263)
                             elif coverchk.get('status') == 'retry' and image_data and image_data.get('image_alt'):
-                                # Zkusit alternativní URL
+                                # Try the alternative URL
                                 coverchk = helpers.getImage(ComicID, image_data['image_alt'], overwrite=False)
                                 if coverchk.get('status') == 'success':
                                     cache_file = os.path.join(mylar.CONFIG.CACHE_DIR, ComicID + '.jpg')
@@ -654,7 +654,7 @@ class WebInterface(object):
                     except Exception as e:
                         logger.warn('[comicDetails] Failed to download cover image: %s' % e)
                     
-                    # Pokud se nepovedlo stáhnout, zobrazit placeholder
+                    # If the download failed, show a placeholder
                     if not comicImage:
                         comicImage = "data:image/gif;base64,%s" % mylar.getimage.load_image(os.path.join(mylar.PROG_DIR, 'data', 'images', 'blank.gif'),263)
 
