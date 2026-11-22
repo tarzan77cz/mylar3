@@ -212,6 +212,12 @@ class PixelDrain(object):
                             logger.warn('[PixelDrain] Unexpected status %s for resume. Failing.' % response.status_code)
                             return {"success": False, "filename": filename, "path": None, "link_type_failure": 'GC-Pixel'}
 
+                    if open_mode == 'wb' and response.status_code != 200:
+                        # An error page (e.g. 503 with a JSON body) is not the file: do not save it.
+                        response.close()
+                        logger.warn('[PixelDrain] Download answered with status %s. Treating it as a host failure.' % response.status_code)
+                        return {"success": False, "filename": filename, "path": None, "link_type_failure": 'GC-Pixel'}
+
                     logger.fdebug('[PixelDrain] now writing....')
                     with open(filepath, open_mode) as f:
                         bytes_written = 0
@@ -261,6 +267,13 @@ class PixelDrain(object):
             getattr(mylar, 'DDL_AUTORESUME_COUNT', {}).pop(self.id, None)
 
         logger.fdebug('[PixelDrain] download completed - donwloaded %s / %s' % (os.stat(filepath).st_size, filesize))
+
+        # Same size and archive check as GC-Main, also before a pack zip is extracted.
+        incomplete = helpers.ddl_host_download_check(filepath, filesize, 'PixelDrain')
+        if incomplete is not None:
+            result = {"success": False, "filename": filename, "link_type_failure": 'GC-Pixel'}
+            result.update(incomplete)
+            return result
 
         logger.info('[PixelDrain] ddl_linked - filename: %s' % filename)
 

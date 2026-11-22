@@ -6454,6 +6454,34 @@ def validate_downloaded_archive(file_path, expected_size=None, size_tolerance=0)
     return result
 
 
+def ddl_host_download_check(file_path, expected_size, label):
+    """Check a finished host download (Pixeldrain, MediaFire) the way GC-Main checks its own.
+
+    Returns None when the file may be marked complete. Otherwise returns the keys ddl_downloader
+    already handles: 'incomplete' (resume a short file) and 'discard_partial' (a full-size file that
+    will not open is removed here, so the next attempt starts clean), plus 'path'.
+    """
+    archive_check = validate_downloaded_archive(file_path, expected_size)
+    if archive_check['ok']:
+        return None
+    filename = os.path.basename(file_path)
+    if archive_check['discard'] and os.path.isfile(file_path):
+        try:
+            os.remove(file_path)
+            logger.warn('[%s] Removed unreadable archive %s (%s). Next attempt will start clean.'
+                        % (label, filename, archive_check['reason']))
+        except OSError as e:
+            logger.warn('[%s] Could not remove unreadable archive %s: %s' % (label, file_path, e))
+    else:
+        logger.warn('[%s] Incomplete download: %s (%s). Not extracting. Left for resume.'
+                    % (label, filename, archive_check['reason']))
+    return {
+        'incomplete': True,
+        'discard_partial': archive_check['discard'],
+        'path': None if archive_check['discard'] else file_path,
+    }
+
+
 def check_file_condition(file_path):
     """ Use magic numbers to confirm a file type, and do some sanity checks for quality of
         the file (CRC checks, etc.)

@@ -84,7 +84,10 @@ class MediaFire(object):
             try:
                 filesize = int(t.headers['Content-Length'])
             except Exception:
-                filesize = 0
+                try:
+                    filesize = int(remote_filesize) if remote_filesize else 0
+                except (TypeError, ValueError):
+                    filesize = 0
             fileinfo = {'filename': filename, 'filesize': filesize}
             if not resume:
                 t.close()
@@ -180,6 +183,12 @@ class MediaFire(object):
                             logger.warn('[MediaFire] Unexpected status %s for resume. Failing.' % response.status_code)
                             return {"success": False, "filename": fileinfo['filename'], "path": None, "link_type_failure": 'GC-Media'}
 
+                    if open_mode == 'wb' and response.status_code != 200:
+                        # An error page is not the file: do not save it.
+                        response.close()
+                        logger.warn('[MediaFire] Download answered with status %s. Treating it as a host failure.' % response.status_code)
+                        return {"success": False, "filename": fileinfo['filename'], "path": None, "link_type_failure": 'GC-Media'}
+
                     logger.fdebug('[MediaFire] now writing....')
                     with open(filepath, open_mode) as f:
                         bytes_written = 0
@@ -234,6 +243,13 @@ class MediaFire(object):
             return {"success": False, "filename": None, "path": None}
         else:
             logger.fdebug('[MediaFire] download completed - downloaded %s / %s' % (filesize, fileinfo['filesize']))
+
+        # Same size and archive check as GC-Main, also before a pack zip is extracted.
+        incomplete = helpers.ddl_host_download_check(filepath, fileinfo['filesize'], 'MediaFire')
+        if incomplete is not None:
+            result = {"success": False, "filename": fileinfo['filename'], "link_type_failure": 'GC-Media'}
+            result.update(incomplete)
+            return result
 
         logger.fdebug('[MediaFire] ddl_linked - filename: %s' % fileinfo['filename'])
 
