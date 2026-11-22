@@ -3627,6 +3627,29 @@ def heal_completed_but_snatched():
             )
 
 
+def ddl_thread_check():
+    """Start the DDL-QUEUE thread again when it has died while Mylar is running.
+
+    Does nothing while the thread is alive, before it was ever started, when DDL is off
+    or while Mylar is shutting down or restarting.
+    """
+    pool = getattr(mylar, 'DDLPOOL', None)
+    if pool is None:
+        return False
+    try:
+        if pool.is_alive():
+            return False
+    except Exception:
+        return False
+    if not getattr(mylar, '_INITIALIZED', False) or getattr(mylar, 'SIGNAL', None) is not None:
+        return False
+    if not mylar.CONFIG.ENABLE_DDL:
+        return False
+    logger.error('[DDL-WATCHDOG] The DDL-QUEUE thread is not running. Starting it again.')
+    mylar.queue_schedule('ddl_queue', 'start')
+    return True
+
+
 def ddl_watchdog():
     """
     Watchdog function to detect stuck DDL downloads.
@@ -3637,7 +3660,9 @@ def ddl_watchdog():
     while True:
         try:
             time.sleep(60)  # Check every minute
-            
+
+            ddl_thread_check()
+
             myDB = db.DBConnection()
             
             # First, check for "Downloading" items that are actually completed
@@ -4186,16 +4211,56 @@ DDL_MAX_INCOMPLETE_ATTEMPTS = 6
 DDL_INCOMPLETE_RETRY_DELAY = 30
 DDL_TRANSIENT_RETRY_DELAY = 120
 
+def _ddl_fail_unexpected_item(item):
+    """After an unexpected error in the DDL loop: mark the item Failed and free the queue state.
+
+    The issues are left as they are (this is not a host failure with all hosts exhausted).
+    """
+    mylar.DDL_LOCK = False
+    if not isinstance(item, dict) or not item.get('id'):
+        return
+    try:
+        db.DBConnection().upsert('ddl_info', {
+            'status': 'Failed',
+            'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
+        }, {'id': item['id']})
+    except Exception as e:
+        logger.error('[DDL-DOWNLOADER] Could not mark item %s as Failed: %s' % (item['id'], e))
+    while item['id'] in mylar.DDL_QUEUED:
+        try:
+            mylar.DDL_QUEUED.remove(item['id'])
+        except ValueError:
+            break
+    logger.warn('[DDL-DOWNLOADER] Marked item %s [ID: %s] as Failed after an unexpected error. Its issues were not changed.'
+                % (item.get('series', 'Unknown'), item['id']))
+
+
 def ddl_downloader(queue):
+    """DDL queue thread. An unexpected error in one item fails that item and the loop goes on."""
+    state = {'link_type_failure': {}, 'incomplete_attempts': {}, 'item': None}
+    logger.info('[DDL-DOWNLOADER] DDL downloader thread started and running')
+    while True:
+        try:
+            _ddl_downloader_loop(queue, state)
+            return
+        except Exception:
+            item = state['item']
+            state['item'] = None
+            logger.error('[DDL-DOWNLOADER] Unexpected error while processing %s: %s'
+                         % (item.get('id') if isinstance(item, dict) else 'the queue', traceback.format_exc()))
+            _ddl_fail_unexpected_item(item)
+            time.sleep(5)
+
+
+def _ddl_downloader_loop(queue, state):
     myDB = db.DBConnection()
-    link_type_failure = {}
-    incomplete_attempts = {}
+    link_type_failure = state['link_type_failure']
+    incomplete_attempts = state['incomplete_attempts']
     loop_count = 0
     last_status_log = time.time()
-    
-    logger.info('[DDL-DOWNLOADER] DDL downloader thread started and running')
-    
+
     while True:
+        state['item'] = None
         loop_count += 1
         current_time = time.time()
         
@@ -4217,7 +4282,8 @@ def ddl_downloader(queue):
                 if item == 'exit':
                     logger.info('[DDL-DOWNLOADER] Received exit signal, cleaning up workers for shutdown')
                     break
-                
+                state['item'] = item
+
                 logger.info('[DDL-DOWNLOADER] Got item from queue: %s (%s) [ID: %s]' % 
                            (item.get('series', 'Unknown'), item.get('year', 'Unknown'), item.get('id', 'Unknown')))
             except Exception as e:
@@ -4250,39 +4316,48 @@ def ddl_downloader(queue):
             logger.debug('[DDL-DOWNLOADER] Updated item ID %s status to Downloading in DB' % item['id'])
 
             ddzstat = None  # Initialize to None
-            if item['site'] == 'DDL(GetComics)':
-                try:
-                    remote_filesize = item['remote_filesize']
-                except Exception:
+            try:
+                if item['site'] == 'DDL(GetComics)':
                     try:
-                        _size_str = (item.get('size') or '')[:-1].strip()
-                        remote_filesize = helpers.human2bytes(re.sub('/s', '', _size_str))
+                        remote_filesize = item['remote_filesize']
                     except Exception:
-                        remote_filesize = 0
+                        try:
+                            _size_str = (item.get('size') or '')[:-1].strip()
+                            remote_filesize = helpers.human2bytes(re.sub('/s', '', _size_str))
+                        except Exception:
+                            remote_filesize = 0
 
-                if any([item['link_type'] == 'GC-Main', item['link_type'] == 'GC-Mirror']):
-                    ddz = getcomics.GC()
-                    ddzstat = ddz.downloadit(item['id'], item['link'], item['mainlink'], item['resume'], item['issueid'], remote_filesize)
-                elif item['link_type'] == 'GC-Mega':
+                    if any([item['link_type'] == 'GC-Main', item['link_type'] == 'GC-Mirror']):
+                        ddz = getcomics.GC()
+                        ddzstat = ddz.downloadit(item['id'], item['link'], item['mainlink'], item['resume'], item['issueid'], remote_filesize)
+                    elif item['link_type'] == 'GC-Mega':
+                        meganz = mega.MegaNZ()
+                        ddzstat = meganz.ddl_download(item['link'], None, item['id'], item['issueid'], item['link_type']) #item['filename'], item['id'])
+                    elif item['link_type'] == 'GC-Media':
+                        mediaf = mediafire.MediaFire()
+                        ddzstat = mediaf.ddl_download(item['link'], item['id'], item['issueid'], resume=item.get('resume'), partial_filename=(item.get('tmp_filename') or item.get('filename')), remote_filesize=remote_filesize)
+                    elif item['link_type'] == 'GC-Pixel':
+                        pdrain = pixeldrain.PixelDrain()
+                        ddzstat = pdrain.ddl_download(item['link'], item['id'], item['issueid'], resume=item.get('resume'), remote_filesize=remote_filesize)
+                    else:
+                        # Unknown link_type - mark as failed
+                        logger.warn('[DDL-DOWNLOADER] Unknown link_type: %s for item %s. Marking as failed.' % (item['link_type'], item['id']))
+                        ddzstat = {'success': False, 'filename': None, 'path': None, 'link_type': item['link_type']}
+
+                elif item['site'] == 'DDL(External)':
                     meganz = mega.MegaNZ()
-                    ddzstat = meganz.ddl_download(item['link'], None, item['id'], item['issueid'], item['link_type']) #item['filename'], item['id'])
-                elif item['link_type'] == 'GC-Media':
-                    mediaf = mediafire.MediaFire()
-                    ddzstat = mediaf.ddl_download(item['link'], item['id'], item['issueid'], resume=item.get('resume'), partial_filename=(item.get('tmp_filename') or item.get('filename')), remote_filesize=remote_filesize)
-                elif item['link_type'] == 'GC-Pixel':
-                    pdrain = pixeldrain.PixelDrain()
-                    ddzstat = pdrain.ddl_download(item['link'], item['id'], item['issueid'], resume=item.get('resume'), remote_filesize=remote_filesize)
+                    ddzstat = meganz.ddl_download(item['link'], item['filename'], item['id'], item['issueid'], item['link_type'])
                 else:
-                    # Unknown link_type - mark as failed
-                    logger.warn('[DDL-DOWNLOADER] Unknown link_type: %s for item %s. Marking as failed.' % (item['link_type'], item['id']))
-                    ddzstat = {'success': False, 'filename': None, 'path': None, 'link_type': item['link_type']}
-
-            elif item['site'] == 'DDL(External)':
-                meganz = mega.MegaNZ()
-                ddzstat = meganz.ddl_download(item['link'], item['filename'], item['id'], item['issueid'], item['link_type'])
-            else:
-                # Unknown site - mark as failed
-                logger.warn('[DDL-DOWNLOADER] Unknown site: %s for item %s. Marking as failed.' % (item['site'], item['id']))
+                    # Unknown site - mark as failed
+                    logger.warn('[DDL-DOWNLOADER] Unknown site: %s for item %s. Marking as failed.' % (item['site'], item['id']))
+                    ddzstat = {'success': False, 'filename': None, 'path': None, 'link_type': item.get('link_type', None)}
+            except Exception:
+                # A network error (Pixeldrain, MediaFire, FlareSolverr) is a failure of this host:
+                # carry on with the next host or release the item like any other host failure.
+                import traceback  # this function imports it locally elsewhere, so it is a local name here
+                logger.error('[DDL-DOWNLOADER] Download of %s [ID: %s] via %s raised an error: %s'
+                             % (item.get('series', 'Unknown'), item['id'], item.get('link_type'), traceback.format_exc()))
+                mylar.DDL_LOCK = False
                 ddzstat = {'success': False, 'filename': None, 'path': None, 'link_type': item.get('link_type', None)}
 
             # Check if ddzstat is None (should not happen, but safety check)
@@ -4800,6 +4875,17 @@ def is_issue_still_wanted(item):
 
 
 def search_queue(queue):
+    """Search queue thread. An unexpected error in one item is logged and the loop goes on."""
+    while True:
+        try:
+            _search_queue_loop(queue)
+            return
+        except Exception:
+            logger.error('[SEARCH-QUEUE] Unexpected error while processing a search item: %s' % traceback.format_exc())
+            time.sleep(5)
+
+
+def _search_queue_loop(queue):
     while True:
         if mylar.SEARCHLOCK is True:
             time.sleep(5)

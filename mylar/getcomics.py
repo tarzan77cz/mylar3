@@ -1743,26 +1743,27 @@ class GC(object):
                 ' be downloaded at a time using DDL. Patience.'
             )
             return
-        else:
-            mylar.DDL_LOCK = True
-
-        myDB = db.DBConnection()
-        mylar.DDL_QUEUED.append(id)
-        filename = None
-        try:
-            remote_filesize = int(remote_filesize) if remote_filesize else 0
-        except (TypeError, ValueError):
-            remote_filesize = 0
-        if 0 < remote_filesize < helpers.MIN_PLAUSIBLE_ARCHIVE_BYTES:
-            logger.fdebug('[DDL] Ignoring implausible stored remote filesize of %s bytes.' % remote_filesize)
-            remote_filesize = 0
-        self.cookie_receipt()
 
         MAX_AUTO_RESUME_ATTEMPTS = 6
         RETRY_DELAY = 30
         RETRIABLE_EXCEPTIONS = (requests.exceptions.Timeout, requests.exceptions.ConnectionError, requests.exceptions.ChunkedEncodingError)
 
+        # The lock is taken inside the try, so the finally below releases it even when
+        # cookie_receipt() (FlareSolverr) raises before the download starts.
         try:
+            mylar.DDL_LOCK = True
+            myDB = db.DBConnection()
+            mylar.DDL_QUEUED.append(id)
+            filename = None
+            try:
+                remote_filesize = int(remote_filesize) if remote_filesize else 0
+            except (TypeError, ValueError):
+                remote_filesize = 0
+            if 0 < remote_filesize < helpers.MIN_PLAUSIBLE_ARCHIVE_BYTES:
+                logger.fdebug('[DDL] Ignoring implausible stored remote filesize of %s bytes.' % remote_filesize)
+                remote_filesize = 0
+            self.cookie_receipt()
+
             for attempt in range(MAX_AUTO_RESUME_ATTEMPTS):
                 try:
                     if resume is None:
