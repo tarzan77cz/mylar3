@@ -1753,7 +1753,9 @@ class GC(object):
         try:
             mylar.DDL_LOCK = True
             myDB = db.DBConnection()
-            mylar.DDL_QUEUED.append(id)
+            # the DDL loop added the ID already; a second copy would outlive the cleanup (R41)
+            if id not in mylar.DDL_QUEUED:
+                mylar.DDL_QUEUED.append(id)
             filename = None
             try:
                 remote_filesize = int(remote_filesize) if remote_filesize else 0
@@ -2037,7 +2039,7 @@ class GC(object):
                             with open(dst_path, 'ab') as f:
                                 bytes_written = 0
                                 for chunk in t.iter_content(chunk_size=chunk_size):
-                                    if getattr(mylar, 'DDL_ABORT_REQUESTED', False):
+                                    if helpers.ddl_abort_requested(id):
                                         mylar.DDL_ABORT_REQUESTED = False
                                         download_aborted = True
                                         logger.info('[DDL-ABORT] Download aborted by user - stopping.')
@@ -2071,7 +2073,7 @@ class GC(object):
                             with open(dst_path, 'wb') as f:
                                 bytes_written = 0
                                 for chunk in t.iter_content(chunk_size=chunk_size):
-                                    if getattr(mylar, 'DDL_ABORT_REQUESTED', False):
+                                    if helpers.ddl_abort_requested(id):
                                         mylar.DDL_ABORT_REQUESTED = False
                                         download_aborted = True
                                         logger.info('[DDL-ABORT] Download aborted by user - stopping.')

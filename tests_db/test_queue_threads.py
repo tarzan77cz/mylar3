@@ -74,7 +74,8 @@ def test_cookie_receipt_error_in_the_loop_fails_only_that_item(lib, ddl_env, mon
     run_ddl_downloader([item])
     assert lib.rows("SELECT status FROM ddl_info WHERE ID='B1'") == [{'status': 'Failed'}]
     assert mylar.DDL_LOCK is False
-    # (downloadit appends the ID to DDL_QUEUED a second time, review R41, not part of this fix)
+    # downloadit no longer appends the ID a second time, so the cleanup leaves none (R41)
+    assert mylar.DDL_QUEUED == []
 
 
 def test_unexpected_error_in_an_item_fails_it_and_the_loop_goes_on(lib, ddl_env, monkeypatch):

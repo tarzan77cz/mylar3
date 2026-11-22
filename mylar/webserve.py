@@ -2044,7 +2044,19 @@ class WebInterface(object):
                     'total_files': 0, 'total_matched': 0, 'current_index': 0, 'current_total': 0,
                     'current_comic': '', 'current_issue': '', 'current_file': '', 'processed': 0, 'failed': 0
                 })
-                threading.Thread(target=PostProcess.Process).start()
+                def run_manual_pp():
+                    try:
+                        PostProcess.Process()
+                    finally:
+                        # The normal ends set running False themselves. After an error the
+                        # status page would poll "running" forever with the button disabled (R41).
+                        if mylar.MANUAL_PP_STATUS.get('running') is True:
+                            mylar.MANUAL_PP_STATUS.update({
+                                'running': False, 'phase': 'done',
+                                'summary': mylar.MANUAL_PP_STATUS.get('summary')
+                                or 'Post-processing ended with an error. See the log.',
+                            })
+                threading.Thread(target=run_manual_pp).start()
                 # Yield single JSON and return so the client receives exactly one chunk (avoids JSON parse error)
                 yield json.dumps({'status': 'success', 'message': 'Successfully submitted %s for manual post-processing...' % (nzb_folder)})
                 return
@@ -4863,7 +4875,11 @@ class WebInterface(object):
                     else:
                         resume = None
                 elif mode == 'abort':
-                    mylar.DDL_ABORT_REQUESTED = True  # Signal download loop to stop immediately
+                    # Signal the running download of this item to stop. The flag names the item,
+                    # so it cannot stop another download; nothing to signal when it is not
+                    # downloading (R38).
+                    if item['status'] == 'Downloading':
+                        mylar.DDL_ABORT_REQUESTED = item['id']
                     myDB.upsert("ddl_info", {'status': 'Failed'}, {'id': id})
                     try:
                         if id in mylar.DDL_QUEUED:

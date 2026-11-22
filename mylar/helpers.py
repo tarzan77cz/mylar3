@@ -4361,6 +4361,17 @@ DDL_MAX_HEAL_PP_ATTEMPTS = 3
 DDL_INCOMPLETE_RETRY_DELAY = 30
 DDL_TRANSIENT_RETRY_DELAY = 120
 
+def ddl_abort_requested(ddl_id):
+    """True when the user aborted the download of ``ddl_id`` (Queue Management, Abort).
+
+    DDL_ABORT_REQUESTED holds the ID of the aborted item; True (older callers) aborts any.
+    """
+    flag = getattr(mylar, 'DDL_ABORT_REQUESTED', False)
+    if flag is True:
+        return True
+    return flag not in (None, False, '') and str(flag) == str(ddl_id)
+
+
 def _ddl_fail_unexpected_item(item):
     """After an unexpected error in the DDL loop: mark the item Failed and free the queue state.
 
@@ -4442,6 +4453,23 @@ def _ddl_downloader_loop(queue, state):
                 logger.error('[DDL-DOWNLOADER] Traceback: %s' % traceback.format_exc())
                 time.sleep(5)
                 continue
+
+            # Every producer writes the ddl_info row before it queues the item. No row means
+            # "Clear queue" or "Remove" deleted it while the item waited here: do not download
+            # it and do not create a row with only id/status for it (R41).
+            if myDB.selectone('SELECT ID FROM ddl_info WHERE ID=?', [item['id']]).fetchone() is None:
+                logger.info('[DDL-DOWNLOADER] %s [ID: %s] was removed from the queue. Skipping it.'
+                            % (item.get('series', 'Unknown'), item['id']))
+                while item['id'] in mylar.DDL_QUEUED:
+                    try:
+                        mylar.DDL_QUEUED.remove(item['id'])
+                    except ValueError:
+                        break
+                continue
+
+            # An abort applies to the download that was running when it was asked for. One left
+            # over (Pixeldrain/MediaFire do not read it) must not stop this new item (R38).
+            mylar.DDL_ABORT_REQUESTED = False
 
             if item['id'] not in mylar.DDL_QUEUED:
                 mylar.DDL_QUEUED.append(item['id'])

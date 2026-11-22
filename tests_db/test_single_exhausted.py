@@ -51,6 +51,7 @@ def test_exhausted_single_issue_is_wanted_and_blacklisted(lib, fake_gc, download
 def test_exhausted_single_annual_is_wanted(lib, fake_gc):
     lib.add_series('C1', 'Batman', [1], year='2025')
     lib.add_annual('C1', 2, status='Snatched')
+    lib.execute("INSERT INTO ddl_info (ID, status, issueid) VALUES ('78', 'Queued', 'A2')")
     run_ddl_downloader([single_item('A2', '2', post_id='78')])
     assert lib.status('A2') == 'Wanted'
     assert [r['ID'] for r in lib.rows('SELECT ID FROM failed')] == ['78']
@@ -59,7 +60,9 @@ def test_exhausted_single_annual_is_wanted(lib, fake_gc):
 def test_downloaded_single_issue_is_left_alone(lib, fake_gc):
     lib.add_series('C1', 'Batman', [5], year='2025')
     lib.set_status(['I5'], 'Downloaded')
+    lib.execute("INSERT INTO ddl_info (ID, status, issueid) VALUES ('77', 'Queued', 'I5')")
     run_ddl_downloader([single_item('I5', '5')])
+    assert lib.rows("SELECT status FROM ddl_info WHERE ID='77'") == [{'status': 'Failed'}]
     assert lib.status('I5') == 'Downloaded'
 
 
@@ -67,5 +70,7 @@ def test_manual_item_keeps_the_pack_path(lib, fake_gc):
     lib.add_series('C1', 'Batman', [5], year='2025')
     lib.set_status(['I5'], 'Snatched')
     item = single_item('I5', '5', post_id='manual-abc')
+    lib.execute("INSERT INTO ddl_info (ID, status, issueid) VALUES ('manual-abc', 'Queued', 'I5')")
     run_ddl_downloader([item])
     assert lib.rows('SELECT * FROM failed') == []
+    assert lib.rows("SELECT status FROM ddl_info WHERE ID='manual-abc'") == [{'status': 'Failed'}]

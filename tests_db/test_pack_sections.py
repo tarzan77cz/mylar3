@@ -81,6 +81,7 @@ def test_failed_subpack_reverts_only_its_issues(lib, tomahawk, download):
 def test_finished_subpack_clears_only_its_issues(lib, tomahawk):
     mylar.CONFIG.POST_PROCESSING = True
     FakeGC.download = {'success': True, 'filename': None, 'path': '/downloads/Tomahawk 1-70'}
+    lib.execute("INSERT INTO ddl_info (ID, status) VALUES ('1-1', 'Queued')")
     run_ddl_downloader([subpack_item(tomahawk, 1, range(1, 71))])
     assert sorted(mylar.PACK_ISSUEIDS_DONT_QUEUE) == sorted(ids(range(71, 141)))
     pp = mylar.PP_QUEUE.get_nowait()
