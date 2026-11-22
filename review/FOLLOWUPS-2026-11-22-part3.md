@@ -180,3 +180,24 @@ Merge, nasazení a push jen se souhlasem uživatele. Postup podle `CLAUDE.md`:
    (`mylar3:candidate`, kontrola md5 a testů, přetagování, recreate jen služby `mylar` přes Dockhand).
 
 ## 7. Stav po merge
+
+2026-11-22 (časy pražské, v závorce UTC z `docker logs`), na pokyn uživatele:
+
+- **Merge** asi ve 22:05: `python3-dev` posunuta fast-forwardem z `ad8bba79` na `99f84416`, bez merge commitu.
+  Testy na tomto stavu viz kap. 2 (strom je shodný s větví). Push zatím ne.
+- **Před nasazením** `docker logs mylar --tail 50`: běžela jen fronta hledání (22:08, 21:08 UTC), žádné DDL
+  stahování ani post-processing.
+- **`docker cp`** pěti šablon podle kap. 6 z hlavního stromu. md5 všech pěti v kontejneru = repo,
+  `grep -c "function escapeHtml(text)"` = 1 v každé.
+- **Bez restartu** (šablony se čtou z disku při každém požadavku, kap. 6).
+- **Ověření:** `curl` z devel-workstation na `http://mylar:8090` (jen GET načtení stránek): `queueManage`,
+  `manage`, `comicDetails?ComicID=160511`, `upcoming`, `history` vrátily 200, každá s novým helperem, bez chyby
+  Mako. `node --check` na všech 24 vložených skriptových blocích vyrenderovaných stránek bez chyby. `docker logs
+  --since 5m` po načtení bez ERROR, tracebacku i hlášky Mako.
+- **Neověřeno:** v prohlížeči nic (Playwright MCP se na Mylar nedostane, kap. 8 druhé části). Akce měnící stav
+  (Restart/Resume/Abort ve frontě, ruční PP, picker, přímé DDL, výběr odmítnuté shody, Retry) se nespouštěly;
+  co zkontrolovat za provozu je v kap. 6, bod 4.
+- **Image `mylar3:local` (`616267df`) je teď o tuto část pozadu** za běžícím kódem: recreate kontejneru by
+  šablony tiše vrátil. Před dalším recreate rebuild z `python3-dev` podle kap. 9 druhé části (R14).
+- Worktree `/data/Tarzan/Cursor/Mylar-review-2026-11-22-part3` a větev `claude/review-2026-11-22-part3` zatím
+  zůstávají (celá větev je v `python3-dev`).
