@@ -148,4 +148,20 @@ Před restartem `docker logs mylar --tail 50` (běžící DDL nebo post-processi
 
 ## 8. Stav po merge
 
-Doplní se po merge a nasazení.
+2026-11-22 (časy pražské):
+
+- **Merge:** `python3-dev` posunuta fast-forwardem z `8624757b` na `27bd7363`, bez merge commitu.
+  Na `python3-dev` znovu `tests/` 88 passed, `tests_db/` 24 passed, `ast.parse` šesti souborů v 3.8 bez chyby.
+- **Nasazení:** před kopírováním měly soubory v kontejneru stejné md5 jako `8624757b`, návrat jde
+  z gitu. `docker cp` šesti souborů (`getcomics.py`, `getcomics_parse.py`, `helpers.py`, `search.py`,
+  `webserve.py`, `PostProcessor.py`), md5 v kontejneru po kopírování sedí s repem.
+- **Restart** se souhlasem uživatele v 9:46. Před ním byla DDL fronta prázdná a post-processing neběžel,
+  přerušilo se jen hledání ve SEARCH-QUEUE. Start bez chyb (`[DDL-STARTUP] No queued items`,
+  plánovače spuštěné), `/home` vrací 200, v logu po startu žádný traceback.
+- **Neověřeno v živé aplikaci:** kontrola v prohlížeči přes Playwright neproběhla. Šablony se nezměnily,
+  ruční zkouška přímého DDL s `Annual 1-3` (bod 7) zůstává na uživateli. Opravy R1 až R6 a Q5 se
+  projeví až u dalšího skutečného DDL stahování, chování se dá sledovat v logu (`unqueued_sections`,
+  `release_exhausted_ddl_item`).
+- **Úklid:** větev `claude/review-2026-11-21` a worktree `/data/Tarzan/Cursor/Mylar-review-2026-11-21`
+  (včetně `.scratch/` se srovnávacími skripty) zůstávají, smazání nebo archivace podle rozhodnutí
+  uživatele. Push na `fork` neproběhl.
