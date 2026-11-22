@@ -4693,11 +4693,22 @@ class WebInterface(object):
             return json.dumps({'status': True, 'message': 'Successfully cleared %s failed items from the history' % countchk})
 
         if mode == 'restart_queue':
+            # A running download keeps its thread: a second DDL thread would write the same
+            # file and take items from the same queue. Restart only an idle or dead queue.
+            busy_message = 'Download in progress, try again when it finishes.'
+            try:
+                pool_alive = mylar.DDLPOOL is not None and mylar.DDLPOOL.is_alive()
+            except Exception:
+                pool_alive = False
+            if pool_alive and helpers.ddl_download_in_progress():
+                logger.warn('[DDL-RESTART-QUEUE] A DDL download is in progress. Not restarting the queue.')
+                return json.dumps({'status': False, 'message': busy_message})
+
             # Reset DDL_LOCK first
             mylar.DDL_LOCK = False
             logger.info('[DDL-RESTART-QUEUE] Reset DDL_LOCK')
-            
-            # Force-restart DDL downloader: stop current thread (or orphan if stuck), then start fresh
+
+            # Force-restart DDL downloader: stop current thread, then start fresh
             try:
                 pool = mylar.DDLPOOL
                 if pool is not None and getattr(pool, 'is_alive', lambda: False)():
@@ -4708,8 +4719,10 @@ class WebInterface(object):
                     except Exception as e:
                         logger.warn('[DDL-RESTART-QUEUE] Error during thread join: %s' % e)
                     if pool.is_alive():
-                        logger.warn('[DDL-RESTART-QUEUE] DDL thread still alive (stuck in download). Orphaning it and starting new thread.')
-                        mylar.DDLPOOL = None
+                        # It took another item before the exit signal. Keep the one thread: it
+                        # stops at the exit signal after that item and the watchdog starts it again.
+                        logger.warn('[DDL-RESTART-QUEUE] DDL thread is still busy after the exit signal. Not starting a second thread.')
+                        return json.dumps({'status': False, 'message': busy_message})
             except Exception as e:
                 logger.warn('[DDL-RESTART-QUEUE] Error checking DDL thread: %s' % e)
                 try:

@@ -3706,6 +3706,35 @@ def heal_completed_but_snatched():
             )
 
 
+def ddl_download_in_progress():
+    """True while a DDL download is running.
+
+    GC-Main holds DDL_LOCK. Pixeldrain and MediaFire do not take the lock, so a 'Downloading'
+    row also counts when it was updated in the last 10 minutes or its file was written in the
+    last 2 minutes (the watchdog's limits for a stuck download).
+    """
+    if mylar.DDL_LOCK is True:
+        return True
+    myDB = db.DBConnection()
+    rows = myDB.select("SELECT * FROM ddl_info WHERE status = 'Downloading'")
+    now = datetime.datetime.now()
+    for row in rows or []:
+        try:
+            updated = datetime.datetime.strptime(row['updated_date'], '%Y-%m-%d %H:%M')
+        except (TypeError, ValueError, KeyError, IndexError):
+            updated = None
+        if updated is not None and now - updated < timedelta(minutes=10):
+            return True
+        _name, path = ddl_row_file(row)
+        if path:
+            try:
+                if now - datetime.datetime.fromtimestamp(os.path.getmtime(path)) < timedelta(minutes=2):
+                    return True
+            except OSError:
+                pass
+    return False
+
+
 def ddl_thread_check():
     """Start the DDL-QUEUE thread again when it has died while Mylar is running.
 
