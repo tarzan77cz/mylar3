@@ -692,6 +692,16 @@
         }
         </script>
         <script>
+        // Escape outside text (release titles, series names, server messages) before it goes into HTML
+        // or an attribute value; $('<div/>').text(x).html() leaves quotes as they are.
+        function escapeHtml(text) {
+            if (text === null || text === undefined) {
+                return '';
+            }
+            var map = {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'};
+            return String(text).replace(/[&<>"']/g, function(m) { return map[m]; });
+        }
+
         $(document).ready(function() {
         $('a.issue-window').click(function() {
 
@@ -817,7 +827,7 @@
                  data: { comicid: comicid, ReleaseComicID: annualid },
                  success: function(response) {
                     obj = JSON.parse(response);
-                    $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+obj['message']+"</div>");
+                    $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+escapeHtml(obj['message'])+"</div>");
                     if (obj['status'] == 'success'){
                         $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
                     } else {
@@ -855,7 +865,7 @@
                  data: { action: action, issueids: checkboxesChecked },
                  success: function(response) {
                     obj = JSON.parse(response);
-                    $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+obj['message']+"</div>");
+                    $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+escapeHtml(obj['message'])+"</div>");
                     if (obj['status'] == 'success'){
                         $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
                     } else {
@@ -887,7 +897,7 @@
                  data: { action: action, issueids: checkboxesChecked },
                  success: function(response) {
                     obj = JSON.parse(response);
-                    $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+obj['message']+"</div>");
+                    $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+escapeHtml(obj['message'])+"</div>");
                     if (obj['status'] == 'success'){
                         $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
                     } else {
@@ -910,7 +920,7 @@
                  data: { IssueID: issueid },
                  success: function(response) {
                     obj = JSON.parse(response);
-                    $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+obj['message']+"</div>");
+                    $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+escapeHtml(obj['message'])+"</div>");
                     if (obj['status'] == 'success'){
                         $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
                     } else {
@@ -939,7 +949,7 @@
                  data: { issueid: issueid },
                  success: function(response) {
                     obj = JSON.parse(response);
-                    $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+obj['message']+"</div>");
+                    $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+escapeHtml(obj['message'])+"</div>");
                     if (obj['status'] == 'success'){
                         $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
                         shizzlemedown(obj['filepath']);
@@ -961,7 +971,7 @@
                  data: { IssueID: issueid, ComicID: comicid , smode: smode, ReleaseComicID: rlscomicid },
                  success: function(response) {
                     obj = JSON.parse(response);
-                    $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+obj['message']+"</div>");
+                    $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+escapeHtml(obj['message'])+"</div>");
                     if (obj['status'] == 'success'){
                         $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
                     } else {
@@ -983,7 +993,7 @@
                  data: { IssueID: issueid, ComicID: comicid, ReleaseComicID: rlscomicid },
                  success: function(response) {
                     obj = JSON.parse(response);
-                    $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+obj['message']+"</div>");
+                    $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+escapeHtml(obj['message'])+"</div>");
                     if (obj['status'] == 'success'){
                         $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
                     } else {
@@ -1005,7 +1015,7 @@
                  data: { IssueID: issueid, mode: mode, ComicIssue: issuenumber, ComicID: comicid, manualsearch: msearch },
                  success: function(response) {
                     obj = JSON.parse(response);
-                    $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+obj['message']+"</div>");
+                    $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+escapeHtml(obj['message'])+"</div>");
                     if (obj['status'] == 'success'){
                         $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
                     } else {
@@ -1180,7 +1190,7 @@
         }
 
         function run_single_metatag(issueid, comicid, issuenumber){
-              $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>Now metatagging #"+issuenumber+"...</div>");
+              $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>Now metatagging #"+escapeHtml(issuenumber)+"...</div>");
               $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
               $.when($.ajax({
                  type: "GET",
@@ -1400,7 +1410,7 @@
                         loader.remove();
                         feedback.fadeOut();
                         if (data.status === 'success') {
-                            $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>Successfully queued " + name + "</div>");
+                            $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>Successfully queued " + escapeHtml(name) + "</div>");
                             $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
                             $("#choose_specific_download_dialog").dialog("close");
                             reload_tables();
@@ -1429,7 +1439,7 @@
                                alert(resp.error);
                                return;
                            }
-                           $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>Successfully downloaded "+name+"</div>");
+                           $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>Successfully downloaded "+escapeHtml(name)+"</div>");
                            if ( data.indexOf("success") > -1){
                                $("#choose_specific_download_dialog").dialog("close");
                            }
@@ -1494,10 +1504,10 @@
                                 try {
                                     var obj = JSON.parse(response);
                                     if (obj.status === 'success') {
-                                        $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>" + obj.message + "</div>");
+                                        $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>" + escapeHtml(obj.message) + "</div>");
                                         $('#ajaxMsg').addClass('success').fadeIn().delay(5000).fadeOut();
                                     } else {
-                                        $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-alert'></span>" + (obj.message || 'Error') + "</div>");
+                                        $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-alert'></span>" + escapeHtml(obj.message || 'Error') + "</div>");
                                         $('#ajaxMsg').addClass('error').fadeIn().delay(5000).fadeOut();
                                     }
                                 } catch (e) {
@@ -1506,7 +1516,13 @@
                                 }
                             },
                             error: function(xhr) {
-                                $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-alert'></span>Error: " + (xhr.responseText || 'Request failed') + "</div>");
+                                // The error body can be a whole HTML page: show only its text.
+                                // DOMParser builds an inert document, nothing in it runs or loads.
+                                var errText = xhr.responseText || 'Request failed';
+                                try {
+                                    errText = new DOMParser().parseFromString(errText, 'text/html').body.textContent || errText;
+                                } catch (e) {}
+                                $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-alert'></span>Error: " + escapeHtml(errText) + "</div>");
                                 $('#ajaxMsg').addClass('error').fadeIn().delay(5000).fadeOut();
                             }
                         });
@@ -1563,7 +1579,7 @@
                  data: { comicid: comicid },
                  success: function(response) {
                     obj = JSON.parse(response);
-                    $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+obj['message']+"</div>");
+                    $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+escapeHtml(obj['message'])+"</div>");
                     if (obj['status'] == 'success'){
                         $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
                     } else {
@@ -1623,7 +1639,7 @@
                      $("#cv_removed_dialog").dialog('close');
                      reload_tables();
                  }
-                 $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+obj['message']+"</div>");
+                 $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+escapeHtml(obj['message'])+"</div>");
                  if (obj['status'] == 'success'){
                      $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
                  } else {

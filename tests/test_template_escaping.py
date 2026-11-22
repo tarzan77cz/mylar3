@@ -78,6 +78,7 @@ def _escape_helper_source(template):
 HELPER_TEMPLATES = [
     'queue_management.html',
     'manage.html',
+    'comicdetails_update.html',
 ]
 
 
@@ -146,3 +147,57 @@ def test_manage_post_process_in_progress_status_is_set_as_text():
     _check('manage.html', "else if (obj['status'] == 'IN PROGRESS')", "$('#manual_pp_phase').text('Running...')",
            required=["statuschk.textContent = obj['message']"],
            forbidden=[r"statuschk\.innerHTML"])
+
+
+# --- comicdetails_update.html ----------------------------------------------------------------
+
+@pytest.mark.parametrize('start,end', [
+    ('function annual_delete(', 'function mark_the_issues('),
+    ('function mark_the_issues(', 'function mark_the_annuals('),
+    ('function mark_the_annuals(', 'function add2readinglist('),
+    ('function add2readinglist(', 'function shizzlemedown('),     # 'Successfully added <series> ...'
+    ('function downloadthisissue(', 'function unqueue_issue('),   # 'Now downloading issue #.. of <series>'
+    ('function unqueue_issue(', 'function retry_issue('),         # '... status of <series> #..'
+    ('function retry_issue(', 'function add_wanted('),
+    ('function add_wanted(', 'function reload_tables('),          # 'Successfully submitted search for <series>'
+    ('function skipped2wanted(', 'function display_date('),
+    ('function fix_cv_removed(', 'function count_checks('),       # 'Successfully removed <series> ...'
+])
+def test_comicdetails_server_messages_are_escaped(start, end):
+    _check('comicdetails_update.html', start, end,
+           required=[ESCAPED_OBJ_MESSAGE],
+           forbidden=[RAW_OBJ_MESSAGE])
+
+
+def test_comicdetails_single_metatag_escapes_issue_number():
+    _check('comicdetails_update.html', 'function run_single_metatag(', 'function runMetaIssue(',
+           required=['escapeHtml(issuenumber)'],
+           forbidden=[r'"\+issuenumber\+"'])
+
+
+def test_comicdetails_picker_download_escapes_release_title_in_messages():
+    # name is the GetComics/provider title of the release the user picked
+    _check('comicdetails_update.html', 'function downloadSpecificRelease(', 'function ShowSpinner(',
+           forbidden=[r"\.html\([^\n]*\+\s*name\s*\+"],
+           counts={'escapeHtml(name)': 2})
+
+
+def test_comicdetails_direct_download_escapes_server_message_and_error_text():
+    _check('comicdetails_update.html', 'function direct_download_dialog(', 'function search4missing(',
+           required=['escapeHtml(obj.message)', "escapeHtml(obj.message || 'Error')", 'escapeHtml(errText)',
+                     'DOMParser'],
+           forbidden=[r"\+ obj\.message \+", r"\+ \(obj\.message \|\| 'Error'\) \+",
+                      r"xhr\.responseText \|\| 'Request failed'\) \+"])
+
+
+def test_comicdetails_picker_table_cells_escaped_control():
+    # control: already escaped before the fix (text between tags); link, nzbid and provider id stay
+    # in search_results and never go into the HTML
+    _check('comicdetails_update.html', 'function getAvailableDownloads(', 'function downloadSpecificRelease(',
+           required=["var title = $('<div/>').text(search_results[i].nzbtitle || 'Unknown').html();",
+                     "var provider = $('<div/>').text(search_results[i].provider || 'Unknown').html();",
+                     "var size = $('<div/>').text(search_results[i].size || 'Unknown').html();",
+                     "var kind = $('<div/>').text(search_results[i].kind || 'Unknown').html();",
+                     "var reason = $('<div/>').text(search_results[i].reason || '').html();",
+                     "onclick=\"downloadSpecificRelease(' + i + ');\""],
+           forbidden=[r"'<td>' \+ search_results", r"search_results\[i\]\.(link|nzbid|tmpprov|rejected_)"])
