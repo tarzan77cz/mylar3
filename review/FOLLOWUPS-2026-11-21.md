@@ -162,6 +162,7 @@ Před restartem `docker logs mylar --tail 50` (běžící DDL nebo post-processi
   ruční zkouška přímého DDL s `Annual 1-3` (bod 7) zůstává na uživateli. Opravy R1 až R6 a Q5 se
   projeví až u dalšího skutečného DDL stahování, chování se dá sledovat v logu (`unqueued_sections`,
   `release_exhausted_ddl_item`).
-- **Úklid:** větev `claude/review-2026-11-21` a worktree `/data/Tarzan/Cursor/Mylar-review-2026-11-21`
-  (včetně `.scratch/` se srovnávacími skripty) zůstávají, smazání nebo archivace podle rozhodnutí
-  uživatele. Push na `fork` neproběhl.
+- **Push:** `python3-dev` pushnutá na `fork` (`tarzan77cz/mylar3`) se souhlasem uživatele.
+- **Úklid:** worktree přesunutý přes `git worktree move` do
+  `/data/Tarzan/Cursor/_archive/2026-11-22-mylar-review-worktree/Mylar-review-2026-11-21` (včetně `.scratch/`
+  se srovnávacími skripty). Větev `claude/review-2026-11-21` zůstává lokálně, celá je v `python3-dev`.
