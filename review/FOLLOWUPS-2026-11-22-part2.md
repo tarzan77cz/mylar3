@@ -209,7 +209,32 @@ docker cp data/interfaces/default/queue_management.html mylar:/app/mylar/data/in
 - **Merge** v 16:09 na pokyn uživatele: `python3-dev` posunuta fast-forwardem z `b912ddc4` na `aeddc549`,
   bez merge commitu. Na `python3-dev` v hlavním stromu znovu `tests/` 96 passed, `tests_db/` 142 passed,
   `ast.parse` šesti změněných modulů v 3.8 bez chyby.
-- **Nenasazeno:** žádný `docker cp`, kontejner `mylar` se nerestartoval. Postup v kap. 6 (s první částí).
-- **Nepushnuto** na `fork`.
+- **Push** na pokyn uživatele: `fork/python3-dev` `b912ddc4..328edce1` (včetně záznamu o merge). Na `origin` nic.
 - Worktree `/data/Tarzan/Cursor/Mylar-review-2026-11-22-part2` a větev `claude/review-2026-11-22-part2` zatím
   zůstávají (celá větev je v `python3-dev`).
+
+## 8. Nasazení
+
+2026-11-22 (časy pražské, v závorce UTC z `docker logs`), na pokyn uživatele, **první i druhá část najednou**
+(stav `python3-dev` `328edce1`):
+
+- **Před nasazením** `docker logs mylar`: fronta DDL prázdná (`DDL_LOCK: False`, `Queue size: 0`,
+  `DDL_QUEUED count: 0`), za posledních 15 min žádné stahování ani post-processing, běžela jen fronta hledání.
+  Těsně před restartem znovu ověřeno.
+- **`docker cp`** 12 souborů podle kap. 6: `mylar/getcomics.py`, `helpers.py`, `PostProcessor.py`, `search.py`,
+  `updater.py`, `webserve.py`, `search_filer.py`, `filers.py`, `downloaders/pixeldrain.py`,
+  `downloaders/mediafire.py`, `data/interfaces/default/comicdetails_update.html`, `queue_management.html`.
+  md5 všech 12 v kontejneru = repo.
+- **`docker restart mylar`** v 16:26 SEČ (15:26 UTC). Start čistý: `Starting Mylar on http://0.0.0.0:8090/`,
+  `[DDL-STARTUP] No queued items found in ddl_info table`, `[DDL-DOWNLOADER] DDL downloader thread started and
+  running`, `[DDL-WATCHDOG] DDL Watchdog thread started`. Jediné varování `No branch specified within config`
+  (běžné). V dalších minutách žádný ERROR ani traceback.
+- **Šablony:** `curl` z devel-workstation na `http://mylar:8090` (UI nemá proxy host, `mylar.tarzan77.cz` vede
+  na přihlášení brány UniFi UCG Max): `queueManage` 200 s `ajaxcallit('restart_queue')`, `comicDetails` (série
+  `160511`) 200 s novým JS pickeru (`Error downloading`), bez chyby Mako. Log po načtení bez chyb.
+- **Neověřeno:** v prohlížeči nic (Playwright MCP se na Mylar nedostane, skončil na přihlášení UniFi OS). Akce
+  měnící stav (picker, výběr odmítnuté shody, přímé DDL, Remove, Abort, Restart Queue, ruční PP) se
+  nespouštěly. Hlášky k ověření za provozu v kap. 6.
+- **Image `mylar3:local` se nepřestavoval.** Běžící kód je teď o obě části review před image; recreate kontejneru
+  by produkci vrátil na stav z 11. 9. Další krok: po pár dnech klidného provozu rebuild image z `python3-dev`
+  a recreate přes Dockhand (R14, Q8), pak třetí (bezpečnostní) část.
