@@ -43,11 +43,23 @@ class _Logger(types.ModuleType):
         return lambda *args, **kwargs: None
 
 
+class _Result(object):
+    def __init__(self, row):
+        self.row = row
+
+    def fetchone(self):
+        return self.row
+
+
 class _DB(object):
     upserts = []
+    rows = {}  # ddl_info rows by ID, e.g. {'1-1': {'status': 'Downloading'}}
 
     def upsert(self, table, vals, ctrl):
         _DB.upserts.append((table, dict(vals), dict(ctrl)))
+
+    def selectone(self, query, args=None):
+        return _Result(_DB.rows.get(str(args[0])) if args else None)
 
 
 def _install_stubs():
@@ -95,6 +107,7 @@ def gc_env(tmp_path):
     mylar = sys.modules['mylar']
     mylar.DDL_QUEUE = _Queue()
     _DB.upserts = []
+    _DB.rows = {}
     _Config.CACHE_DIR = str(tmp_path)
     _Config.SECURE_DIR = str(tmp_path)
     _Config.DDL_PRIORITY_ORDER = ['main', 'pixeldrain', 'mediafire']

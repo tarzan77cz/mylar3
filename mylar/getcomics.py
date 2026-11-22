@@ -1146,10 +1146,23 @@ class GC(object):
 
         wanted = []
         if pack is True:
+            # The issues of the pack that are not Downloaded yet (issue_find_ids leaves the
+            # Downloaded ones out), so a sub-pack of downloaded issues is not chosen (R27).
+            # Annuals only when no regular issue is left: "Annual 1" would also hit "#1 - 70".
             try:
-                wanted = [int(x) for x in pack_issuelist['issue_range']]
-            except (KeyError, TypeError, ValueError):
-                wanted = getcomics_parse.issue_numbers(pack_numbers)
+                pending = list(pack_issuelist['issues'] or [])
+            except (KeyError, TypeError):
+                pending = []
+            regular = [x for x in pending if not x.get('annual')]
+            for x in (regular or [x for x in pending if x.get('annual')]):
+                number = getcomics_parse.leading_int(x.get('issuenumber'))
+                if number is not None and number not in wanted:
+                    wanted.append(number)
+            if not wanted:
+                try:
+                    wanted = [int(x) for x in pack_issuelist['issue_range']]
+                except (KeyError, TypeError, ValueError):
+                    wanted = getcomics_parse.issue_numbers(pack_numbers)
         else:
             number = getcomics_parse.leading_int(value('IssueNumber'))
             if number is not None:
@@ -1675,6 +1688,18 @@ class GC(object):
                 self.comicid = comicinfo[0]['ComicID']
             if self.oneoff is None:
                 self.oneoff = comicinfo[0]['oneoff']
+
+            # A new search that finds the post again must not put a sub-pack ('<post id>-N')
+            # back to Queued while it waits, downloads or is done: the upsert would reuse its
+            # row and queue a second download. It counts as queued. Retries from the DDL loop
+            # (they pass the failed hosts) re-queue their item as before (R27).
+            if link_type_failure is None and pack_id not in (None, '') and str(mod_id) != str(pack_id):
+                existing = myDB.selectone('SELECT status FROM ddl_info WHERE ID=?', [mod_id]).fetchone()
+                if existing is not None and existing['status'] in ('Queued', 'Downloading', 'Completed'):
+                    logger.info('[DDL-QUEUE] %s [ID: %s] is already %s. Not queueing it again.'
+                                % (x['series'], mod_id, existing['status']))
+                    cnt += 1
+                    continue
 
             ctrlval = {'id': mod_id}
             vals = {

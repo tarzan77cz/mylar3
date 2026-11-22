@@ -55,6 +55,51 @@ def test_pack_queues_every_matching_subpack(gc_env):
     assert [q['series'] for q in queued] == ['Tomahawk #1 – 70', 'Tomahawk #71 – 140']
 
 
+def _tomahawk_pack(downloaded=()):
+    """packinfo as issue_find_ids gives it: 'issues' holds only the issues not Downloaded."""
+    issues = [{'issueid': 'I%s' % n, 'int_iss': n * 1000, 'issuenumber': str(n)}
+              for n in range(1, 141) if n not in downloaded]
+    return {'pack': True, 'pack_numbers': '1 - 140',
+            'pack_issuelist': {'issue_range': list(range(1, 141)), 'issues': issues, 'valid': True}}
+
+
+def test_pack_skips_subpack_with_all_issues_downloaded(gc_env):
+    # Review R27: #1-70 are Downloaded, the search was for #71.
+    comicinfo = [dict(_single('71')[0], pack=True)]
+    res, queued = _run(gc_env, read_fixture('post_tomahawk_subpacks.html'), comicinfo,
+                       _tomahawk_pack(downloaded=range(1, 71)))
+    assert res['success'] is True
+    assert [q['series'] for q in queued] == ['Tomahawk #71 – 140']
+
+
+def test_pack_with_nothing_downloaded_queues_both_subpacks(gc_env):
+    comicinfo = [dict(_single('71')[0], pack=True)]
+    res, queued = _run(gc_env, read_fixture('post_tomahawk_subpacks.html'), comicinfo, _tomahawk_pack())
+    assert [q['id'] for q in queued] == ['1-1', '1-2']
+
+
+@pytest.mark.parametrize('status', ['Queued', 'Downloading', 'Completed'])
+def test_second_search_does_not_requeue_a_running_subpack(gc_env, status):
+    # Review R27 with R4: the post is found again while sub-pack 1-1 still downloads.
+    comicinfo = [dict(_single('71')[0], pack=True)]
+    gc_env.db.rows.update({'1-1': {'status': status}, '1-2': {'status': 'Failed'}})
+    res, queued = _run(gc_env, read_fixture('post_tomahawk_subpacks.html'), comicinfo, _tomahawk_pack())
+    assert res['success'] is True
+    assert not res.get('unqueued_sections')  # 1-1 counts as queued: its issues stay Snatched
+    assert [q['id'] for q in queued] == ['1-2']
+    assert [ctrl['id'] for table, vals, ctrl in gc_env.db.upserts if table == 'ddl_info'] == ['1-2']
+
+
+def test_retry_of_a_downloading_subpack_still_queues_it(gc_env):
+    # the DDL loop retries a section with another host while its row says Downloading
+    gc_env.db.rows['1-2'] = {'status': 'Downloading'}
+    packinfo = _tomahawk_pack()
+    comicinfo = [dict(_single('1')[0], pack=True)]
+    res, queued = _run(gc_env, read_fixture('post_tomahawk_subpacks.html'), comicinfo, packinfo,
+                       ltf=['GC-Mirror'], section=1, post_id='1-2')
+    assert [q['id'] for q in queued] == ['1-2']
+
+
 def test_subpacks_carry_the_pack_id_and_their_issues(gc_env):
     # Review R2: PACK_ISSUEIDS_DONT_QUEUE and nzblog hold the post id '1', not '1-1' / '1-2'.
     packinfo = {'pack': True, 'pack_numbers': '1 - 140',
