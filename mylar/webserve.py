@@ -5552,6 +5552,9 @@ class WebInterface(object):
                                     except (OSError, IOError):
                                         logger.error('Failed to move files - check directories and manually re-run.')
                                         return
+                                    if renameiss['provisional_date']:
+                                        # named with an estimated cover date: correct it once CV has one
+                                        helpers.register_provisional_rename(issue['IssueID'], nfilename)
                                     filefind+=1
                                 else:
                                     logger.info('Not renaming ' + filename + ' as it is in desired format already.')

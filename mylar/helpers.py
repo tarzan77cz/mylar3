@@ -28,6 +28,8 @@ except ImportError:
     CURL_CFFI_AVAILABLE = False
 import shlex
 import queue
+import tempfile
+import threading
 import json
 import re
 import sys
@@ -212,6 +214,9 @@ def weekly_series_year(comicid):
     return None
 
 PROVISIONAL_RENAMES_FILE = 'provisional_renames.json'
+# Post-processing and the series refresh run in different threads: every load-modify-save of the
+# registry holds this lock, so one writer cannot drop the entries another one just added.
+PROVISIONAL_RENAMES_LOCK = threading.RLock()
 
 def load_provisional_renames():
     """Return {IssueID: filename} for files renamed with an estimated date while CV had no cover date."""
@@ -227,10 +232,21 @@ def load_provisional_renames():
 
 def save_provisional_renames(registry):
     path = os.path.join(mylar.DATA_DIR, PROVISIONAL_RENAMES_FILE)
-    tmp_path = path + '.tmp'
-    with open(tmp_path, 'w', encoding='utf-8') as f:
-        json.dump(registry, f, indent=2, sort_keys=True)
-    os.replace(tmp_path, path)
+    fd, tmp_path = tempfile.mkstemp(dir=mylar.DATA_DIR, prefix=PROVISIONAL_RENAMES_FILE + '.', suffix='.tmp')
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            json.dump(registry, f, indent=2, sort_keys=True)
+        os.replace(tmp_path, path)
+    except Exception:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)  # our own temp file in DATA_DIR, never a library file
+        raise
+
+def _same_name_ignoring_extension(location, filename):
+    """True when both names differ at most in the extension (Comics converts .cbr to .cbz)."""
+    if not location or not filename:
+        return False
+    return os.path.splitext(location)[0] == os.path.splitext(filename)[0]
 
 def rename_placeholder_dated_files(comicid):
     """Rename downloaded files whose filename date is a placeholder once CV provides the cover date.
@@ -248,7 +264,7 @@ def rename_placeholder_dated_files(comicid):
     if comic is None or not comic['ComicLocation']:
         return 0
     registry = load_provisional_renames()
-    registry_changed = False
+    resolved = {}  # IssueID -> registry entry that no longer needs correcting
     provisional_ids = list(registry.keys())
     id_filter = ''
     if provisional_ids:
@@ -263,12 +279,14 @@ def rename_placeholder_dated_files(comicid):
         if _valid_iso_date(row['IssueDate']) is None:
             continue
         issueid = str(row['IssueID'])
-        if issueid in registry:
-            # The estimate is resolved either way once CV has a cover date.
-            provisional_name = registry.pop(issueid)
-            registry_changed = True
-            if row['Location'] != provisional_name and '0000-00' not in (row['Location'] or ''):
+        provisional_name = registry.get(issueid)
+        if provisional_name is not None:
+            # Same name with another extension (.cbr converted to .cbz) still carries the estimate.
+            if not _same_name_ignoring_extension(row['Location'], provisional_name) and '0000-00' not in (row['Location'] or ''):
+                # renamed meanwhile, the file no longer carries the estimated date
+                resolved[issueid] = provisional_name
                 continue
+        # Until the file is really renamed, the registry entry stays so the next refresh retries.
         try:
             src = os.path.join(comic['ComicLocation'], row['Location'])
             if not os.path.isfile(src):
@@ -281,7 +299,11 @@ def rename_placeholder_dated_files(comicid):
                 continue
             nfilename = result['nfilename']
             dst = result['destination_dir']
-            if nfilename == row['Location'] or '0000-00' in nfilename:
+            if nfilename == row['Location']:
+                if provisional_name is not None:
+                    resolved[issueid] = provisional_name  # the estimate was the real cover date
+                continue
+            if '0000-00' in nfilename:
                 continue
             if '$' in nfilename:
                 logger.warn('[PLACEHOLDER-RENAME] %s #%s: unresolved token in new filename, skipping: %s' % (comic['ComicName'], row['Issue_Number'], nfilename))
@@ -292,12 +314,23 @@ def rename_placeholder_dated_files(comicid):
             shutil.move(src, dst)
             myDB.upsert('issues', {'Location': nfilename}, {'IssueID': row['IssueID']})
             renamed += 1
+            if provisional_name is not None:
+                resolved[issueid] = provisional_name
             logger.info('[PLACEHOLDER-RENAME] %s #%s: %s --> %s' % (comic['ComicName'], row['Issue_Number'], row['Location'], nfilename))
         except Exception as e:
             logger.warn('[PLACEHOLDER-RENAME] %s #%s: rename failed: %s' % (comic['ComicName'], row['Issue_Number'], e))
-    if registry_changed:
+    if resolved:
         try:
-            save_provisional_renames(registry)
+            with PROVISIONAL_RENAMES_LOCK:
+                current = load_provisional_renames()
+                changed = False
+                for issueid, name in resolved.items():
+                    # keep an entry another thread replaced meanwhile (a newer download of the issue)
+                    if current.get(issueid) == name:
+                        del current[issueid]
+                        changed = True
+                if changed:
+                    save_provisional_renames(current)
         except Exception as e:
             logger.warn('[PLACEHOLDER-RENAME] Unable to update the provisional renames registry: %s' % e)
     return renamed
@@ -347,11 +380,12 @@ def filename_issue_date(issue_row, publisher):
 def register_provisional_rename(issueid, filename):
     """Record a file named with an estimated cover date so it is corrected once CV provides one."""
     try:
-        registry = load_provisional_renames()
-        if registry.get(str(issueid)) == filename:
-            return
-        registry[str(issueid)] = filename
-        save_provisional_renames(registry)
+        with PROVISIONAL_RENAMES_LOCK:
+            registry = load_provisional_renames()
+            if registry.get(str(issueid)) == filename:
+                return
+            registry[str(issueid)] = filename
+            save_provisional_renames(registry)
         logger.fdebug('[PLACEHOLDER-RENAME] Recorded provisional filename for IssueID %s: %s' % (issueid, filename))
     except Exception as e:
         logger.warn('[PLACEHOLDER-RENAME] Unable to record provisional filename for IssueID %s: %s' % (issueid, e))
@@ -688,7 +722,7 @@ def rename_param(comicid, comicname, issue, ofilename, comicyear=None, issueid=N
                 logger.fdebug('Setting this to Unicode format as requested: %s' % prettycomiss)
                 prettycomiss = unicodeissue
 
-            issuedate = filename_issue_date(issuenzb, publisher)[0]
+            issuedate, provisional_date = filename_issue_date(issuenzb, publisher)
             issueyear = issuedate[:4]
             month = issuedate[5:7].replace('-', '').strip()
             month_name = fullmonth(month)
@@ -828,7 +862,9 @@ def rename_param(comicid, comicname, issue, ofilename, comicyear=None, issueid=N
             rename_this = {"destination_dir": dst,
                            "nfilename": nfilename,
                            "issueid": issueid,
-                           "comicid": comicid}
+                           "comicid": comicid,
+                           # the name uses an estimated cover date: whoever moves the file registers it
+                           "provisional_date": bool(provisional_date and not arc and mylar.CONFIG.FILE_FORMAT != '')}
 
             return rename_this
 

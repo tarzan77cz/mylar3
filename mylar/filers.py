@@ -643,13 +643,13 @@ class FileHandlers(object):
             logger.fdebug('Source: ' + ofilename)
             logger.fdebug('Destination: ' + dst)
 
-            if provisional_date and not arc and file_format != '':
-                helpers.register_provisional_rename(issueid, nfilename)
-
+            # Building a name renames nothing (previewRename only shows it): the caller that really
+            # moves the file registers an estimated name with helpers.register_provisional_rename.
             rename_this = {"destination_dir": dst,
                            "nfilename": nfilename,
                            "issueid": issueid,
-                           "comicid": comicid}
+                           "comicid": comicid,
+                           "provisional_date": bool(provisional_date and not arc and file_format != '')}
 
             return rename_this
 
