@@ -315,6 +315,96 @@ class PostProcessor(object):
         except OSError:
             pass
 
+    def _issue_for_file(self, cs, watchmatch, fl, myDB, module):
+        """The issue of watched series ``cs`` that file ``fl`` is filed as, when post-processing
+        has no issueid (DDL packs, Manual Run).
+
+        Returns (issuechk, fcdigit, temploc, annchk); None when the file has no issue number for
+        this series (the caller skips the series); 'error' when the number could not be read.
+        """
+        issuechk = None
+        fcdigit = None
+        annchk = "no"
+        temploc = None
+        possible = fl.get('possible_issuenumbers') or []
+        # The issue number filechecker picked comes first. The other numbers of the name
+        # (possible_issuenumbers: left to right, digits of the series name included) are tried
+        # only when that one is not in the series: "Top 10 005" is #5, not #10 (R18, Q14 a).
+        read_error = False
+        try:
+            if (any([cs['WatchValues']['Type'] == 'TPB', cs['WatchValues']['Type'] == 'HC', cs['WatchValues']['Type'] == 'GN']) and cs['WatchValues']['Total'] > 1) or all([cs['WatchValues']['Type'] == 'One-Shot', cs['WatchValues']['Total'] == 1]):
+                if watchmatch['series_volume'] is not None:
+                    just_the_digits = re.sub('[^0-9]', '', watchmatch['series_volume']).strip()
+                else:
+                    just_the_digits = re.sub('[^0-9.\-¼-¾⅐-⅞∞]', '', watchmatch['justthedigits']).strip()
+            else:
+                just_the_digits = watchmatch['justthedigits']
+        except Exception as e:
+            logger.warn('[Exception: %s] Unable to properly match up/retrieve issue number (or volume) for this [CS: %s] [WATCHMATCH: %s]' % (e, cs, watchmatch))
+            read_error = True
+            just_the_digits = None
+
+        if not read_error:
+            if just_the_digits is not None:
+                temploc= just_the_digits.replace('_', ' ')
+                temploc = re.sub('[\#\']', '', temploc)
+                #logger.fdebug('temploc: %s' % temploc)
+            else:
+                if any([cs['WatchValues']['Type'] == 'TPB', cs['WatchValues']['Type'] == 'GN', cs['WatchValues']['Type'] == 'HC', cs['WatchValues']['Type'] == 'One-Shot']):
+                   temploc = '1'
+                else:
+                   temploc = None
+
+        if temploc is not None:
+            issuechk, fcdigit, annchk = self._issue_for_number(cs, temploc, myDB, module)
+
+        if not issuechk and possible:
+            for candidate_int in possible:
+                found = myDB.select("SELECT * from issues WHERE ComicID=? AND Int_IssueNumber=?", [cs['ComicID'], candidate_int])
+                if found:
+                    issuechk, fcdigit, annchk = found, candidate_int, "no"
+                    temploc = found[0]['Issue_Number']
+                    break
+            if not issuechk and mylar.CONFIG.ANNUALS_ON is True:
+                for candidate_int in possible:
+                    found = myDB.select("SELECT * from annuals WHERE ComicID=? AND Int_IssueNumber=? AND NOT Deleted", [cs['ComicID'], candidate_int])
+                    if found:
+                        issuechk, fcdigit, annchk = found, candidate_int, "yes"
+                        temploc = found[0]['Issue_Number']
+                        break
+
+        if issuechk:
+            return issuechk, fcdigit, temploc, annchk
+        if read_error:
+            return 'error'
+        if temploc is None:
+            logger.info('this should have an issue number to match to this particular series: %s' % cs['ComicID'])
+            return None
+        return issuechk, fcdigit, temploc, annchk
+
+    def _issue_for_number(self, cs, temploc, myDB, module):
+        """(issuechk, fcdigit, annchk) for the issue number ``temploc`` filechecker read."""
+        if any(['annual' in temploc.lower(), 'special' in temploc.lower()]) and mylar.CONFIG.ANNUALS_ON is True:
+            biannchk = re.sub('-', '', temploc.lower()).strip()
+            if 'biannual' in biannchk:
+                logger.fdebug('%s Bi-Annual detected.' % module)
+                fcdigit = helpers.issue_number_parser(re.sub('biannual', '', str(biannchk)).strip()).asInt
+            else:
+                if 'annual' in temploc.lower():
+                    year_check = re.findall(r'(\d{4})(?=[\s]|annual\b|$)', temploc, flags=re.I)
+                    if year_check:
+                        ann_line = '%s annual' % year_check[0]
+                        fcdigit = helpers.issue_number_parser(re.sub(ann_line, '', str(temploc.lower())).strip()).asInt
+                    fcdigit = helpers.issue_number_parser(re.sub('annual', '', str(temploc.lower())).strip()).asInt
+                else:
+                    fcdigit = helpers.issue_number_parser(re.sub('special', '', str(temploc.lower())).strip()).asInt
+            logger.fdebug('%s Annual/Special detected [%s]. ComicID assigned as %s' % (module, fcdigit, cs['ComicID']))
+            issuechk = myDB.select("SELECT * from annuals WHERE ComicID=? AND Int_IssueNumber=? AND NOT Deleted", [cs['ComicID'], fcdigit])
+            return issuechk, fcdigit, "yes"
+        fcdigit = helpers.issue_number_parser(temploc).asInt
+        issuechk = myDB.select("SELECT * from issues WHERE ComicID=? AND Int_IssueNumber=?", [cs['ComicID'], fcdigit])
+        return issuechk, fcdigit, "no"
+
     def _ddl_own_folder(self, folder):
         """True when ``folder`` is a sub-folder of DDL_LOCATION (an unpacked DDL pack), so the
         cleanup may remove it. DDL_LOCATION itself and anything outside it are not (R19)."""
@@ -1191,84 +1281,14 @@ class PostProcessor(object):
                             nm+=1
                             continue
                         else:
-                            issuechk = None
-                            fcdigit = None
-                            annchk = "no"
-                            temploc = None
-                            possible = fl.get('possible_issuenumbers') or []
-                            if possible:
-                                for candidate_int in possible:
-                                    issuechk = myDB.select("SELECT * from issues WHERE ComicID=? AND Int_IssueNumber=?", [cs['ComicID'], candidate_int])
-                                    if issuechk:
-                                        fcdigit = candidate_int
-                                        temploc = issuechk[0]['Issue_Number']
-                                        break
-                                if not issuechk and mylar.CONFIG.ANNUALS_ON is True:
-                                    for candidate_int in possible:
-                                        issuechk = myDB.select("SELECT * from annuals WHERE ComicID=? AND Int_IssueNumber=? AND NOT Deleted", [cs['ComicID'], candidate_int])
-                                        if issuechk:
-                                            fcdigit = candidate_int
-                                            annchk = "yes"
-                                            temploc = issuechk[0]['Issue_Number']
-                                            break
-                            if possible and issuechk:
-                                datematch = "False"
-                            if not possible or not issuechk:
-                                try:
-                                    if (any([cs['WatchValues']['Type'] == 'TPB', cs['WatchValues']['Type'] == 'HC', cs['WatchValues']['Type'] == 'GN']) and cs['WatchValues']['Total'] > 1) or all([cs['WatchValues']['Type'] == 'One-Shot', cs['WatchValues']['Total'] == 1]):
-                                        if watchmatch['series_volume'] is not None:
-                                            just_the_digits = re.sub('[^0-9]', '', watchmatch['series_volume']).strip()
-                                        else:
-                                            just_the_digits = re.sub('[^0-9.\-\u00BC-\u00BE\u2150-\u215E\u221E]', '', watchmatch['justthedigits']).strip()
-                                    else:
-                                        just_the_digits = watchmatch['justthedigits']
-                                except Exception as e:
-                                    logger.warn('[Exception: %s] Unable to properly match up/retrieve issue number (or volume) for this [CS: %s] [WATCHMATCH: %s]' % (e, cs, watchmatch))
-                                    nm+=1
-                                    continue
-
-                                if just_the_digits is not None:
-                                    temploc= just_the_digits.replace('_', ' ')
-                                    temploc = re.sub('[\#\']', '', temploc)
-                                    #logger.fdebug('temploc: %s' % temploc)
-                                else:
-                                    if any([cs['WatchValues']['Type'] == 'TPB', cs['WatchValues']['Type'] == 'GN', cs['WatchValues']['Type'] == 'HC', cs['WatchValues']['Type'] == 'One-Shot']):
-                                       temploc = '1'
-                                    else:
-                                       temploc = None
-                                datematch = "False"
-
-                                if temploc is None and all([cs['WatchValues']['Type'] != 'TPB', cs['WatchValues']['Type'] != 'GN', cs['WatchValues']['Type'] != 'HC', cs['WatchValues']['Type'] != 'One-Shot']):
-                                    logger.info('this should have an issue number to match to this particular series: %s' % cs['ComicID'])
-                                    continue
-
-                                if temploc is not None and (any(['annual' in temploc.lower(), 'special' in temploc.lower()]) and mylar.CONFIG.ANNUALS_ON is True):
-                                    biannchk = re.sub('-', '', temploc.lower()).strip()
-                                    if 'biannual' in biannchk:
-                                        logger.fdebug('%s Bi-Annual detected.' % module)
-                                        fcdigit = helpers.issue_number_parser(re.sub('biannual', '', str(biannchk)).strip()).asInt
-                                    else:
-                                        if 'annual' in temploc.lower():
-                                            year_check = re.findall(r'(\d{4})(?=[\s]|annual\b|$)', temploc, flags=re.I)
-                                            if year_check:
-                                                ann_line = '%s annual' % year_check[0]
-                                                fcdigit = helpers.issue_number_parser(re.sub(ann_line, '', str(temploc.lower())).strip()).asInt
-                                            fcdigit = helpers.issue_number_parser(re.sub('annual', '', str(temploc.lower())).strip()).asInt
-                                        else:
-                                            fcdigit = helpers.issue_number_parser(re.sub('special', '', str(temploc.lower())).strip()).asInt
-                                    logger.fdebug('%s Annual/Special detected [%s]. ComicID assigned as %s' % (module, fcdigit, cs['ComicID']))
-                                    annchk = "yes"
-                                    issuechk = myDB.select("SELECT * from annuals WHERE ComicID=? AND Int_IssueNumber=? AND NOT Deleted", [cs['ComicID'], fcdigit])
-                                else:
-                                    annchk = "no"
-                                    if temploc is not None:
-                                        fcdigit = helpers.issue_number_parser(temploc).asInt
-                                        issuechk = myDB.select("SELECT * from issues WHERE ComicID=? AND Int_IssueNumber=?", [cs['ComicID'], fcdigit])
-                                    else:
-                                        fcdigit = None
-                                        issuechk = myDB.select("SELECT * from issues WHERE ComicID=?", [cs['ComicID']])
-                            else:
-                                datematch = "False"
+                            picked = self._issue_for_file(cs, watchmatch, fl, myDB, module)
+                            if picked == 'error':
+                                nm+=1
+                                continue
+                            if picked is None:
+                                continue
+                            issuechk, fcdigit, temploc, annchk = picked
+                            datematch = "False"
 
                             if not issuechk:
                                 try:
