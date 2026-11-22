@@ -98,6 +98,16 @@
         <script src="js/libs/jquery.dataTables.min.js"></script>
         <script src="js/libs/full_numbers_no_ellipses.js"></script>
         <script>
+        // Escape outside text (titles, file names, server messages) before it goes into HTML or an
+        // attribute value; $('<div/>').text(x).html() leaves quotes as they are.
+        function escapeHtml(text) {
+            if (text === null || text === undefined) {
+                return '';
+            }
+            var map = {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'};
+            return String(text).replace(/[&<>"']/g, function(m) { return map[m]; });
+        }
+
         var ImportTimer = setInterval(activecheck, 2000);
         var previousStatus = null;
         var previousAid = null;
@@ -217,7 +227,7 @@
                        return;
                    }
                    var objd = JSON.parse(data);
-                   $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+objd['message']+"</div>");
+                   $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+escapeHtml(objd['message'])+"</div>");
                    $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
             });
             $('#queue_table').DataTable().ajax.reload(null, false);
@@ -281,10 +291,10 @@
                                 var linkType = full[8] || '';
                                 var articleTitle = full[9] || ''; // article_title from ddl_info
                                 
-                                var result = linkType;
+                                var result = escapeHtml(linkType);
                                 if (articleTitle) {
-                                    // Escape HTML entities in the article title for tooltip
-                                    var escapedTitle = $('<div/>').text(articleTitle).html();
+                                    // Escape the article title for the tooltip, quotes too (attribute value)
+                                    var escapedTitle = escapeHtml(articleTitle);
                                     // Use Unicode info icon (ⓘ) or fallback to text
                                     result += ' <span style="color: #4a9eff; font-weight: bold; cursor: help; margin-left: 5px;" title="' + escapedTitle + '">ⓘ</span>';
                                 }
