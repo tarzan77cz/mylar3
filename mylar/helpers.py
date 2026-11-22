@@ -3648,7 +3648,7 @@ def heal_completed_but_snatched():
         return
     myDB = db.DBConnection()
     rows = myDB.select(
-        "SELECT d.ID AS id, d.series, d.filename, d.tmp_filename, d.issueid, d.comicid, d.remote_filesize, d.updated_date "
+        "SELECT d.ID AS id, d.series, d.filename, d.tmp_filename, d.issueid, d.comicid, d.remote_filesize, d.updated_date, d.pack "
         "FROM ddl_info d INNER JOIN issues i ON i.IssueID = d.issueid "
         "WHERE d.status = 'Completed' AND i.Status = 'Snatched' "
         "AND d.filename IS NOT NULL AND trim(d.filename) != ''"
@@ -3696,14 +3696,48 @@ def heal_completed_but_snatched():
             except (ValueError, KeyError):
                 pass
             continue
+        heal_counts = getattr(mylar, 'DDL_HEAL_PP_COUNT', None)
+        if heal_counts is None:
+            heal_counts = mylar.DDL_HEAL_PP_COUNT = {}
+        if heal_counts.get(ddl_id, 0) >= DDL_MAX_HEAL_PP_ATTEMPTS:
+            # Post-processing turned this readable file down every time: stop sending it.
+            heal_counts.pop(ddl_id, None)
+            ddl_heal_give_up(row, myDB)
+            continue
         if queue_ddl_postprocess(row):
+            heal_counts[ddl_id] = heal_counts.get(ddl_id, 0) + 1
             myDB.upsert('ddl_info', {
                 'updated_date': now.strftime('%Y-%m-%d %H:%M'),
             }, {'id': ddl_id})
             logger.info(
-                '[DDL-WATCHDOG] %s is still Snatched after a finished download. Sent the file to post-processing.'
-                % row['series']
+                '[DDL-WATCHDOG] %s is still Snatched after a finished download. Sent the file to post-processing (%s/%s).'
+                % (row['series'], heal_counts[ddl_id], DDL_MAX_HEAL_PP_ATTEMPTS)
             )
+
+
+def ddl_heal_give_up(row, myDB):
+    """Post-processing rejected a healed DDL file DDL_MAX_HEAL_PP_ATTEMPTS times.
+
+    The row goes to Failed. A single issue goes the Q5 way (Wanted + failed row) so the next
+    search takes another release; a pack is only logged and its issues stay as they are
+    (post-processing also rejects packs when it cannot tell the issue numbers). The file in
+    the download folder is kept.
+    """
+    ddl_id = row['id']
+    myDB.upsert('ddl_info', {
+        'status': 'Failed',
+        'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
+    }, {'id': ddl_id})
+    item = {'id': ddl_id, 'comicid': row['comicid'], 'issueid': row['issueid'], 'series': row['series'],
+            'comicinfo': None, 'packinfo': None, 'pack': _row_value(row, 'pack')}
+    if ddl_item_is_single_issue(item):
+        logger.warn('[DDL-WATCHDOG] Post-processing rejected %s %s times. Marking the download Failed and the issue'
+                    ' Wanted, so the next search takes another release. The file stays in the download folder.'
+                    % (row['series'], DDL_MAX_HEAL_PP_ATTEMPTS))
+        release_exhausted_ddl_item(item)
+    else:
+        logger.warn('[DDL-WATCHDOG] Post-processing rejected pack %s %s times. Marking the download Failed; its issues'
+                    ' stay as they are and the file stays in the download folder.' % (row['series'], DDL_MAX_HEAL_PP_ATTEMPTS))
 
 
 def ddl_download_in_progress():
@@ -4323,6 +4357,7 @@ def resolve_getcomics_dlds(url, timeout=(10, 25)):
 
 
 DDL_MAX_INCOMPLETE_ATTEMPTS = 6
+DDL_MAX_HEAL_PP_ATTEMPTS = 3
 DDL_INCOMPLETE_RETRY_DELAY = 30
 DDL_TRANSIENT_RETRY_DELAY = 120
 
