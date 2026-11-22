@@ -84,6 +84,24 @@ from mylar.auth import (
     require,
 )
 
+_DIRECT_DDL_ID_LOCK = threading.Lock()
+_DIRECT_DDL_LAST_ID = [0]
+
+
+def new_direct_ddl_id(myDB):
+    """A new 'manual-<digits>' ID for a direct DDL, unique even for two requests in one second (R39).
+
+    Only digits after the prefix: an ID with a second dash would look like a sub-pack of
+    another manual download to pack_queued_for_download.
+    """
+    with _DIRECT_DDL_ID_LOCK:
+        n = max(int(time.time() * 1000), _DIRECT_DDL_LAST_ID[0] + 1)
+        while myDB.selectone('SELECT ID FROM ddl_info WHERE ID=?', ['manual-%s' % n]).fetchone() is not None:
+            n += 1
+        _DIRECT_DDL_LAST_ID[0] = n
+        return 'manual-%s' % n
+
+
 def serve_template(templatename, **kwargs):
     interface_dir = os.path.join(str(mylar.PROG_DIR), 'data/interfaces/')
     if any([mylar.CONFIG.INTERFACE == 'default', mylar.CONFIG.INTERFACE is None]):
@@ -4463,7 +4481,7 @@ class WebInterface(object):
         # First issue in range for issue_find_ids check (e.g. "0" for "0-25", "26" for "26-50",
         # "1" for "Annual 1-3")
         first_issue = getcomics_parse.direct_ddl_check_issue(issue_range)
-        pack_id = 'manual-%s' % int(time.time())
+        pack_id = new_direct_ddl_id(myDB)
         try:
             issueid_info = helpers.issue_find_ids(ComicName, ComicID, issue_range, first_issue, pack_id)
         except Exception as e:
@@ -4474,6 +4492,17 @@ class WebInterface(object):
         issueid = None
         if issueid_info.get('issues'):
             issueid = issueid_info['issues'][0]['issueid']
+        # An Archived issue has its file: queueing the range must not change it (R39). Skipped and
+        # Ignored issues of the range are marked Snatched as before (the user chose the range).
+        snatch_issues = []
+        for isid in issueid_info['issues']:
+            isschk = myDB.selectone('SELECT Status FROM issues WHERE IssueID=?', [isid['issueid']]).fetchone()
+            if isschk is None:
+                isschk = myDB.selectone('SELECT Status FROM annuals WHERE IssueID=?', [isid['issueid']]).fetchone()
+            if isschk is not None and isschk['Status'] == 'Archived':
+                logger.info('[QUEUE-DIRECT-DDL] IssueID %s is Archived. Leaving its status as it is.' % isid['issueid'])
+                continue
+            snatch_issues.append(isid)
         comicinfo = [{
             'ComicID': ComicID,
             'ComicName': ComicName,
@@ -4513,7 +4542,7 @@ class WebInterface(object):
                 'status': 'Queued',
             }
             myDB.upsert('ddl_info', vals, ctrlval)
-            for isid in issueid_info['issues']:
+            for isid in snatch_issues:
                 updater.nzblog(isid['issueid'], nzbname, ComicName, id=pack_id, prov='DDL(GetComics)', oneoff=False)
                 updater.foundsearch(ComicID, isid['issueid'], mode='want_ann' if isid.get('annual') else 'want', provider='DDL(GetComics)')
             try:
@@ -4593,7 +4622,7 @@ class WebInterface(object):
                 'resume': None,
             })
             logger.info('[QUEUE-DIRECT-DDL] Queued direct download for %s (issues %s)' % (ComicName, issue_range))
-            for isid in issueid_info['issues']:
+            for isid in snatch_issues:
                 updater.nzblog(isid['issueid'], nzbname, ComicName, id=pack_id, prov='DDL(GetComics)', oneoff=False)
                 updater.foundsearch(ComicID, isid['issueid'], mode='want_ann' if isid.get('annual') else 'want', provider='DDL(GetComics)')
         return json.dumps({'status': 'success', 'message': 'Direct download queued for %s (issues %s)' % (ComicName, issue_range)})
@@ -4947,7 +4976,8 @@ class WebInterface(object):
                     issueid_info = None
                     if item.get('pack') and item.get('comicid') and item.get('issues'):
                         try:
-                            first_issue = (item['issues'].strip().split('-')[0] or '0').strip().lstrip('#')
+                            # same check issue as queue_direct_ddl ('Annual 1-3' -> '1', R39)
+                            first_issue = getcomics_parse.direct_ddl_check_issue(item['issues'])
                             issueid_info = helpers.issue_find_ids(item['series'], item['comicid'], item['issues'], first_issue, item['id'])
                             if issueid_info.get('valid') and issueid_info.get('issues'):
                                 issueid = issueid_info['issues'][0]['issueid']
