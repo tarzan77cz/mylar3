@@ -18,9 +18,11 @@ import mylar  # noqa: E402
 from mylar import helpers  # noqa: E402
 
 SCHEMA = [
-    'CREATE TABLE comics (ComicID TEXT UNIQUE, ComicName TEXT, ComicYear TEXT, Type TEXT, Corrected_Type TEXT)',
+    'CREATE TABLE comics (ComicID TEXT UNIQUE, ComicName TEXT, ComicYear TEXT, Type TEXT, Corrected_Type TEXT,'
+    ' ComicName_Filesafe TEXT, ComicPublisher TEXT, AlternateSearch TEXT, UseFuzzy TEXT, ComicVersion TEXT,'
+    ' TorrentID_32P TEXT, IgnoreType INT, AllowPacks INT, ComicLocation TEXT)',
     'CREATE TABLE issues (IssueID TEXT, ComicName TEXT, Issue_Number TEXT, Status TEXT, ComicID TEXT,'
-    ' IssueDate TEXT, Int_IssueNumber INT)',
+    ' IssueDate TEXT, Int_IssueNumber INT, ReleaseDate TEXT, DigitalDate TEXT, DateAdded TEXT, Location TEXT)',
     'CREATE TABLE annuals (IssueID TEXT, Issue_Number TEXT, Status TEXT, ComicID TEXT, Int_IssueNumber INT,'
     ' ComicName TEXT, Deleted INT DEFAULT 0)',
     'CREATE TABLE nzblog (IssueID TEXT, NZBName TEXT, SARC TEXT, PROVIDER TEXT, ID TEXT, AltNZBName TEXT, OneOff TEXT)',

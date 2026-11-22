@@ -1602,6 +1602,19 @@ def verification(verified_matches, is_info):
 
 
 def searchforissue(issueid=None, new=False, rsschecker=None, manual=False):
+    # The RSS scan takes SEARCHLOCK and releases it only at its end. An error in between
+    # must not leave it set, or search_queue and every later RSS scan wait forever (R25).
+    # The single-issue branch releases the lock in its own finally.
+    try:
+        return _searchforissue(issueid=issueid, new=new, rsschecker=rsschecker, manual=manual)
+    except Exception:
+        if rsschecker and mylar.SEARCHLOCK is True:
+            logger.error('[SEARCH] The RSS search scan ended with an error. Releasing the search lock.')
+            mylar.SEARCHLOCK = False
+        raise
+
+
+def _searchforissue(issueid=None, new=False, rsschecker=None, manual=False):
     if rsschecker == 'yes':
         while mylar.SEARCHLOCK is True:
            # logger.info(
@@ -1855,6 +1868,11 @@ def searchforissue(issueid=None, new=False, rsschecker=None, manual=False):
             for result in sorted(results, key=itemgetter('StoreDate'), reverse=True):
 
                 try:
+                    # set per item, so the exception handler below never reads an unset
+                    # name or the values of the previous item
+                    comicname = None
+                    SeriesYear = None
+                    booktype = None
                     OneOff = False
                     storyarc_watchlist = False
                     comic = myDB.selectone(
@@ -2074,7 +2092,7 @@ def searchforissue(issueid=None, new=False, rsschecker=None, manual=False):
                         'seriesyear': SeriesYear,
                         'issueid': result['IssueID'],
                         'comicid': result['ComicID'],
-                        'smode': smode,
+                        'smode': result.get('mode'),
                         'booktype': booktype,
                     }
 
