@@ -4973,6 +4973,7 @@ class WebInterface(object):
                                          'tmp_filename': item.get('tmp_filename'),
                                          'comicinfo': comicinfo,
                                          'packinfo': packinfo,
+                                         'pack': item['pack'],
                                          'site': item['site'],
                                          'remote_filesize': item['remote_filesize'],
                                          'resume': resume})

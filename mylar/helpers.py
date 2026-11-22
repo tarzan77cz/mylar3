@@ -2731,20 +2731,96 @@ def reverse_ddl_item_snatch(item, **kwargs):
     )
 
 
+def ddl_item_is_pack(item):
+    """True when a DDL queue item downloads a pack.
+
+    Items from a search carry it in packinfo / comicinfo; items restored from ddl_info
+    (auto-load, startup) only have the 'pack' column of their row.
+    """
+    packinfo = item.get('packinfo')
+    if isinstance(packinfo, dict) and packinfo.get('pack') is True:
+        return True
+    comicinfo = item.get('comicinfo')
+    try:
+        if comicinfo[0].get('pack') is True:
+            return True
+    except (IndexError, KeyError, TypeError, AttributeError):
+        pass
+    return item.get('pack') in (1, True, '1')
+
+
 def ddl_item_is_single_issue(item):
     """True for a DDL queue item of one issue (not a pack, not a manual direct download)."""
     if str(item.get('id') or '').startswith('manual-'):
         return False
-    packinfo = item.get('packinfo')
-    if isinstance(packinfo, dict) and packinfo.get('pack') is True:
+    if ddl_item_is_pack(item):
         return False
-    comicinfo = item.get('comicinfo')
-    try:
-        if comicinfo[0].get('pack') is True:
-            return False
-    except (IndexError, KeyError, TypeError, AttributeError):
-        pass
     return item.get('issueid') not in (None, '')
+
+
+def ddl_item_has_context(item):
+    """False for an item restored from ddl_info: it has no comicinfo / packinfo of its search."""
+    return bool(item.get('comicinfo')) and bool(item.get('packinfo'))
+
+
+def _issue_table_and_number(issueid):
+    """('issues' or 'annuals', Int_IssueNumber, Issue_Number) of an IssueID, or (None, None, None)."""
+    myDB = db.DBConnection()
+    row = myDB.selectone('SELECT Int_IssueNumber, Issue_Number FROM issues WHERE IssueID=?', [issueid]).fetchone()
+    if row is not None:
+        return 'issues', row['Int_IssueNumber'], row['Issue_Number']
+    row = myDB.selectone('SELECT Int_IssueNumber, Issue_Number FROM annuals WHERE IssueID=? AND NOT Deleted',
+                         [issueid]).fetchone()
+    if row is not None:
+        return 'annuals', row['Int_IssueNumber'], row['Issue_Number']
+    return None, None, None
+
+
+def release_restored_pack_item(item):
+    """A pack item restored from ddl_info failed: put the issues it was downloading back to Wanted.
+
+    The snatch is found in nzblog under the post id. A sub-pack '<post id>-N' returns only the
+    issues of its section, read from the section header kept in ddl_info.series; when the header
+    names no issue numbers nothing is returned (the other sections may still download).
+    Nothing goes to the failed table (as for a pack with its search context).
+    """
+    item_id = str(item['id'])
+    base_id = item_id.split('-', 1)[0] if re.match(r'^\d+-\d+$', item_id) else item_id
+    issueids = get_pack_snatched_issueids(base_id, item.get('comicid'))
+    if base_id != item_id:
+        numbers = getcomics_parse.section_issue_numbers(item.get('series') or '')
+        if not numbers:
+            logger.warn('[DDL-SECTIONS] Restored section %s of pack %s names no issue numbers - its issues stay as they are.'
+                        % (item.get('series'), base_id))
+            return []
+        wanted = set(issue_number_parser(str(n)).asInt for n in numbers)
+        annual = getcomics_parse.section_is_annual(item.get('series') or '')
+        section_ids = []
+        for issueid in issueids:
+            table, int_iss, _number = _issue_table_and_number(issueid)
+            if table is None or (table == 'annuals') != bool(annual):
+                continue
+            if int_iss in wanted:
+                section_ids.append(issueid)
+        issueids = section_ids
+    logger.info('[DDL-DOWNLOADER] Restored pack item %s failed. Returning %s issue(s) of pack %s to Wanted.'
+                % (item_id, len(issueids), base_id))
+    return reverse_the_pack_snatch(base_id, item.get('comicid'), issueids=issueids)
+
+
+def release_restored_ddl_item(item):
+    """An item restored from ddl_info (no search context) failed: no other host can be tried.
+
+    A single issue goes the Q5 way (Wanted + failed row), a pack returns its issues to Wanted,
+    a manual direct download keeps its old handling.
+    """
+    if str(item.get('id') or '').startswith('manual-'):
+        return reverse_ddl_item_snatch(item)
+    if ddl_item_is_pack(item):
+        return release_restored_pack_item(item)
+    if ddl_item_is_single_issue(item):
+        return release_exhausted_ddl_item(item)
+    return []
 
 
 def release_exhausted_ddl_item(item):
@@ -2763,6 +2839,9 @@ def release_exhausted_ddl_item(item):
         nzbname = item['comicinfo'][0].get('nzbtitle')
     except (IndexError, KeyError, TypeError, AttributeError):
         pass
+    if issue_number is None:
+        # restored from ddl_info: no comicinfo, read the number from the issue itself
+        issue_number = _issue_table_and_number(item['issueid'])[2]
     return reverse_the_pack_snatch(
         ddl_item_pack_id(item),
         item['comicid'],
@@ -4064,6 +4143,27 @@ def ddl_watchdog():
             logger.error('[DDL-WATCHDOG] Error in watchdog thread: %s' % e)
             time.sleep(60)  # Wait before retrying
 
+def ddl_row_resume(row, label='DDL-AUTOLOAD'):
+    """Bytes of the partial file a ddl_info row points at, to resume from (None = start clean).
+
+    Shared by the startup load, the auto-load and the retry of an incomplete download.
+    ``row`` is a sqlite3.Row or a dict with link_type, filename, tmp_filename and series.
+    """
+    if not (mylar.CONFIG.DDL_AUTORESUME and mylar.CONFIG.DDL_LOCATION):
+        return None
+    try:
+        lt = row['link_type']
+        fn = _row_value(row, 'tmp_filename') or row['filename']
+        if lt in (None, 'GC-Main', 'GC-Mirror', 'GC-Pixel', 'GC-Media') and fn:
+            size = os.stat(os.path.join(mylar.CONFIG.DDL_LOCATION, fn)).st_size
+            if size > 0:
+                logger.fdebug('[%s] Resume possible for %s: %s bytes' % (label, _row_value(row, 'series'), size))
+                return size
+    except (OSError, TypeError, KeyError, IndexError):
+        pass
+    return None
+
+
 def ddl_load_queued_items():
     """
     Load items from ddl_info table with status 'Queued' into DDL_QUEUE on startup.
@@ -4115,23 +4215,8 @@ def ddl_load_queued_items():
                         remote_filesize = 0
                     
                     # Auto-resume: use partial file if DDL_AUTORESUME and provider supports resume
-                    resume = None
-                    if (mylar.CONFIG.DDL_AUTORESUME and mylar.CONFIG.DDL_LOCATION):
-                        try:
-                            lt = item['link_type']
-                            try:
-                                fn = item['tmp_filename'] or item['filename']
-                            except (KeyError, TypeError):
-                                fn = item['filename']
-                            if lt in (None, 'GC-Main', 'GC-Mirror', 'GC-Pixel', 'GC-Media') and fn:
-                                fp = os.path.join(mylar.CONFIG.DDL_LOCATION, fn)
-                                size = os.stat(fp).st_size
-                                if size > 0:
-                                    resume = size
-                                    logger.fdebug('[DDL-STARTUP] Resume possible for %s: %s bytes' % (item['series'], size))
-                        except (OSError, TypeError, KeyError):
-                            pass
-                    
+                    resume = ddl_row_resume(item, 'DDL-STARTUP')
+
                     queue_item = {
                         'link': item['link'],
                         'mainlink': item['mainlink'],
@@ -4147,6 +4232,7 @@ def ddl_load_queued_items():
                         'tmp_filename': item['tmp_filename'] if 'tmp_filename' in item.keys() else None,
                         'comicinfo': None,
                         'packinfo': None,
+                        'pack': _row_value(item, 'pack'),
                         'site': item['site'],
                         'remote_filesize': remote_filesize,
                         'resume': resume,
@@ -4472,7 +4558,17 @@ def _ddl_downloader_loop(queue, state):
                         'status': 'Failed',
                         'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
                     }, ctrlval)
+                    # Do not leave the issues Snatched with nothing downloading them.
+                    if ddl_item_has_context(item):
+                        release_exhausted_ddl_item(item)
+                    else:
+                        release_restored_ddl_item(item)
                     ddl_cleanup(item['id'])
+                    try:
+                        if item['id'] in mylar.DDL_QUEUED:
+                            mylar.DDL_QUEUED.remove(item['id'])
+                    except (ValueError, KeyError):
+                        pass
                 else:
                     delay = DDL_TRANSIENT_RETRY_DELAY if ddzstat.get('transient') else DDL_INCOMPLETE_RETRY_DELAY
                     logger.warn(
@@ -4484,11 +4580,22 @@ def _ddl_downloader_loop(queue, state):
                         'status': 'Queued',
                         'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
                     }, ctrlval)
-                try:
-                    if item['id'] in mylar.DDL_QUEUED:
-                        mylar.DDL_QUEUED.remove(item['id'])
-                except (ValueError, KeyError):
-                    pass
+                    # Back into the in-memory queue with its search context (comicinfo, packinfo,
+                    # pack_id, section ...), so a later failure still tries the next host and Q5.
+                    # The ID stays in DDL_QUEUED like an auto-loaded item; auto-load only runs on
+                    # an empty queue, so it cannot queue this item a second time.
+                    row = myDB.selectone('SELECT * FROM ddl_info WHERE ID=?', [item['id']]).fetchone()
+                    retry_item = dict(item)
+                    if row is not None:
+                        retry_item['filename'] = row['filename']
+                        retry_item['tmp_filename'] = _row_value(row, 'tmp_filename')
+                        retry_item['remote_filesize'] = row['remote_filesize'] or 0
+                        retry_item['resume'] = ddl_row_resume(row, 'DDL-RETRY')
+                    else:
+                        retry_item['resume'] = None
+                    queue.put(retry_item)
+                    if item['id'] not in mylar.DDL_QUEUED:
+                        mylar.DDL_QUEUED.append(item['id'])
             else:
                 if item['site'] == 'DDL(GetComics)':
                     extraction_failed_zip_ok = False
@@ -4557,12 +4664,12 @@ def _ddl_downloader_loop(queue, state):
                             ltf = None
                         if not ltf:
                             logger.info('[Status: %s] Failed to download item from %s : %s ' % (ddzstat.get('success') if ddzstat else 'Unknown', item['link_type'], ddzstat))
-                        # Direct-download / restarted items have no alternate links; mark failed and reverse snatch
-                        if not item.get('comicinfo') or not item.get('packinfo'):
+                        # Direct-download / restarted items have no alternate links; mark failed and
+                        # put their issues back to Wanted (single issue via Q5, pack by its nzblog snatch)
+                        if not ddl_item_has_context(item):
                             nval = {'status': 'Failed', 'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}
                             myDB.upsert('ddl_info', nval, ctrlval)
-                            if item.get('pack') or (item.get('id') and str(item['id']).startswith('manual-')):
-                                reverse_ddl_item_snatch(item)
+                            release_restored_ddl_item(item)
                             ddl_cleanup(item['id'])
                             try:
                                 if item['id'] in mylar.DDL_QUEUED:
@@ -4576,8 +4683,8 @@ def _ddl_downloader_loop(queue, state):
                                 logger.warn('[DDL-DOWNLOADER] No valid mainlink for alternate links (item %s). Marking as Failed.' % item['id'])
                                 nval = {'status': 'Failed', 'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}
                                 myDB.upsert('ddl_info', nval, ctrlval)
-                                if item.get('pack') or (item.get('id') and str(item['id']).startswith('manual-')):
-                                    reverse_ddl_item_snatch(item)
+                                # pack: its section back to Wanted; single issue: Q5 (Wanted + failed row)
+                                release_exhausted_ddl_item(item)
                                 ddl_cleanup(item['id'])
                                 try:
                                     if item['id'] in mylar.DDL_QUEUED:
@@ -4611,8 +4718,9 @@ def _ddl_downloader_loop(queue, state):
                                     logger.error('[DDL-DOWNLOADER] parse_downloadresults failed for %s: %s. Marking as Failed.' % (item['id'], parse_err))
                                     nval = {'status': 'Failed', 'updated_date': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}
                                     myDB.upsert('ddl_info', nval, ctrlval)
-                                    if item.get('pack') or (item.get('id') and str(item['id']).startswith('manual-')):
-                                        reverse_ddl_item_snatch(item)
+                                    # pack: its section back to Wanted; single issue: Q5 (Wanted + failed row)
+                                    release_exhausted_ddl_item(item)
+                                    link_type_failure.pop(item['id'], None)
                                     ddl_cleanup(item['id'])
                                     try:
                                         if item['id'] in mylar.DDL_QUEUED:
@@ -4709,24 +4817,8 @@ def _ddl_downloader_loop(queue, state):
                                     remote_filesize = 0
                                 
                                 # Auto-resume: use partial file if DDL_AUTORESUME and provider supports resume
-                                resume = None
-                                if (mylar.CONFIG.DDL_AUTORESUME and mylar.CONFIG.DDL_LOCATION):
-                                    try:
-                                        lt = db_item['link_type']
-                                        # sqlite3.Row has no .get(); use bracket access
-                                        try:
-                                            fn = db_item['tmp_filename'] or db_item['filename']
-                                        except (KeyError, TypeError):
-                                            fn = db_item['filename'] if 'filename' in db_item.keys() else None
-                                        if lt in (None, 'GC-Main', 'GC-Mirror', 'GC-Pixel', 'GC-Media') and fn:
-                                            fp = os.path.join(mylar.CONFIG.DDL_LOCATION, fn)
-                                            size = os.stat(fp).st_size
-                                            if size > 0:
-                                                resume = size
-                                                logger.fdebug('[DDL-AUTOLOAD] Resume possible for %s: %s bytes' % (db_item['series'], size))
-                                    except (OSError, TypeError, KeyError):
-                                        pass
-                                
+                                resume = ddl_row_resume(db_item, 'DDL-AUTOLOAD')
+
                                 # sqlite3.Row has no .get(); use bracket access for optional column
                                 try:
                                     tmp_fn = db_item['tmp_filename']
@@ -4747,6 +4839,7 @@ def _ddl_downloader_loop(queue, state):
                                     'tmp_filename': tmp_fn,
                                     'comicinfo': None,
                                     'packinfo': None,
+                                    'pack': _row_value(db_item, 'pack'),
                                     'site': db_item['site'],
                                     'remote_filesize': remote_filesize,
                                     'resume': resume,
