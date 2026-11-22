@@ -76,11 +76,12 @@ def refresh(series, monkeypatch):
     state = {'during': None}
 
     def add(ComicID, mismatch, **kwargs):
-        return {'status': 'complete', 'issuedata': [5, 6], 'anndata': None}
+        return {'status': 'complete', 'issuedata': [{'IssueID': 'I5', 'n': 5}, {'IssueID': 'I6', 'n': 6}],
+                'anndata': None}
 
     def collection(issuedata, nostatus=None, serieslast_updated=None):
-        for n in issuedata:
-            insert(series, issue_row('I%s' % n, n))  # CV data, no status yet
+        for x in issuedata:
+            insert(series, issue_row(x['IssueID'], x['n']))  # CV data, no status yet
         if state['during']:
             state['during']()
     monkeypatch.setattr(importer, 'addComictoDB', add)

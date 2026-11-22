@@ -2,12 +2,13 @@
 from xml.dom.minidom import parseString
 
 
-def issue(iid, num, cover, store='0000-00-00', volume='111'):
+def issue(iid, num, cover, store='0000-00-00', volume='111', description=None):
     num_xml = '<issue_number>%s</issue_number>' % num if num is not None else ''
     cover_xml = '<cover_date>%s</cover_date>' % cover if cover is not None else ''
-    return ('<issue><id>%s</id><name>Issue %s</name>%s%s'
+    desc_xml = '<description>%s</description>' % description if description is not None else ''
+    return ('<issue><id>%s</id><name>Issue %s</name>%s%s%s'
             '<store_date>%s</store_date><volume><id>%s</id><name>Fake</name></volume></issue>'
-            % (iid, iid, num_xml, cover_xml, store, volume))
+            % (iid, iid, num_xml, cover_xml, desc_xml, store, volume))
 
 
 def response(issues, total=None):

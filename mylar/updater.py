@@ -235,6 +235,21 @@ def dbUpdate(ComicIDList=None, calledfrom=None, sched=False):
                 if whack == False:
                     chkstatus = mylar.importer.addComictoDB(ComicID, mismatch, calledfrom='dbupdate', annload=annload, csyear=csyear, fixed_type=fixed_type)
                     if chkstatus['status'] == 'complete':
+                        # R32: the new ComicVine data must still hold every issue that has a file or a
+                        # download status, otherwise the DELETE below would drop it with its status and
+                        # location (an issue CV failed to return, an incomplete page of results).
+                        new_ids = set(str(x['IssueID']) for x in (chkstatus['issuedata'] or []))
+                        missing = [str(x['IssueID']) for x in myDB.select('SELECT IssueID, Status, Location FROM issues WHERE ComicID=?', [ComicID])
+                                   if str(x['IssueID']) not in new_ids
+                                   and (x['Status'] in ('Downloaded', 'Archived', 'Snatched') or x['Location'])]
+                        if missing:
+                            logger.warn('[REFRESH-GUARD] ComicVine data for %s (%s) [%s] is missing %s issue(s) that have a file or a'
+                                        ' download status (IssueID %s). Not refreshing the series so they are not removed - check'
+                                        ' the series on ComicVine.' % (ComicName, dspyear, ComicID, len(missing), ', '.join(missing)))
+                            myDB.upsert('comics', {'Status': comic['Status']}, {'ComicID': ComicID})
+                            mylar.GLOBAL_MESSAGES = {'status': 'failure', 'comicname': ComicName, 'seriesyear': dspyear , 'comicid': ComicID, 'tables': 'both', 'message': 'Failure refreshing %s (%s)' % (ComicName, dspyear)}
+                            cnt += 1
+                            continue
                         #delete the data here if it's all valid.
                         logger.fdebug("Deleting all old issue data to make sure new data is clean...")
                         myDB.action('DELETE FROM issues WHERE ComicID=?', [ComicID])

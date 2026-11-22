@@ -203,6 +203,9 @@ def getComic(comicid, rtype, issueid=None, arc=None, arcid=None, arclist=None, c
                 # the next run will be able to catch things up
                 break
             issuechoice, tmpdate = GetIssuesInfo(id, searched, arcid)
+            if issuechoice is None:
+                # an issue could not be read: same as a ComicVine error, so nothing gets refreshed from it
+                return None
             if tmpdate < firstdate:
                 firstdate = tmpdate
             ndic = ndic + issuechoice
@@ -740,9 +743,12 @@ def GetIssuesInfo(comicid, dom, arcid=None):
     logger.fdebug('[GetIssuesInfo] Starting to process %s issues' % len(subtracks))
     
     for idx, subtrack in enumerate(subtracks):
+        if arcid is None:
+            # a fresh dict per issue, so an issue never inherits values (number, name) of the previous one
+            tempissue = {'Issue_Name': None}
         try:
             logger.fdebug('[GetIssuesInfo] Processing issue %s/%s' % (idx + 1, len(subtracks)))
-            
+
             if not mylar.CONFIG.CV_ONLY:
                 issue = {}
                 # Use the current subtrack element instead of dom.getElementsByTagName with fixed index
@@ -859,6 +865,11 @@ def GetIssuesInfo(comicid, dom, arcid=None):
                 except Exception as e:
                     logger.fdebug('[GetIssuesInfo] No Issue Number available for issue %s: %s' % (idx, e))
                     logger.fdebug('No Issue Number available - Trade Paperbacks, Graphic Novels and Compendiums are not supported as of yet.')
+                    if arcid is None:
+                        logger.warn('[GetIssuesInfo] ComicID %s: Issue_ID %s has no issue number on ComicVine - not adding it'
+                                    ' (Trade Paperbacks, Graphic Novels and Compendiums are not supported).'
+                                    % (comicid, tempissue.get('Issue_ID')))
+                        continue
                 else:
                     tempissue['Issue_Number'] = tempissue['Issue_Number'].strip()
                     if 'Issue #' in tempissue['Issue_Number']:
@@ -905,6 +916,14 @@ def GetIssuesInfo(comicid, dom, arcid=None):
                 firstdate = tempissue['CoverDate']
 
         except Exception as e:
+            if arcid is None:
+                # Leaving the issue out would let a refresh delete it (with its status and file) from the
+                # DB, so report the whole issue list as incomplete instead.
+                logger.error('[GetIssuesInfo] ComicID %s: unable to read issue %s (Issue_ID %s) from ComicVine: %s'
+                             ' - the issue data of this series is incomplete and will not be used.'
+                             % (comicid, idx, tempissue.get('Issue_ID'), e))
+                logger.error('[GetIssuesInfo] Traceback: %s' % traceback.format_exc())
+                return None, firstdate
             logger.error('[GetIssuesInfo] Error processing issue %s: %s' % (idx, e))
             logger.fdebug('[GetIssuesInfo] Traceback: %s' % traceback.format_exc())
             continue
