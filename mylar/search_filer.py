@@ -23,7 +23,6 @@ from wsgiref.handlers import format_date_time
 
 import mylar
 from mylar import logger, filechecker, helpers, search
-import time
 
 PULL_SHIPDATE_TOLERANCE_DAYS = 7
 
@@ -121,16 +120,6 @@ def _rejected_ids_match(stored_link, stored_nzbid, link, nzbid):
         _normalize_id_value(stored_link) == _normalize_id_value(link)
         and _normalize_id_value(stored_nzbid) == _normalize_id_value(nzbid)
     )
-
-
-def _is_duplicate_rejected_match(IssueID, link, nzbid):
-    """Check if rejected match with given link and nzbid already exists for IssueID"""
-    if IssueID not in mylar.REJECTED_MATCHES:
-        return False
-    for match in mylar.REJECTED_MATCHES[IssueID]:
-        if _rejected_ids_match(match.get('link'), match.get('nzbid'), link, nzbid):
-            return True
-    return False
 
 
 def _find_rejected_match_index(IssueID, link, nzbid):
@@ -826,43 +815,6 @@ class search_check(object):
             )
         except Exception as e:
             logger.fdebug('[REJECTED-MATCHES] Error storing rejected match: %s' % e)
-
-    def _add_all_entries_to_rejected_matches(self, entries, is_info):
-        """Add all entries from search to rejected matches with minimal data"""
-        if not is_info or 'IssueID' not in is_info:
-            return
-        
-        try:
-            IssueID = is_info['IssueID']
-            nzbprov = is_info.get('nzbprov', 'Unknown')
-            
-            for entry in entries:
-                provider = entry.get('site', nzbprov)
-                entry_link, entry_id = _normalize_ddl_rejected_ids(entry, nzbid=entry.get('id'), provider=provider)
-                
-                # Create minimal match data - will be updated later when we know more
-                minimal_match = {
-                    "title": entry.get('title', 'Unknown'),
-                    "provider": provider,
-                    "size": entry.get('length', 'Unknown'),
-                    "kind": "Unknown",  # Will be determined later
-                    "link": entry_link,
-                    "pubdate": entry.get('pubdate', ''),
-                    "reason": "",  # No reason yet - will be updated when we know why it was rejected
-                    "nzbid": entry_id,
-                    "entry": entry,
-                    "relevance_score": 0.0,  # Will be updated later
-                    "verified_data": None,
-                    "initial_added": True  # Mark as added from initial search
-                }
-                
-                # Use _add_or_update_rejected_match - it will only add if doesn't exist
-                _add_or_update_rejected_match(IssueID, entry_link, entry_id, minimal_match, update_only=False)
-            
-            logger.fdebug('[REJECTED-MATCHES] Added %d entries to rejected matches for IssueID %s' % 
-                         (len(entries), IssueID))
-        except Exception as e:
-            logger.fdebug('[REJECTED-MATCHES] Error adding entries to rejected matches: %s' % e)
 
     def _process_entry(self, entry, is_info):
         if is_info:
@@ -2327,15 +2279,6 @@ class search_check(object):
             maybe_value = self._process_entry(entry, is_info)
             #logger.fdebug('maybe_value: %s' % maybe_value)
             if maybe_value is not None:
-                # Store alt_match results immediately, regardless of pack preference
-                if maybe_value.get('alt_match', False) and maybe_value.get('IssueID'):
-                    try:
-                        # Already stored in _process_entry, but add debug log
-                        logger.fdebug('[REJECTED-MATCHES] alt_match result processed in check_for_first_result: %s (IssueID: %s)' % 
-                                    (maybe_value.get('nzbtitle', maybe_value.get('ComicTitle', 'Unknown')), maybe_value.get('IssueID')))
-                    except Exception as e:
-                        logger.fdebug('[REJECTED-MATCHES] Error in check_for_first_result: %s' % e)
-                
                 # If we have a value which matches our pack/not-pack
                 # preference, return it: otherwise, store it for return if we
                 # don't find a better candidate

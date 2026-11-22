@@ -2203,7 +2203,7 @@ class GC(object):
         if os.path.isfile(dst_path):
             if dst_path.endswith('.zip'):
                 new_path = os.path.join(
-                    mylar.CONFIG.DDL_LOCATION, re.sub('.zip', '', filename).strip()
+                    mylar.CONFIG.DDL_LOCATION, re.sub(r'\.zip$', '', filename, flags=re.IGNORECASE).strip()
                 )
                 logger.info(
                     'Zip file detected.'

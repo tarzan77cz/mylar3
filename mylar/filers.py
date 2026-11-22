@@ -615,8 +615,7 @@ class FileHandlers(object):
 
             extensions = ('.cbr', '.cbz', '.cb7')
 
-            if ofilename.lower().endswith(extensions):
-                path, ext = os.path.splitext(ofilename)
+            path, ext = os.path.splitext(ofilename)
 
             if file_format == '':
                 logger.fdebug('Rename Files is not enabled - keeping original filename.')
@@ -624,7 +623,7 @@ class FileHandlers(object):
                 if ofilename.lower().endswith(extensions):
                     nfilename = ofilename[:-4]
                 else:
-                    nfilename = ofilename
+                    nfilename = path
             else:
                 chunk_file_format = re.sub('[()|[]]', '', chunk_file_format).strip()
                 nfilename = helpers.replace_all(chunk_file_format, file_values)
