@@ -3420,22 +3420,39 @@ def latestissue_update():
                 logger.fdebug('exception encountered: %s' % e)
                 continue
 
+def ddl_row_file(ddl_row):
+    """Return (filename, path) of the downloaded file a ddl_info row points at.
+
+    Pixeldrain and MediaFire keep the bare name in filename and write the file as
+    tmp_filename ('X[__issueid__].cbz'), so tmp_filename is looked up first, then filename
+    (as auto-load does). ddl_row is a sqlite3.Row or a dict; a missing column is skipped.
+    Returns (None, None) when neither file exists in DDL_LOCATION.
+    """
+    if not mylar.CONFIG.DDL_LOCATION:
+        return None, None
+    for column in ('tmp_filename', 'filename'):
+        try:
+            name = ddl_row[column]
+        except (KeyError, IndexError, TypeError):
+            name = None
+        if not name:
+            continue
+        path = os.path.join(mylar.CONFIG.DDL_LOCATION, name)
+        if os.path.isfile(path):
+            return name, path
+    return None, None
+
+
 def queue_ddl_postprocess(ddl_row):
     """Put a finished DDL file on the post-processing queue.
 
-    ddl_row is a sqlite3.Row or a dict with id, filename, issueid and comicid.
+    ddl_row is a sqlite3.Row or a dict with id, filename (and tmp_filename), issueid and comicid.
     Returns True when an item was queued.
     """
     if not mylar.CONFIG.POST_PROCESSING or not mylar.CONFIG.DDL_LOCATION:
         return False
-    try:
-        filename = ddl_row['filename']
-    except (KeyError, TypeError):
-        filename = None
+    filename, filepath = ddl_row_file(ddl_row)
     if not filename:
-        return False
-    filepath = os.path.join(mylar.CONFIG.DDL_LOCATION, filename)
-    if not os.path.isfile(filepath):
         return False
     try:
         ddl_id = ddl_row['id']
@@ -3481,7 +3498,7 @@ def release_unfinished_single_ddl(download_info, nzb_folder, reason):
         return
     myDB = db.DBConnection()
     row = myDB.selectone(
-        "SELECT d.filename, d.issueid, d.remote_filesize, i.Status AS issue_status "
+        "SELECT d.filename, d.tmp_filename, d.issueid, d.remote_filesize, i.Status AS issue_status "
         "FROM ddl_info d LEFT JOIN issues i ON i.IssueID = d.issueid WHERE d.ID=?",
         [ddl_id],
     ).fetchone()
@@ -3493,11 +3510,13 @@ def release_unfinished_single_ddl(download_info, nzb_folder, reason):
         issue_status = None
     if issue_status != 'Snatched':
         return
-    try:
-        filename = row['filename']
-    except (KeyError, TypeError):
-        filename = None
-    filepath = os.path.join(mylar.CONFIG.DDL_LOCATION, filename) if filename else nzb_folder
+    filename, filepath = ddl_row_file(row)
+    if not filename:
+        try:
+            filename = row['filename']
+        except (KeyError, TypeError):
+            filename = None
+        filepath = os.path.join(mylar.CONFIG.DDL_LOCATION, filename) if filename else nzb_folder
     if not filepath or not os.path.isfile(filepath):
         logger.warn(
             '[DDL] Post-processing left issue %s Snatched and the download file is gone (%s).'
@@ -3550,7 +3569,7 @@ def heal_completed_but_snatched():
         return
     myDB = db.DBConnection()
     rows = myDB.select(
-        "SELECT d.ID AS id, d.series, d.filename, d.issueid, d.comicid, d.remote_filesize, d.updated_date "
+        "SELECT d.ID AS id, d.series, d.filename, d.tmp_filename, d.issueid, d.comicid, d.remote_filesize, d.updated_date "
         "FROM ddl_info d INNER JOIN issues i ON i.IssueID = d.issueid "
         "WHERE d.status = 'Completed' AND i.Status = 'Snatched' "
         "AND d.filename IS NOT NULL AND trim(d.filename) != ''"
@@ -3568,8 +3587,8 @@ def heal_completed_but_snatched():
             updated = None
         if updated is not None and (now - updated) < timedelta(minutes=10):
             continue
-        filepath = os.path.join(mylar.CONFIG.DDL_LOCATION, row['filename'])
-        if not os.path.isfile(filepath):
+        filename, filepath = ddl_row_file(row)
+        if not filename:
             continue
         archive_check = validate_downloaded_archive(
             filepath, row['remote_filesize'], size_tolerance=1024
