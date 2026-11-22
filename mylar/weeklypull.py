@@ -63,37 +63,50 @@ def weekly_local_fallback(weeknumber, year):
         "weeknumber text, year text, volume text, seriesyear text, annuallink text, format text, "
         "rowid INTEGER PRIMARY KEY)",
     )
-    myDB.action('DELETE FROM weekly WHERE weeknumber=? AND year=?', [int(weeknumber), int(year)])
+    # Keep what the provider stored for this week (ship dates and statuses the date fallbacks rely on):
+    # only add the issues the week does not list yet, never replace or delete a row.
+    existing = myDB.select('SELECT IssueID, DynamicName, ISSUE FROM weekly WHERE weeknumber=? AND year=?',
+                           [int(weeknumber), int(year)])
+    known_ids = set(str(x['IssueID']) for x in existing if x['IssueID'])
+    known_issues = set((x['DynamicName'], x['ISSUE']) for x in existing)
 
+    added = 0
     cl_d = mylar.filechecker.FileChecker()
     for row in rows:
         comicname = row['ComicName']
         cl_dyninfo = cl_d.dynamic_replace(comicname)
         dynamic_name = re.sub('[\|\s]', '', cl_dyninfo['mod_seriesname'].lower()).strip()
+        issue_number = re.sub('#', '', row['Issue_Number']).strip()
+        if str(row['IssueID']) in known_ids or (dynamic_name, issue_number) in known_issues:
+            continue
         controlValueDict = {
-            'DYNAMICNAME': dynamic_name,
-            'ISSUE': re.sub('#', '', row['Issue_Number']).strip(),
+            'ISSUEID': row['IssueID'],
+            'WEEKNUMBER': str(weeknumber),
+            'YEAR': str(year),
         }
         newValueDict = {
+            'DYNAMICNAME': dynamic_name,
+            'ISSUE': issue_number,
             'SHIPDATE': row['ReleaseDate'],
             'PUBLISHER': row['ComicPublisher'],
             'STATUS': 'Skipped',
             'COMIC': comicname,
             'COMICID': row['ComicID'],
-            'ISSUEID': row['IssueID'],
-            'WEEKNUMBER': str(weeknumber),
-            'YEAR': str(year),
             'VOLUME': None,
             'SERIESYEAR': row['ComicYear'],
             'FORMAT': None,
             'ANNUALLINK': None,
         }
         myDB.upsert("weekly", newValueDict, controlValueDict)
+        known_ids.add(str(row['IssueID']))
+        known_issues.add((dynamic_name, issue_number))
+        added += 1
 
     todaydate = datetime.datetime.today().replace(second=0, microsecond=0)
     mylar.CONFIG.PULL_REFRESH = todaydate.strftime('%Y-%m-%d %H:%M:%S')
     mylar.CONFIG.writeconfig(values={'pull_refresh': mylar.CONFIG.PULL_REFRESH})
-    logger.info('[PULL-LIST] Local fallback populated %s issues for week %s, %s' % (len(rows), weeknumber, year))
+    logger.info('[PULL-LIST] Local fallback found %s watched issues for week %s, %s and added %s not yet listed'
+                ' (existing pull-list rows kept)' % (len(rows), weeknumber, year, added))
     return {
         'status': 'success',
         'count': len(rows),
