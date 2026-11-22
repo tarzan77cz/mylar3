@@ -184,7 +184,8 @@ Merge, nasazení a push jen se souhlasem uživatele. Postup podle `CLAUDE.md`:
 2026-11-22 (časy pražské, v závorce UTC z `docker logs`), na pokyn uživatele:
 
 - **Merge** asi ve 22:05: `python3-dev` posunuta fast-forwardem z `ad8bba79` na `99f84416`, bez merge commitu.
-  Testy na tomto stavu viz kap. 2 (strom je shodný s větví). Push zatím ne.
+  Testy na tomto stavu viz kap. 2 (strom je shodný s větví).
+- **Push** na pokyn uživatele: `fork/python3-dev` `ad8bba79..c539e52c` (včetně záznamu o nasazení). Na `origin` nic.
 - **Před nasazením** `docker logs mylar --tail 50`: běžela jen fronta hledání (22:08, 21:08 UTC), žádné DDL
   stahování ani post-processing.
 - **`docker cp`** pěti šablon podle kap. 6 z hlavního stromu. md5 všech pěti v kontejneru = repo,
