@@ -18,7 +18,7 @@ import mylar  # noqa: E402
 from mylar import helpers  # noqa: E402
 
 SCHEMA = [
-    'CREATE TABLE comics (ComicID TEXT UNIQUE, ComicName TEXT, ComicYear TEXT)',
+    'CREATE TABLE comics (ComicID TEXT UNIQUE, ComicName TEXT, ComicYear TEXT, Type TEXT, Corrected_Type TEXT)',
     'CREATE TABLE issues (IssueID TEXT, ComicName TEXT, Issue_Number TEXT, Status TEXT, ComicID TEXT,'
     ' IssueDate TEXT, Int_IssueNumber INT)',
     'CREATE TABLE annuals (IssueID TEXT, Issue_Number TEXT, Status TEXT, ComicID TEXT, Int_IssueNumber INT,'
@@ -69,7 +69,8 @@ class Library(object):
             con.close()
 
     def add_series(self, comicid, name, numbers, status='Wanted', year='1950'):
-        self.execute('INSERT INTO comics VALUES (?,?,?)', (comicid, name, year))
+        self.execute('INSERT INTO comics (ComicID, ComicName, ComicYear, Type) VALUES (?,?,?,?)',
+                     (comicid, name, year, 'Print'))
         for n in numbers:
             self.add_issue(comicid, n, status)
 

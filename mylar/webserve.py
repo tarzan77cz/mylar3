@@ -4049,7 +4049,7 @@ class WebInterface(object):
                     'IssueArcID': verified_data.get('IssueArcID'),
                     'size': verified_data.get('size', match.get('size', 'Unknown')),
                     'nzbtitle': verified_data.get('nzbtitle', match.get('title', '')),
-                    'IssueDate': verified_data.get('IssueDate') or (issue['IssueDate'] if 'IssueDate' in issue else ''),
+                    'IssueDate': verified_data.get('IssueDate') or (issue['IssueDate'] if 'IssueDate' in issue.keys() else ''),
                     'booktype': booktype
                 }]
                 
@@ -4158,21 +4158,11 @@ class WebInterface(object):
                         except Exception as e:
                             logger.error('[SELECT-REJECTED-MATCH] Error reverting sections that were not queued: %s' % e)
                     
-                    # Remove from rejected matches
-                    if match_index_to_remove is not None:
-                        matches.pop(match_index_to_remove)
-                    else:
-                        # Fallback: remove by value if index not available
-                        try:
-                            matches.remove(match)
-                        except ValueError:
-                            # Match not in list, try to find and remove by nzbid+link
-                            for idx, m in enumerate(matches):
-                                if m.get('nzbid') == match.get('nzbid') and m.get('link') == match.get('link'):
-                                    matches.pop(idx)
-                                    break
-                    if len(matches) == 0:
-                        del mylar.REJECTED_MATCHES[IssueID]
+                    # Remove the chosen match from the stored list (``matches`` is only the
+                    # filtered copy shown in the dialog, its indexes differ).
+                    if not search_filer._remove_rejected_match(IssueID, match.get('link'), match.get('nzbid')):
+                        logger.warn('[SELECT-REJECTED-MATCH] Chosen match for IssueID %s not found in the stored'
+                                    ' rejected matches, nothing removed' % IssueID)
                     
                     # Extract nzbname from dict if it's a dict, otherwise use the string
                     nzbname_result = searchresult.get('nzbname', searchresult) if isinstance(searchresult, dict) else searchresult
@@ -4231,7 +4221,7 @@ class WebInterface(object):
                     'IssueArcID': None,  # May not be available in fallback
                     'size': match.get('size', 'Unknown'),
                     'nzbtitle': match.get('title', ''),
-                    'IssueDate': issue['IssueDate'] if 'IssueDate' in issue else ''
+                    'IssueDate': issue['IssueDate'] if 'IssueDate' in issue.keys() else ''
                 }]
                 
                 # Prepare links - ensure it's either a dict with 'link' key or a string
@@ -4322,21 +4312,11 @@ class WebInterface(object):
                         except Exception as e:
                             logger.error('[SELECT-REJECTED-MATCH] Error reverting sections that were not queued: %s' % e)
                     
-                    # Remove from rejected matches
-                    if match_index_to_remove is not None:
-                        matches.pop(match_index_to_remove)
-                    else:
-                        # Fallback: remove by value if index not available
-                        try:
-                            matches.remove(match)
-                        except ValueError:
-                            # Match not in list, try to find and remove by nzbid+link
-                            for idx, m in enumerate(matches):
-                                if m.get('nzbid') == match.get('nzbid') and m.get('link') == match.get('link'):
-                                    matches.pop(idx)
-                                    break
-                    if len(matches) == 0:
-                        del mylar.REJECTED_MATCHES[IssueID]
+                    # Remove the chosen match from the stored list (``matches`` is only the
+                    # filtered copy shown in the dialog, its indexes differ).
+                    if not search_filer._remove_rejected_match(IssueID, match.get('link'), match.get('nzbid')):
+                        logger.warn('[SELECT-REJECTED-MATCH] Chosen match for IssueID %s not found in the stored'
+                                    ' rejected matches, nothing removed' % IssueID)
                     
                     # Extract nzbname from dict if it's a dict, otherwise use the string
                     nzbname_result = searchresult.get('nzbname', searchresult) if isinstance(searchresult, dict) else searchresult
