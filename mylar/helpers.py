@@ -2747,7 +2747,10 @@ def ddl_item_section_issueids(item):
     """IssueIDs a DDL queue item downloads when it is one section of a multi-section pack.
 
     None when the item is the whole pack (one section, no section numbers, no pack info).
+    An extra item of a "TPBs" list downloads none of the pack's issues: [].
     """
+    if item.get('tpb_extra') is True:
+        return []
     if ddl_item_pack_id(item) == item['id']:
         return None
     return pack_section_issueids(item.get('packinfo'), item.get('section_issues'), item.get('section_annual'))
@@ -2804,6 +2807,20 @@ def ddl_item_is_single_issue(item):
 def ddl_item_has_context(item):
     """False for an item restored from ddl_info: it has no comicinfo / packinfo of its search."""
     return bool(item.get('comicinfo')) and bool(item.get('packinfo'))
+
+
+def ddl_item_is_tpb_extra(item):
+    """True for an extra item of a GetComics "TPBs" list, or what may be one (R42).
+
+    A queued extra carries 'tpb_extra'. An item restored from ddl_info has no context: a
+    '<post id>-N' that is not a pack is one of the links of a TPB list page (extras and main
+    link alike) and is not taken as the single issue.
+    """
+    if item.get('tpb_extra') is True:
+        return True
+    if ddl_item_has_context(item) or ddl_item_is_pack(item):
+        return False
+    return re.match(r'^\d+(-\d+)+$', str(item.get('id') or '')) is not None
 
 
 def _issue_table_and_number(issueid):
@@ -2871,8 +2888,13 @@ def release_exhausted_ddl_item(item):
 
     A single issue goes back to Wanted and its post goes to the failed table, so the next
     search takes another release (with Failed Download Handling on). A pack reverts the
-    issues of its section, as before.
+    issues of its section, as before. An extra item of a TPB list changes no issue: the
+    main link of the page decides them (R42).
     """
+    if ddl_item_is_tpb_extra(item):
+        logger.info('[DDL-DOWNLOADER] %s [ID: %s] is an extra item of a TPB list. Only the download failed;'
+                    ' the issue is left to the main link of the post.' % (item.get('series'), item.get('id')))
+        return []
     if not ddl_item_is_single_issue(item):
         return reverse_ddl_item_snatch(item)
     issue_number = None

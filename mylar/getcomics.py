@@ -1108,7 +1108,10 @@ class GC(object):
                 soup,
                 booktype,
                 pack,
-                include_extras=(n == len(chosen) - 1),
+                # Extra TPB list items go to the queue once, with the first queueing of the
+                # post. A retry (the DDL loop passes the failed hosts) queues only the item
+                # it retries (R42).
+                include_extras=(n == len(chosen) - 1) and link_type_failure is None,
                 section_index=gi if (multi or section is not None) else None,
                 pack_id=pack_id,
                 section_issues=all_groups[gi]['numbers'],
@@ -1724,6 +1727,11 @@ class GC(object):
                 queue_item['section_issues'] = list(section_issues or [])
                 queue_item['section_annual'] = bool(section_annual)
                 queue_item['section_key'] = section_key
+            else:
+                # An extra item of the page's "TPBs" list. The issues are the main link's:
+                # a failed extra must not put them back to Wanted or blacklist the post (R42).
+                queue_item['pack_id'] = pack_id if pack_id not in (None, '') else id
+                queue_item['tpb_extra'] = True
             mylar.DDL_QUEUE.put(queue_item)
             cnt += 1
 

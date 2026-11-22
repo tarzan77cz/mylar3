@@ -452,3 +452,36 @@ def test_pack_with_nothing_queued_still_fails(gc_env):
     res, queued = _run(gc_env, P4_HTML, _packci(), _packinfo(1, 20))
     assert res['success'] is False
     assert queued == []
+
+
+# ---- extra items of a "TPBs" list (review R42) -----------------------------------------
+
+TPB_HTML = (HDR % ('Old Comic Vol. 1', '1952', '300 MB') + _btn('tpb-main', 'Download Now')
+            + _btn('tpb-pixel', 'PIXELDRAIN Link') + READ
+            + '<h3>TPBs</h3><ul><li>Old Comic Vol. 2 #7-12 (1953) (250 MB) '
+            '<a href="https://getcomics.org/dls/tpb-extra">Main Server</a></li></ul>' + END)
+
+
+def _tpb():
+    return [dict(_single('1', '1952', '1952-01-01')[0], booktype='TPB')]
+
+
+def test_tpb_list_items_are_marked_as_extras(gc_env):
+    res, queued = _run(gc_env, TPB_HTML, _tpb())
+    assert res['success'] is True
+    assert [q['id'] for q in queued] == ['1-1', '1-2']
+    extra, main = queued
+    assert _hrefs([extra]) == ['tpb-extr']
+    assert extra['tpb_extra'] is True and extra['pack_id'] == '1'
+    assert not main.get('tpb_extra') and main['pack_id'] == '1'
+
+
+def test_retry_of_the_main_link_does_not_queue_the_extras_again(gc_env):
+    _, first = _run(gc_env, TPB_HTML, _tpb())
+    main = first[-1]
+    gc_env.mylar.DDL_QUEUE.items[:] = []
+    res, queued = _run(gc_env, TPB_HTML, _tpb(), ltf=['GC-Main'], section=main['section'],
+                       post_id=main['id'], pack_id=main['pack_id'], section_key=main.get('section_key'))
+    assert res['success'] is True
+    assert [q['id'] for q in queued] == [main['id']]  # no '1-2-1' extra
+    assert _hrefs(queued) == ['tpb-pixe']
