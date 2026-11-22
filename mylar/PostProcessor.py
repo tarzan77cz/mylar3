@@ -315,6 +315,16 @@ class PostProcessor(object):
         except OSError:
             pass
 
+    def _ddl_own_folder(self, folder):
+        """True when ``folder`` is a sub-folder of DDL_LOCATION (an unpacked DDL pack), so the
+        cleanup may remove it. DDL_LOCATION itself and anything outside it are not (R19)."""
+        ddl_root = mylar.CONFIG.DDL_LOCATION
+        if not ddl_root or not folder:
+            return False
+        root = os.path.normcase(os.path.realpath(ddl_root)).rstrip(os.sep)
+        path = os.path.normcase(os.path.realpath(folder)).rstrip(os.sep)
+        return path != root and path.startswith(root + os.sep)
+
     def tidyup(self, odir=None, del_nzbdir=False, sub_path=None, cacheonly=False, filename=None):
         # del_nzbdir will remove the original directory location. Must be set to False for manual pp or else will delete manual dir that's provided (if empty).
         # move = cleanup/delete original location (self.nzb_folder) AND cache location (odir) if metatagging is enabled.
@@ -389,6 +399,19 @@ class PostProcessor(object):
                             os.remove(os.path.join(tmp_folder, filename))
                         except Exception as e:
                             logger.warn('%s [%s] Unable to remove file : %s' % (self.module, e, os.path.join(tmp_folder, filename)))
+
+                elif all([mylar.CONFIG.FILE_OPTS == 'move', del_nzbdir is True, self.nzb_name != 'Manual Run',
+                          self.ddl is True]) and not self._ddl_own_folder(tmp_folder):
+                    # A single DDL file lies directly in DDL_LOCATION, next to the folders of other
+                    # tools (SABnzbd, comics-nzb-hunter). Remove only the item's own file there,
+                    # no directory; nothing at all outside DDL_LOCATION (R19, decision Q15 a).
+                    if filename is not None and os.path.isfile(os.path.join(tmp_folder, filename)):
+                        logger.fdebug('%s Attempting to remove file: %s' % (self.module, os.path.join(tmp_folder, filename)))
+                        try:
+                            os.remove(os.path.join(tmp_folder, filename))
+                        except Exception as e:
+                            logger.warn('%s [%s] Unable to remove file : %s' % (self.module, e, os.path.join(tmp_folder, filename)))
+                    logger.fdebug('%s Not removing directories in %s: it is not the download\'s own folder.' % (self.module, tmp_folder))
 
                 elif mylar.CONFIG.FILE_OPTS == 'move' and all([del_nzbdir is True, self.nzb_name != 'Manual Run']): #tmp_folder != self.nzb_folder]):
                     self._remove_empty_dirs(tmp_folder)
