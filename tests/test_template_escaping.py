@@ -80,6 +80,7 @@ HELPER_TEMPLATES = [
     'manage.html',
     'comicdetails_update.html',
     'upcoming.html',
+    'history.html',
 ]
 
 
@@ -234,3 +235,12 @@ def test_upcoming_rejected_match_table_cells_escaped_control():
                "title || 'Unknown'", "provider || 'Unknown'", "size || 'Unknown'", "kind || 'Unknown'",
                "pubdate || ''", "reason || 'Unknown reason'")],
            forbidden=[r"'<td>' \+ match\."])
+
+
+# --- history.html ----------------------------------------------------------------------------
+
+def test_history_retry_message_is_escaped():
+    # retryissue answers 'Successfully submitted retry for <series> (<year>) #<issue>'
+    _check('history.html', 'function retryit(', 'function initThisPage(',
+           required=[ESCAPED_OBJ_MESSAGE],
+           forbidden=[RAW_OBJ_MESSAGE])
