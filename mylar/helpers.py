@@ -2441,6 +2441,49 @@ def crc(filename):
 
     return hashlib.md5(filename).hexdigest()
 
+def search_provider_stat(provider):
+    """A minimal provider_stat for search.searcher() outside a search (picker, retry from history).
+
+    searcher() reads only its 'type'; the types are the ones provider_order() gives.
+    """
+    prov = str(provider or '')
+    low = prov.lower()
+    if prov == 'DDL(External)':
+        ptype = 'DDL(External)'
+    elif 'DDL' in prov:
+        ptype = 'DDL'
+    elif 'torznab' in low:
+        ptype = 'torznab'
+    elif 'newznab' in low:
+        ptype = 'newznab'
+    elif low == 'experimental':
+        ptype = 'experimental'
+    elif low == 'airdcpp':
+        ptype = 'airdcpp'
+    else:
+        ptype = 'torrent'
+    return {'type': ptype}
+
+
+def ddl_pack_info(ComicName, ComicID, IssueNumber, title, pack_numbers, pack_id, ComicYear=None):
+    """pack_numbers and pack_issuelist of a pack queued outside a search (picker, retry from history).
+
+    The range is the stored one, or the one check_for_pack reads from the title. Returns
+    (None, None) when there is none. issue_find_ids may raise ValueError on a bad range.
+    """
+    if not pack_numbers:
+        try:
+            chk = getcomics.GC(query={'comicname': ComicName, 'issue': IssueNumber, 'year': ComicYear}).check_for_pack(title)
+        except Exception as e:
+            logger.warn('[PACK] Unable to read the pack range from %s: %s' % (title, e))
+            chk = None
+        if chk and chk.get('pack') and chk.get('issues'):
+            pack_numbers = chk['issues']
+    if not pack_numbers:
+        return None, None
+    return pack_numbers, issue_find_ids(ComicName, ComicID, pack_numbers, IssueNumber, pack_id)
+
+
 def issue_find_ids(ComicName, ComicID, pack, IssueNumber, pack_id):
 
     #logger.fdebug('pack: %s' % pack)

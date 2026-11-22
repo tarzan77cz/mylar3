@@ -2694,14 +2694,22 @@ class WebInterface(object):
                 else:
                     IssueDate = chkthis['IssueDate']
                     ComicVersion = chkthis['ComicVersion']
+                # searcher() reads nzbid, the pack keys, IssueID/ComicID and size/nzbtitle (R24)
                 comicinfo = [{"ComicName":     chkthis['ComicName'],
                               "ComicVolume":   ComicVersion,
                               "IssueNumber":   chkthis['Issue_Number'],
                               "comyear":       chkthis['ComicYear'],
                               "IssueDate":     IssueDate,
                               "pack":          False,
+                              "pack_numbers":  None,
+                              "pack_issuelist": None,
                               "modcomicname":  modcomicname,
-                              "oneoff":        oneoff}]
+                              "oneoff":        oneoff,
+                              "nzbid":         id,
+                              "IssueID":       IssueID,
+                              "ComicID":       ComicID,
+                              "size":          None,
+                              "nzbtitle":      nzbname}]
 
                 newznabinfo = None
                 link = None
@@ -2759,13 +2767,38 @@ class WebInterface(object):
                                 logger.error(str(newznab_info[0]) + ' is not enabled - unable to process retry request until provider is re-enabled.')
                             break
                 elif 'DDL' in fullprov:
-                    get_id = myDB.selectone('SELECT id, mainlink FROM ddl_info WHERE IssueID=?', [IssueID]).fetchone()
+                    get_id = myDB.selectone('SELECT id, mainlink, pack, issues FROM ddl_info WHERE IssueID=?', [IssueID]).fetchone()
                     if get_id:
                         link = {'id': get_id[0], 'link': get_id[1]}
                         retried = True
+                        # the snatch is logged under the post id ('<post>-N' is a queue id)
+                        comicinfo[0]['nzbid'] = search_filer._extract_getcomics_post_id(id) or id
+                        if get_id['pack']:
+                            try:
+                                pack_numbers, pack_issuelist = helpers.ddl_pack_info(
+                                    chkthis['ComicName'], ComicID, chkthis['Issue_Number'], nzbname,
+                                    get_id['issues'], comicinfo[0]['nzbid'], ComicYear=chkthis['ComicYear'])
+                            except Exception as e:
+                                pack_issuelist = None
+                                logger.warn('[RETRY] Unable to identify the issues of pack %s: %s' % (nzbname, e))
+                            if not pack_issuelist:
+                                logger.warn('[RETRY] Pack %s names no issues to retry.' % nzbname)
+                                link = None
+                                retried = False
+                            else:
+                                comicinfo[0].update({'pack': True, 'pack_numbers': pack_numbers,
+                                                     'pack_issuelist': pack_issuelist})
 
                 if link is not None:
-                    sendit = search.searcher(fullprov, nzbname, comicinfo, link=link, IssueID=IssueID, ComicID=ComicID, tmpprov=fullprov, directsend=True, newznab=newznabinfo)
+                    try:
+                        sendit = search.searcher(fullprov, nzbname, comicinfo, link=link, IssueID=IssueID, ComicID=ComicID, tmpprov=fullprov, directsend=True, newznab=newznabinfo,
+                                                 provider_stat=helpers.search_provider_stat(fullprov))
+                    except Exception:
+                        logger.error('[RETRY] Retry of %s via %s failed: %s' % (nzbname, fullprov, traceback.format_exc()))
+                        sendit = None
+                    if not isinstance(sendit, dict):
+                        logger.warn('[RETRY] Retry of %s via %s was not sent: %s' % (nzbname, fullprov, sendit))
+                        retried = False
                     break
 
         if retried is True:
@@ -10570,23 +10603,46 @@ class WebInterface(object):
         dsr = myDB.selectone('SELECT * FROM manualresults WHERE id=? AND tmpprov=? AND name=?', [nzbid, provider, name]).fetchone()
         if dsr is None:
             logger.warn('Unable to locate result - something is wrong. Try and manually search again?')
-            return
+            return json.dumps({'status': 'error', 'error': 'Unable to locate this result. Please search again.'})
         else:
             oneoff = bool(int(dsr['oneoff']))
             try:
                 pack = bool(int(dsr['pack']))
             except:
                 pack = False
+            # searcher() reads nzbid, the pack keys, IssueID/ComicID and size/nzbtitle (R24)
+            pack_numbers = None
+            pack_issuelist = None
+            if pack:
+                try:
+                    pack_numbers, pack_issuelist = helpers.ddl_pack_info(
+                        dsr['comicname'], dsr['comicid'], dsr['issuenumber'], dsr['name'], dsr['pack_numbers'],
+                        dsr['id'], ComicYear=dsr['comicyear'])
+                except Exception as e:
+                    pack_issuelist = None
+                    logger.warn('[DOWNLOAD-SPECIFIC-RELEASE] Unable to identify the issues of pack %s: %s' % (dsr['name'], e))
+                if not pack_issuelist:
+                    return json.dumps({'status': 'error', 'error': 'Unable to identify the issues of pack %s.' % dsr['name']})
             comicinfo = [{'ComicName':     dsr['comicname'],
                           'ComicVolume':   dsr['volume'],
                           'IssueNumber':   dsr['issuenumber'],
                           'comyear':       dsr['comicyear'],
                           'IssueDate':     dsr['issuedate'],
                           'pack':          pack,
+                          'pack_numbers':  pack_numbers,
+                          'pack_issuelist': pack_issuelist,
                           'modcomicname':  dsr['modcomicname'],
                           'oneoff':        oneoff,
                           'SARC':          dsr['sarc'],
-                          'IssueArcID':    dsr['issuearcid']}]
+                          'IssueArcID':    dsr['issuearcid'],
+                          'nzbid':         dsr['id'],
+                          'IssueID':       dsr['issueid'],
+                          'ComicID':       dsr['comicid'],
+                          'size':          dsr['size'],
+                          'nzbtitle':      dsr['name']}]
+            if 'GetComics' in (dsr['fullprov'] or ''):
+                # the post id, as the search gives it
+                comicinfo[0]['nzbid'] = search_filer._extract_getcomics_post_id(dsr['link']) or dsr['id']
         #logger.info('comicinfo: %s' % comicinfo)
         newznabinfo = None
         if dsr['kind'] == 'usenet':
@@ -10607,6 +10663,9 @@ class WebInterface(object):
                     else:
                         logger.error(str(newznab_info[0]) + ' is not enabled - unable to process retry request until provider is re-enabled.')
                     break
+        elif 'DDL' in (dsr['fullprov'] or '') and str(dsr['link'] or '').startswith('http'):
+            # a DDL post is loaded from its page, not from the bare id
+            link = dsr['link']
         else:
             link = nzbid
         if oneoff is True:
@@ -10616,13 +10675,30 @@ class WebInterface(object):
 
         try:
             nzbname = search.nzbname_create(dsr['fullprov'], info=comicinfo, title=dsr['name'])
-            sresults = search.searcher(dsr['fullprov'], nzbname, comicinfo, link=link, IssueID=dsr['issueid'], ComicID=dsr['comicid'], tmpprov=dsr['tmpprov'], directsend=True, newznab=newznabinfo)
-            if sresults is not None:
-                updater.foundsearch(dsr['ComicID'], dsr['IssueID'], mode='series', provider=dsr['tmpprov'], hash=sresults['t_hash'])
-        except:
-            return False #json.dumps({'result': 'failure'})
-        else:
-            return True #json.dumps({'result': 'success'})
+            sresults = search.searcher(dsr['fullprov'], nzbname, comicinfo, link=link, IssueID=dsr['issueid'], ComicID=dsr['comicid'], tmpprov=dsr['tmpprov'], directsend=True, newznab=newznabinfo,
+                                       provider_stat=helpers.search_provider_stat(dsr['fullprov']))
+        except Exception:
+            logger.error('[DOWNLOAD-SPECIFIC-RELEASE] Download of %s via %s failed: %s'
+                         % (dsr['name'], dsr['fullprov'], traceback.format_exc()))
+            return json.dumps({'status': 'error', 'error': 'Unable to download %s. See the log for the error.' % dsr['name']})
+        if not isinstance(sresults, dict):
+            logger.warn('[DOWNLOAD-SPECIFIC-RELEASE] Download of %s via %s was not started: %s'
+                        % (dsr['name'], dsr['fullprov'], sresults))
+            return json.dumps({'status': 'error', 'error': 'Unable to download %s (%s).' % (dsr['name'], sresults)})
+        try:
+            updater.foundsearch(dsr['ComicID'], dsr['IssueID'], mode='series', provider=dsr['tmpprov'], hash=sresults['t_hash'])
+        except Exception as e:
+            logger.error('[DOWNLOAD-SPECIFIC-RELEASE] Error updating status to Snatched: %s' % e)
+        # a DDL pack queued only partly: the issue goes back to Wanted when its section was not queued
+        if sresults.get('unqueued_sections'):
+            try:
+                helpers.revert_unqueued_pack_sections(
+                    sresults.get('nzbid'), dsr['comicid'], pack_issuelist, sresults['unqueued_sections'],
+                    only_issueids=[dsr['issueid']],
+                )
+            except Exception as e:
+                logger.error('[DOWNLOAD-SPECIFIC-RELEASE] Error reverting sections that were not queued: %s' % e)
+        return json.dumps({'status': 'success', 'message': 'Successfully queued %s' % dsr['name']})
 
     download_specific_release.exposed = True
 

@@ -1421,8 +1421,12 @@
                        function(data) {
                            loader.remove();
                            feedback.fadeOut();
-                           if (data.error != undefined) {
-                               alert(data.error);
+                           var resp = data;
+                           if (typeof data === 'string') {
+                               try { resp = JSON.parse(data); } catch (e) { resp = {}; }
+                           }
+                           if (resp.error != undefined) {
+                               alert(resp.error);
                                return;
                            }
                            $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>Successfully downloaded "+name+"</div>");
@@ -1432,6 +1436,10 @@
                            $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
                            reload_tables();
                            return false;
+               }).fail(function(jqXHR, textStatus) {
+                           loader.remove();
+                           feedback.fadeOut();
+                           alert('Error downloading ' + name + ': ' + textStatus);
                });
         }
 

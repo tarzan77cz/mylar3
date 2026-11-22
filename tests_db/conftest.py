@@ -24,7 +24,7 @@ SCHEMA = [
     'CREATE TABLE issues (IssueID TEXT, ComicName TEXT, Issue_Number TEXT, Status TEXT, ComicID TEXT,'
     ' IssueDate TEXT, Int_IssueNumber INT, ReleaseDate TEXT, DigitalDate TEXT, DateAdded TEXT, Location TEXT)',
     'CREATE TABLE annuals (IssueID TEXT, Issue_Number TEXT, Status TEXT, ComicID TEXT, Int_IssueNumber INT,'
-    ' ComicName TEXT, Deleted INT DEFAULT 0)',
+    ' ComicName TEXT, Deleted INT DEFAULT 0, IssueDate TEXT, ReleaseDate TEXT, Location TEXT)',
     'CREATE TABLE nzblog (IssueID TEXT, NZBName TEXT, SARC TEXT, PROVIDER TEXT, ID TEXT, AltNZBName TEXT, OneOff TEXT)',
     'CREATE TABLE failed (ID TEXT, Status TEXT, ComicID TEXT, IssueID TEXT, Provider TEXT, ComicName TEXT,'
     ' Issue_Number TEXT, NZBName TEXT, DateFailed TEXT)',
