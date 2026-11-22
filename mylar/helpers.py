@@ -6390,30 +6390,32 @@ def validate_downloaded_archive(file_path, expected_size=None, size_tolerance=0)
         result['reason'] = 'got %s bytes, expected %s' % (current_size, expected)
         return result
 
-    ext = os.path.splitext(file_path)[1].lower()
+    # The content decides the type (a ZIP named .cbr is common); the extension only when the
+    # header is not recognised, e.g. an error page saved as .cbz still fails as a ZIP.
+    try:
+        with open(file_path, 'rb') as handle:
+            header = handle.read(max(len(m) for m in magic_numbers.values()))
+    except OSError as e:
+        result['reason'] = 'could not read header: %s' % e
+        return result
     archive_type = None
-    if ext in ('.cbz', '.zip'):
+    if header.startswith(magic_numbers['ZIP']):
         archive_type = 'ZIP'
-    elif ext in ('.cbr', '.rar'):
+    elif header.startswith(magic_numbers['RAR']):
         archive_type = 'RAR'
-    elif ext in ('.cb7', '.7z'):
+    elif header.startswith(magic_numbers['7Z']):
         archive_type = '7Z'
-    elif ext == '.pdf':
+    elif header.startswith(magic_numbers['PDF']):
         archive_type = 'PDF'
     else:
-        try:
-            with open(file_path, 'rb') as handle:
-                header = handle.read(8)
-        except OSError as e:
-            result['reason'] = 'could not read header: %s' % e
-            return result
-        if header.startswith(magic_numbers['ZIP']):
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext in ('.cbz', '.zip'):
             archive_type = 'ZIP'
-        elif header.startswith(magic_numbers['RAR']):
+        elif ext in ('.cbr', '.rar'):
             archive_type = 'RAR'
-        elif header.startswith(magic_numbers['7Z']):
+        elif ext in ('.cb7', '.7z'):
             archive_type = '7Z'
-        elif header.startswith(magic_numbers['PDF']):
+        elif ext == '.pdf':
             archive_type = 'PDF'
 
     if archive_type == 'ZIP':
