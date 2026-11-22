@@ -165,4 +165,5 @@ Před restartem `docker logs mylar --tail 50` (běžící DDL nebo post-processi
 - **Push:** `python3-dev` pushnutá na `fork` (`tarzan77cz/mylar3`) se souhlasem uživatele.
 - **Úklid:** worktree přesunutý přes `git worktree move` do
   `/data/Tarzan/Cursor/_archive/2026-11-22-mylar-review-worktree/Mylar-review-2026-11-21` (včetně `.scratch/`
-  se srovnávacími skripty). Větev `claude/review-2026-11-21` zůstává lokálně, celá je v `python3-dev`.
+  se srovnávacími skripty). Archivovaný worktree je přepnutý na commit `27bd7363` bez větve. Větev
+  `claude/review-2026-11-21` je smazaná (`git branch -d`, celá byla v `python3-dev`), na `fork` nikdy nebyla.
