@@ -296,6 +296,16 @@
 <%def name="javascriptIncludes()">
 	<script src="js/libs/jquery.dataTables.min.js"></script>
         <script>
+        // Escape outside text (GetComics links and ids, server messages) before it goes into HTML or an
+        // attribute value; $('<div/>').text(x).html() leaves quotes as they are.
+        function escapeHtml(text) {
+            if (text === null || text === undefined) {
+                return '';
+            }
+            var map = {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'};
+            return String(text).replace(/[&<>"']/g, function(m) { return map[m]; });
+        }
+
         function mark_the_issues(){
             var action=$("#mark_issues option:selected").val();
             var checks = document.getElementsByName("issueid[]");
@@ -313,7 +323,7 @@
                  data: { action: action, issueids: checkboxesChecked },
                  success: function(response) {
                     obj = JSON.parse(response);
-                    $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+obj['message']+"</div>");
+                    $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+escapeHtml(obj['message'])+"</div>");
                     if (obj['status'] == 'success'){
                         $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
                     } else {
@@ -624,7 +634,7 @@
                                 } else if (status === "Snatched" && ddl_activity === null) {
                                     titleText = 'Waiting for download...' + (rejectedCount > 0 ? ' View rejected matches (' + rejectedCount + ' available).' : '');
                                 }
-                                tierText += ' <a href="#" class="rejected-matches-link" data-issueid="' + $('<div/>').text(issueId).html() + '" title="' + titleText + '">' + iconHtml + '</a>';
+                                tierText += ' <a href="#" class="rejected-matches-link" data-issueid="' + escapeHtml(issueId) + '" title="' + titleText + '">' + iconHtml + '</a>';
                             }
                             return tierText;
                         }
@@ -851,8 +861,9 @@
                             // Use unique identifier (nzbid + link) instead of index
                             var matchNzbId = match.nzbid != null ? String(match.nzbid) : '';
                             var matchLink = match.link != null ? String(match.link) : '';
-                            var matchNzbIdEscaped = $('<div/>').text(matchNzbId).html();
-                            var matchLinkEscaped = $('<div/>').text(matchLink).html();
+                            // attribute values: escape quotes too
+                            var matchNzbIdEscaped = escapeHtml(matchNzbId);
+                            var matchLinkEscaped = escapeHtml(matchLink);
                             
                             var row = '<tr>' +
                                 '<td>' + $('<div/>').text(match.title || 'Unknown').html() + '</td>' +
@@ -861,7 +872,7 @@
                                 '<td>' + $('<div/>').text(match.kind || 'Unknown').html() + '</td>' +
                                 '<td>' + $('<div/>').text(match.pubdate || '').html() + '</td>' +
                                 '<td>' + $('<div/>').text(match.reason || 'Unknown reason').html() + '</td>' +
-                                '<td><button type="button" class="download-rejected-btn" data-issueid="' + $('<div/>').text(issueId).html() + '" data-nzbid="' + matchNzbIdEscaped + '" data-link="' + matchLinkEscaped + '">Download</button></td>' +
+                                '<td><button type="button" class="download-rejected-btn" data-issueid="' + escapeHtml(issueId) + '" data-nzbid="' + matchNzbIdEscaped + '" data-link="' + matchLinkEscaped + '">Download</button></td>' +
                                 '</tr>';
                             tbody.append(row);
                         });

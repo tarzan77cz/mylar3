@@ -79,6 +79,7 @@ HELPER_TEMPLATES = [
     'queue_management.html',
     'manage.html',
     'comicdetails_update.html',
+    'upcoming.html',
 ]
 
 
@@ -201,3 +202,35 @@ def test_comicdetails_picker_table_cells_escaped_control():
                      "var reason = $('<div/>').text(search_results[i].reason || '').html();",
                      "onclick=\"downloadSpecificRelease(' + i + ');\""],
            forbidden=[r"'<td>' \+ search_results", r"search_results\[i\]\.(link|nzbid|tmpprov|rejected_)"])
+
+
+# --- upcoming.html ---------------------------------------------------------------------------
+
+def test_upcoming_mark_issues_message_is_escaped():
+    _check('upcoming.html', 'function mark_the_issues(', 'reload_table();',
+           required=[ESCAPED_OBJ_MESSAGE],
+           forbidden=[RAW_OBJ_MESSAGE])
+
+
+def test_upcoming_rejected_matches_link_escapes_issue_id_attribute():
+    _check('upcoming.html', 'var tierText = full[4];', 'return tierText;',
+           required=["data-issueid=\"' + escapeHtml(issueId) + '\""],
+           forbidden=[r"\$\('<div/>'\)\.text\(issueId\)"])
+
+
+def test_upcoming_rejected_match_download_button_escapes_attributes():
+    # nzbid and link come from GetComics; they go into data-* attributes, so quotes must be escaped
+    _check('upcoming.html', '$.each(data.matches', 'tbody.append(row);',
+           required=['escapeHtml(matchNzbId)', 'escapeHtml(matchLink)',
+                     "data-issueid=\"' + escapeHtml(issueId) + '\""],
+           forbidden=[r"\$\('<div/>'\)\.text\(matchNzbId\)", r"\$\('<div/>'\)\.text\(matchLink\)",
+                      r"\$\('<div/>'\)\.text\(issueId\)"])
+
+
+def test_upcoming_rejected_match_table_cells_escaped_control():
+    # control: already escaped before the fix (text between tags)
+    _check('upcoming.html', '$.each(data.matches', 'tbody.append(row);',
+           required=["'<td>' + $('<div/>').text(match.%s).html() + '</td>'" % field for field in (
+               "title || 'Unknown'", "provider || 'Unknown'", "size || 'Unknown'", "kind || 'Unknown'",
+               "pubdate || ''", "reason || 'Unknown reason'")],
+           forbidden=[r"'<td>' \+ match\."])
