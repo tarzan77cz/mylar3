@@ -1,25 +1,27 @@
 # Python
 venv/
-__pycache__/
-*.pyc
-*.pyo
+**/__pycache__
+**/*.py[co]
 *.pyd
 .Python
 
 # Git
 .git/
 .gitignore
+.github/
 
 # Documentation
-*.md
+**/*.md
 README*
 LICENSE
+API_REFERENCE
 
 # IDE and agents
 .vscode/
 .idea/
 .claude/
 .cursor/
+.cursorrules
 *.swp
 *.swo
 
@@ -27,13 +29,22 @@ LICENSE
 Dockerfile
 .dockerignore
 
+# Development, review and one-off files (not used at runtime)
+.scratch/
+tests/
+tests_db/
+review/
+screens/
+init-scripts/
+utilities/
+
 # Other
 .DS_Store
-*.log
+**/*.log
 
 # Temporary/artifact files
 =
-[internal]
+\[internal\]
 ERROR
 extracting
 resolve
