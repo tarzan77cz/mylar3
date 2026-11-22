@@ -22,15 +22,6 @@ venv/
 # git mergetool backup files
 *.orig
 
-# Docker build artefacts
-sha256:*
-\[internal\]
-extracting
-resolve
-transferring
-ERROR
-=
-
 # Python cache and build files
 __pycache__/
 *.pyc

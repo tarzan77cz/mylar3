@@ -42,12 +42,5 @@ utilities/
 .DS_Store
 **/*.log
 
-# Temporary/artifact files
-=
-\[internal\]
-ERROR
-extracting
-resolve
-transferring
+# Release marker, kept out of the image as before (versioncheck falls back without it)
 .LAST_RELEASE
-sha256:*
