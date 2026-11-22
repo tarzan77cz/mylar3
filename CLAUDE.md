@@ -29,6 +29,7 @@ Tento soubor čte Claude Code i Cursor. Pravidla pro agenty patří sem, ne do `
   - `webserve.py` (CherryPy, stránky UI a jejich akce), `api.py` (REST API; volá ho i Comics),
   - `search.py`, `search_filer.py` (hledání, skórování a výběr shod),
   - `getcomics.py`, `downloaders/` (DDL), `PostProcessor.py`, `filechecker.py`,
+  - `getcomics_parse.py` (čistý parser stránek GetComics bez globálů Mylaru, na něj míří `tests/`),
   - `cv.py` (ComicVine), `weeklypull.py`, `locg.py` (pull list), `updater.py`.
 - `data/interfaces/default/*.html` – Mako šablony UI; `data/js/`, `data/css/`.
 - `lib/` – knihovny převzaté z upstreamu. Neupravovat bez nutnosti.
@@ -109,6 +110,11 @@ Rebuild `docker build -t mylar3:local .` jen když nestačí `docker cp` (změna
 nebo `Dockerfile`, rozbitý kontejner) nebo na výslovný pokyn. Kontejner se pak recreatuje
 přes Dockhand (skill `dockhand`, jen služba `mylar`), vždy se souhlasem uživatele.
 
+**Pozor:** změny nasazené přes `docker cp` žijí jen v zapisovatelné vrstvě kontejneru, image
+`mylar3:local` může být o mnoho commitů pozadu za běžícím kódem. Recreate kontejneru (Dockhand,
+změna stacku, oprava kontejneru) by produkci tiše vrátil na stav image. Před každým recreate proto
+nejdřív rebuild image z aktuální `python3-dev` (review 2026-11-22, R14).
+
 ## Živé služby a secrets
 
 Mylar běží ostře nad knihovnou `/share/Comics`. Bez souhlasu uživatele:
@@ -131,3 +137,7 @@ jde v URL).
 `T:\Cursor\Comics` volá Mylar API a čte jeho DB (`comics_mylar_rename.py`, remediace,
 `requeue_missing_issues.py`, `check_remediated_issues.py`). Změna API, stavů issue, sloupců
 nebo pojmenování souborů může Comics rozbít, proto tam volání zkontroluj.
+
+Druhý klient API je `/data/Tarzan/Cursor/scripts/apps/comics-nzb-hunter` (volá `getWanted`,
+`getComic`, `getIssueInfo`, `refreshComic`, `addComic`, `findComic`, `unqueueIssue`,
+`forceProcess`, `recheckFiles`). Při změně API nebo stavů zkontroluj i jeho volání.
