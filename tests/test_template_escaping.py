@@ -77,6 +77,7 @@ def _escape_helper_source(template):
 
 HELPER_TEMPLATES = [
     'queue_management.html',
+    'manage.html',
 ]
 
 
@@ -118,3 +119,30 @@ def test_queue_link_column_escapes_article_title_tooltip_and_link_type():
     _check('queue_management.html', 'var linkType = full[8]', 'return result;',
            required=['escapeHtml(articleTitle)', 'escapeHtml(linkType)'],
            forbidden=[r"\$\('<div/>'\)\.text\(articleTitle\)", r"var result = linkType;"])
+
+
+# --- manage.html -----------------------------------------------------------------------------
+
+def test_manage_manual_pp_log_escapes_comic_and_issue():
+    _check('manage.html', 'var log = s.log', "$('#manual_pp_log').html(logHtml)",
+           required=["'<li>' + escapeHtml(line) + '</li>'"],
+           forbidden=[r"'<li>' \+ line \+"])
+
+
+def test_manage_manual_pp_file_log_escapes_file_series_status_and_reason():
+    _check('manage.html', 'var fileLog = s.file_log', "$('#manual_pp_file_log').html(fileLogHtml)",
+           required=['escapeHtml(fname)', 'escapeHtml(label)', 'escapeHtml(reason)'],
+           forbidden=[r"\+ fname \+", r"\+ label \+ reason \+"])
+
+
+def test_manage_post_process_messages_are_escaped_in_ajax_msg():
+    # post_process answers e.g. 'Successfully submitted <folder> for manual post-processing...'
+    _check('manage.html', "$('#manual_process').click(", 'jQuery( "#tabs" ).tabs();',
+           forbidden=[RAW_OBJ_MESSAGE],
+           counts={ESCAPED_OBJ_MESSAGE: 3})
+
+
+def test_manage_post_process_in_progress_status_is_set_as_text():
+    _check('manage.html', "else if (obj['status'] == 'IN PROGRESS')", "$('#manual_pp_phase').text('Running...')",
+           required=["statuschk.textContent = obj['message']"],
+           forbidden=[r"statuschk\.innerHTML"])

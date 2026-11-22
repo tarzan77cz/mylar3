@@ -329,6 +329,16 @@
         <script src="js/libs/jquery.dataTables.min.js"></script>
         <script src="js/libs/selectize.min.js"></script>
         <script>
+        // Escape outside text (file and series names, server messages) before it goes into HTML or an
+        // attribute value; $('<div/>').text(x).html() leaves quotes as they are.
+        function escapeHtml(text) {
+            if (text === null || text === undefined) {
+                return '';
+            }
+            var map = {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'};
+            return String(text).replace(/[&<>"']/g, function(m) { return map[m]; });
+        }
+
         var CheckEnabled = true;
         function startTime() {
                 var today = new Date();
@@ -506,7 +516,7 @@
                         for (var i = 0; i < log.length; i++) {
                             var r = log[i];
                             var line = (r.comic || '') + (r.issue ? ' #' + r.issue : '') + ' – ' + (r.result === 'ok' ? 'OK' : r.result === 'fail' ? 'Failed' : r.result || '');
-                            logHtml += '<li>' + line + '</li>';
+                            logHtml += '<li>' + escapeHtml(line) + '</li>';
                         }
                         $('#manual_pp_log').html(logHtml);
                         var fileLog = s.file_log || [];
@@ -521,7 +531,7 @@
                             var label = statusLabels[st] || st;
                             var reason = (e.reason && e.reason.trim()) ? ' – ' + e.reason : '';
                             var cls = (st === 'ok' ? 'color:#6ab86a' : st === 'fail' || st === 'crc_failed' ? 'color:#c47070' : 'color:#e0e0e0');
-                            fileLogHtml += '<li style="' + cls + '">' + fname + ': ' + label + reason + '</li>';
+                            fileLogHtml += '<li style="' + cls + '">' + escapeHtml(fname) + ': ' + escapeHtml(label) + escapeHtml(reason) + '</li>';
                         }
                         $('#manual_pp_file_log').html(fileLogHtml);
                         if (fileLog.length) $('#manual_pp_file_log_label').show(); else $('#manual_pp_file_log_label').hide();
@@ -576,7 +586,7 @@
                                 statuschk.innerHTML = obj['message'];
                                 varlength = 135 - obj['message'].length;
                                 nzb_folder.setAttribute("size", varlength);
-                                $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+obj['message']+"</div>");
+                                $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+escapeHtml(obj['message'])+"</div>");
                                 $('#ajaxMsg').addClass('success').fadeIn().delay(3000).fadeOut();
                                 $('#manual_pp_feedback').show();
                                 $('#manual_pp_phase').text('Starting...');
@@ -592,8 +602,8 @@
                                 imagechk.src = "";
                                 imagechk.src = "images/x_red.png";
                                 imagechk.style.visibility = "visible";
-                                statuschk.innerHTML = obj['message'];
-                                $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+obj['message']+"</div>");
+                                statuschk.textContent = obj['message'];
+                                $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+escapeHtml(obj['message'])+"</div>");
                                 $('#ajaxMsg').addClass('error').fadeIn().delay(3000).fadeOut();
                                 $('#manual_pp_feedback').show();
                                 $('#manual_pp_phase').text('Running...');
@@ -605,7 +615,7 @@
                                 imagechk.src = "images/x_red.png";
                                 imagechk.style.visibility = "visible";
                                 statuschk.innerHTML = obj['message'];
-                                $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+obj['message']+"</div>");
+                                $('#ajaxMsg').stop(true, true).removeClass().html("<div class='msg'><span class='ui-icon ui-icon-check'></span>"+escapeHtml(obj['message'])+"</div>");
                                 $('#ajaxMsg').addClass('error').fadeIn().delay(3000).fadeOut();
                                 btn.prop('disabled', false);
                             }
