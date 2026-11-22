@@ -237,4 +237,51 @@ docker cp data/interfaces/default/queue_management.html mylar:/app/mylar/data/in
   nespouštěly. Hlášky k ověření za provozu v kap. 6.
 - **Image `mylar3:local` se nepřestavoval.** Běžící kód je teď o obě části review před image; recreate kontejneru
   by produkci vrátil na stav z 11. 9. Další krok: po pár dnech klidného provozu rebuild image z `python3-dev`
-  a recreate přes Dockhand (R14, Q8), pak třetí (bezpečnostní) část.
+  a recreate přes Dockhand (R14, Q8), pak třetí (bezpečnostní) část. Udělalo se ještě týž večer, viz kap. 9.
+
+## 9. Rebuild image a recreate kontejneru (R14)
+
+2026-11-22 večer (časy pražské, v závorce UTC z `docker logs`), na pokyn uživatele, stav `python3-dev` `13e51754`
+(úklid prázdných artefaktů `docker build` z kořene repa do `_archive/2026-11-22-mylar-root-artifacts/`).
+Python zůstal 3.8.2 (`python:3.8.2-alpine3.11`), upgrade je samostatné rozhodnutí Q7.
+
+- **Záloha:** `/tmp/mylar_v4_backup` ze zapisovatelné vrstvy starého kontejneru (34 souborů, zálohy a patche
+  z dřívějšího vývoje) zkopírován do `_archive/2026-11-22-mylar-container-tmp/`. Jinak vrstva obsahovala jen kód
+  z `docker cp` a `__pycache__`, žádné za běhu doinstalované balíčky.
+- **Starý image** označen `mylar3:2026-09-11` (`b7cfffeb`).
+- **Nový image** postaven nejdřív jako `mylar3:candidate` (`616267df`, 149 MB), `mylar3:local` se přetagoval až
+  po ověření:
+  - md5 všech souborů `Mylar.py`, `comictagger.py`, `mylar/`, `data/`, `lib/`, `post-processing/` = běžící kontejner,
+    chybí jen 28 souborů odstraněných v R48 (`unicode_check.py` v kořeni se neporovnával),
+  - `tests` 96 passed, `tests_db` 142 passed na novém image,
+  - import `cherrypy`, `tempora`, `dateutil`, `Crypto` (AES), `lib/rarfile`, `lib/mega` v pořádku.
+- **`pip freeze`** (bez připnutí, Q8 zatím nerozhodnuto), uživatel změny přijal:
+
+  | Balíček | Starý image | Nový image |
+  |---|---|---|
+  | certifi | 2026.7.22 | 2026.11.20 |
+  | charset-normalizer | 3.5.1 | 3.5.2 |
+  | pycryptodome | 3.23.0 | 3.24.1 |
+  | python-dateutil | 2.9.0.post0 | 3.0.0 (jen přes `tempora`, kód forku ho nepoužívá) |
+  | pytz | 2026.3.post1 | 2026.6 |
+  | tzdata | – | 2026.6 (nová závislost dateutil) |
+
+- **Před recreate** `docker logs`: fronta DDL prázdná (`DDL_LOCK: False`, `Queue size: 0`), 20 min bez
+  post-processingu, běželo jen hledání.
+- **Recreate:** `docker compose --project-directory /home/docker/comics -f …/docker-compose.yml up -d --no-deps
+  --force-recreate mylar` v kontejneru `dockhand` (skill `dockhand`). První pokus skončil `Conflict … name "/mylar"
+  is already in use`: starý kontejner neměl compose labely (`config_files`, `working_dir`, `config-hash`), compose ho
+  nepoznal jako svůj a nenahradil ho. Starý kontejner proto přejmenován na `mylar-2026-09-11`, zastaven (`Exited
+  (137)`, Mylar se do 10 s nezastavil, docker ho zabil) a nastaven `--restart=no`; pak compose založil nový
+  `mylar` v 21:17 SEČ (20:17 UTC). Nový má labely `config_files=/home/docker/comics/docker-compose.yml`,
+  `working_dir=/home/docker/comics`. `komga` beze změny.
+- **Ověření:** start čistý (`Starting Mylar on http://0.0.0.0:8090/`, `[DDL-STARTUP] No queued items found`,
+  DDL downloader a watchdog běží, `check_the_pip` u všech `[OK]`), v logu žádný ERROR ani traceback. `curl` na
+  `http://mylar:8090`: `home`, `queueManage`, `comicDetails?ComicID=160511` 200, log po načtení bez chyb. md5 kódu
+  v novém kontejneru = `mylar3:candidate`. V prohlížeči neověřeno (stejný důvod jako v kap. 8).
+- **Návrat, kdyby bylo potřeba:** `docker stop mylar`, `docker rename mylar mylar-new`, `docker rename
+  mylar-2026-09-11 mylar`, `docker start mylar` (starý kontejner má ještě kód z `docker cp`). Po pár dnech
+  klidného provozu lze zastavený `mylar-2026-09-11` a tag `mylar3:candidate` odstranit; `mylar3:2026-09-11`
+  ponechat jako zálohu image.
+- **R14 je tím vyřešeno** pro současný stav. Jak držet image v souladu s kódem dál, je otevřené Q9; připnutí
+  závislostí Q8 (např. `requirements.lock` z `pip freeze` nového image) zatím nerozhodnuto.
