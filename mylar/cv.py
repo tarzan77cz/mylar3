@@ -901,9 +901,9 @@ def GetIssuesInfo(comicid, dom, arcid=None):
                     'Issue_Name':              tempissue['Issue_Name']
                     })
 
-                if tempissue['CoverDate'] < firstdate and tempissue['CoverDate'] != '0000-00-00':
-                    firstdate = tempissue['CoverDate']
-        
+            if tempissue['CoverDate'] < firstdate and tempissue['CoverDate'] != '0000-00-00':
+                firstdate = tempissue['CoverDate']
+
         except Exception as e:
             logger.error('[GetIssuesInfo] Error processing issue %s: %s' % (idx, e))
             logger.fdebug('[GetIssuesInfo] Traceback: %s' % traceback.format_exc())
