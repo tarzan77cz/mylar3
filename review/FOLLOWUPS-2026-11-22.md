@@ -223,7 +223,8 @@ docker cp data/interfaces/default/queue_management.html mylar:/app/mylar/data/in
 - **Merge** v 15:14 na pokyn uživatele: `python3-dev` posunuta fast-forwardem z `142c9003` na `31782532`
   (včetně zadání druhé části), bez merge commitu. Na `python3-dev` v hlavním stromu znovu `tests/` 88 passed,
   `tests_db/` 85 passed, `ast.parse` sedmi změněných souborů v 3.8 bez chyby.
-- **Nenasazeno:** žádný `docker cp`, kontejner `mylar` se nerestartoval. Postup v kap. 8.
-- **Nepushnuto** na `fork`.
+- **Nasazeno** 22. 11. v 16:26 SEČ spolu s druhou částí (`docker cp` a restart), záznam v kap. 8
+  [FOLLOWUPS-2026-11-22-part2.md](FOLLOWUPS-2026-11-22-part2.md#8-nasazení). Postup pro první část v kap. 8 tohoto souboru.
+- **Na `fork`:** při pushi druhé části byl `fork/python3-dev` už na `b912ddc4`, první část tam tedy je.
 - Worktree `/data/Tarzan/Cursor/Mylar-review-2026-11-22` a větev `claude/review-2026-11-22` zatím zůstávají
   (celá větev je v `python3-dev`).
