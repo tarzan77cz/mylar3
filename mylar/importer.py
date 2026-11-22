@@ -114,6 +114,53 @@ def markIssueWantedById(issueId):
     logger.fdebug(f"Finished changing status of {comicname} [ID:{comicid}] issue #{issuenumber} to Wanted")
     
 
+def rename_2099_folder(comlocation, stored_year, SeriesYear):
+    """Rename the series folder when the placeholder year 2099 got a real year; return the location to use."""
+    dir_rename = False
+    if stored_year == '2099' and SeriesYear and str(SeriesYear) != '2099':
+        # Only the year of the series folder itself, written as "(2099)": a 2099 elsewhere in the path or
+        # in the series name ("Spider-Man 2099") is not a year and must stay.
+        parent, foldername = os.path.split(comlocation.rstrip('/\\') or comlocation)
+        if foldername.count('(2099)') == 1:
+            new_location = os.path.join(parent, foldername.replace('(2099)', '(%s)' % SeriesYear))
+            dir_rename = True
+        else:
+            logger.info('[YEAR-RENAME] Cannot tell the year apart in the folder name of %s - keeping the folder'
+                        ' (series year is now %s).' % (comlocation, SeriesYear))
+
+    if dir_rename and all([new_location != comlocation, os.path.isdir(comlocation)]) and os.path.exists(new_location):
+        # shutil.move would nest the folder inside the existing one and two series would share it
+        logger.warn('[YEAR-RENAME] Not renaming %s to %s: that folder already exists. Keeping the current location.'
+                    % (comlocation, new_location))
+    elif dir_rename and all([new_location != comlocation, os.path.isdir(comlocation)]):
+        logger.fdebug('Attempting to rename existing location [%s]' % (comlocation))
+        try:
+            # make sure 2 levels up in strucure exist
+            if not os.path.exists(os.path.split ( os.path.split(new_location)[0] ) [0] ):
+                logger.fdebug('making directory: %s' % os.path.split(os.path.split(new_location)[0])[0])
+                os.mkdir(os.path.split(os.path.split(new_location)[0])[0])
+            # make sure parent directory exists
+            if not os.path.exists(os.path.split(new_location)[0]):
+                logger.fdebug('making directory: %s' % os.path.split(new_location)[0])
+                os.mkdir(os.path.split(new_location)[0])
+            logger.info('Renaming directory: %s --> %s' % (comlocation,new_location))
+            shutil.move(comlocation, new_location)
+            comlocation = new_location
+        except Exception as e:
+            if 'No such file or directory' in str(e):
+                if mylar.CONFIG.CREATE_FOLDERS:
+                    checkdirectory = filechecker.validateAndCreateDirectory(new_location, True)
+                    if not checkdirectory:
+                        logger.warn('Error trying to validate/create directory. Aborting this process at this time.')
+                    else:
+                        comlocation = new_location
+            else:
+                logger.warn('Unable to rename existing directory: %s' % e)
+    elif dir_rename and os.path.isdir(new_location) and not os.path.isdir(comlocation):
+        comlocation = new_location
+    return comlocation
+
+
 def addComictoDB(comicid, mismatch=None, pullupd=None, imported=None, ogcname=None, calledfrom=None, annload=None, chkwant=None, issuechk=None, issuetype=None, latestissueinfo=None, csyear=None, fixed_type=None, suppress_addall=None):
     myDB = db.DBConnection()
 
@@ -372,43 +419,7 @@ def addComictoDB(comicid, mismatch=None, pullupd=None, imported=None, ogcname=No
 
         #check for year change and rename the folder to the corrected year...
         stored_year = dbcomic['ComicYear'] if dbcomic is not None else comic['ComicYear']
-        if stored_year == '2099' and SeriesYear and str(SeriesYear) != '2099':
-            badyears = [i.start() for i in re.finditer('2099', comlocation)]
-            num_bad = len(badyears)
-            if num_bad == 1:
-                new_location = re.sub('2099', SeriesYear, comlocation)
-                dir_rename = True
-            elif num_bad > 1:
-                #assume right-most is the year cause anything else isn't very smart anyways...
-                new_location = comlocation[:badyears[num_bad-1]] + SeriesYear + comlocation[badyears[num_bad-1]+4:]
-                dir_rename = True
-
-        if dir_rename and all([new_location != comlocation, os.path.isdir(comlocation)]):
-            logger.fdebug('Attempting to rename existing location [%s]' % (comlocation))
-            try:
-                # make sure 2 levels up in strucure exist
-                if not os.path.exists(os.path.split ( os.path.split(new_location)[0] ) [0] ):
-                    logger.fdebug('making directory: %s' % os.path.split(os.path.split(new_location)[0])[0])
-                    os.mkdir(os.path.split(os.path.split(new_location)[0])[0])
-                # make sure parent directory exists
-                if not os.path.exists(os.path.split(new_location)[0]):
-                    logger.fdebug('making directory: %s' % os.path.split(new_location)[0])
-                    os.mkdir(os.path.split(new_location)[0])
-                logger.info('Renaming directory: %s --> %s' % (comlocation,new_location))
-                shutil.move(comlocation, new_location)
-                comlocation = new_location
-            except Exception as e:
-                if 'No such file or directory' in str(e):
-                    if mylar.CONFIG.CREATE_FOLDERS:
-                        checkdirectory = filechecker.validateAndCreateDirectory(new_location, True)
-                        if not checkdirectory:
-                            logger.warn('Error trying to validate/create directory. Aborting this process at this time.')
-                        else:
-                            comlocation = new_location
-                else:
-                    logger.warn('Unable to rename existing directory: %s' % e)
-        elif dir_rename and os.path.isdir(new_location) and not os.path.isdir(comlocation):
-            comlocation = new_location
+        comlocation = rename_2099_folder(comlocation, stored_year, SeriesYear)
 
     #moved this out of the above loop so it will chk for existance of comlocation in case moved
     #if it doesn't exist - create it (otherwise will bugger up later on)
