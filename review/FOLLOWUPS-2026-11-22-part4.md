@@ -199,3 +199,30 @@ docker cp mylar/weeklypull.py mylar:/app/mylar/mylar/weeklypull.py
 
 ## 8. Stav po merge
 
+Doplněno 23. 11. 2026 kolem 10:10 SEČ zpětně z reflogu, Dockeru a `docker logs mylar` (časy pražské, v závorce
+UTC). Co se z nich vyčíst nedá, je označené.
+
+- **Merge** 22. 11. ve 23:53 (22:53 UTC): `python3-dev` posunuta fast-forwardem z `187c958e` na `61cc4c49`, bez
+  merge commitu.
+- **Push:** `fork/python3-dev` = `61cc4c49`. Čas pushe z reflogu nevyčtu. Na `origin` nic.
+- **Nasazení:** `docker cp` sedmi modulů podle kap. 7 a **`docker restart mylar`** 22. 11. ve 23:54 (22:54 UTC).
+  Kontrola `docker logs mylar --tail 50` před restartem v záznamu není.
+- **Ověření v kontejneru** (23. 11.): md5 všech 99 souborů `mylar/*.py`, `mylar/downloaders/*.py` a
+  `data/interfaces/default/*.html` v `/app/mylar/` = `HEAD` `61cc4c49`. Značky z kap. 7, bod 2: `REFRESH-GUARD` 1,
+  `def rename_2099_folder` 1, `PROVISIONAL_RENAMES_LOCK` 3, `existing pull-list rows kept` 1, `provisional_date` 2.
+- **Testy na `61cc4c49`** v image `mylar3:local`, Python 3.8.2: `tests/` 131 passed, `tests_db/` 176 passed.
+- **Log od restartu do 23. 11. 10:08 SEČ:** žádný ERROR, traceback, chyba Mako ani HTTP 500. DDL smyčka i
+  `[DDL-WATCHDOG]` běží, fronta prázdná. Pull list týdnů 46 a 47 načtený z providera ve 3:54 a 7:54 (fallback R33
+  nebyl potřeba). Refresh přes API série DC Connect (127365) v 5:11 (4:11 UTC) prošel bez `[REFRESH-GUARD]`,
+  `forceRescan` našel 72 ze 73 souborů, nic se nesmazalo. Po něm doběhl PP čtyř issues (DC Connect #72,
+  Bloodhound #1, Batman: No Man's Land #1, Batman: No Man's Land Gallery #1). `[YEAR-RENAME]`,
+  `[PLACEHOLDER-RENAME]` a WARN o issue bez čísla se zatím neobjevily (žádná taková situace).
+- **Image (R14):** `mylar3:local` (a `mylar3:candidate`) přestavěný 23. 11. v 0:12 (22. 11. 23:12 UTC),
+  `sha256:64223322…`. Klíčové moduly a šablony v něm mají md5 shodné s `HEAD`, takže recreate už kód nevrátí.
+  Kontejner zatím běží na předchozím image `616267df` (tag `mylar3:2026-11-22-part2`) s kódem přes `docker cp`.
+  Recreate se neprováděl. Starší rollback zůstává jako `mylar3:2026-09-11`.
+- **Neověřeno:** UI v prohlížeči. Akce měnící stav (`manualRename`, refresh se zablokovanou sérií, výpadek
+  pull-list providera) se nespouštěly.
+- Worktree `/data/Tarzan/Cursor/Mylar-review-2026-11-22-part4` a větev `claude/review-2026-11-22-part4` už
+  neexistují. V `_archive` worktree této části není.
+
