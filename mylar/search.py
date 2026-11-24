@@ -1319,7 +1319,7 @@ def verification(verified_matches, is_info):
     done = False
     verified_index = 0
     if verified_matches != "no results":
-        for verified in verified_matches:
+        for match_index, verified in enumerate(verified_matches):
             # we need to make sure we index the correct match
             #logger.fdebug('verified: %s' % (verified,))
             # Store rejected matches (downloadit=False) for user review
@@ -1373,9 +1373,13 @@ def verification(verified_matches, is_info):
                         helpers.checkthe_id(ComicID, verified['chkit'])
                 except Exception:
                     pass
+                # searcher() and nzbname_create() read the post ID, pack data and name from
+                # comicinfo[0]: that must be this match, not an alt_match (downloadit=False)
+                # listed ahead of it (R28).
+                comicinfo = [verified] + [m for m in verified_matches if m is not verified]
                 # generate nzbname
                 nzbname = nzbname_create(
-                    is_info['nzbprov'], info=verified_matches, title=verified['ComicTitle']
+                    is_info['nzbprov'], info=comicinfo, title=verified['ComicTitle']
                 )
                 if nzbname is None:
                     logger.error(
@@ -1394,7 +1398,7 @@ def verification(verified_matches, is_info):
                 searchresult = searcher(
                     verified['nzbprov'],
                     nzbname,
-                    verified_matches,
+                    comicinfo,
                     links,
                     verified['IssueID'],
                     verified['ComicID'],
@@ -1436,6 +1440,8 @@ def verification(verified_matches, is_info):
                     SARC = searchresult['SARC']
                 is_info['foundc']['info'] = searchresult
                 is_info['foundc']['status'] = True
+                # nzblog, pack issues and the notification below use the match that was sent (R28)
+                verified_index = match_index
                 done = True
                 break
 
