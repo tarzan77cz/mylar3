@@ -30,7 +30,7 @@ poběží po jednom, R34). Opravy mají být úzké: chování mimo popsaný sc�
   + řádek ve `failed`, R17, R32 `[REFRESH-GUARD]`, R44 provider `DDL(GetComics)`, R45), viz
   `review/FOLLOWUPS-2026-11-22*.md`. Jejich testy musí dál procházet.
 - **Rozhodnutí uživatele k této části (kap. 11):**
-  - **R34:** fronta PP počká na dokončení vlákna PP, **timeout 2 h**, po něm WARN a fronta pokračuje.
+  - **R34:** fronta PP počká na dokončení vlákna PP, **timeout 10 min**, po něm WARN a fronta pokračuje.
   - **R37:** úzce. Zápis ztracený po vyčerpání pokusů zalogovat jako ERROR (tabulka a text dotazu, **bez hodnot**),
     `upsert` v jednom zámku. **Bez změny schématu** (žádné UNIQUE, žádné indexy) a **bez WAL**.
   - **R40:** jen strop a stáří `REJECTED_MATCHES` a `comicDetails` bez synchronního volání CV při každém zobrazení.
@@ -147,7 +147,9 @@ dnes stane.
   `APILOCK` a vezme další položku. Delší PP (pack) tak může běžet souběžně s dalším. Review: ve 3denním vzorku
   0 překryvů (`cv/pp_overlap.py`); zopakuj tu analýzu nad celým logem od 11. 9. (počet PP, nejdelší PP, počet
   překryvů), časy pražsky.
-- **Oprava podle rozhodnutí:** položka z fronty PP se nevezme, dokud předchozí vlákno PP neskončí, nejdéle **2 h**.
+- **Oprava podle rozhodnutí:** položka z fronty PP se nevezme, dokud předchozí vlákno PP neskončí, nejdéle **10 min**
+  (podle logu od 11. 9. trvalo nejdelší z 758 vláken PP 32 s, pack Conan The Barbarian #1–213 + Annuals; ověř a do
+  souhrnu dej nejdelší PP z tvé analýzy).
   Po timeoutu WARN se jménem položky a fronta pokračuje (vlákno se nezabíjí). Mechanismus zvol tak, aby se neměnilo
   nic jiného: ruční PP z UI (`Manual Run`, `MANUAL_PP_LOCK`, `MANUAL_PP_STATUS`), cesta `failed`, `retry_outside`,
   `PP_DDL_IDS`/`PP_CURRENT_DDL_IDS`, výsledek pro neapicall cestu (dnes `join` a čtení fronty). Timeout jako
