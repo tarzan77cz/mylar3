@@ -29,7 +29,9 @@ import re
 import mylar
 from . import logger
 
-db_lock = threading.Lock()
+# Re-entrant: upsert holds it over its UPDATE and INSERT, and action() takes it again inside (R37).
+db_lock = threading.RLock()
+DB_ATTEMPTS = 5
 mylarQueue = queue.Queue()
 
 def dbFilename(filename="mylar.db"):
@@ -91,7 +93,7 @@ class DBConnection:
             sqlResult = None
             attempt = 0
 
-            while attempt < 5:
+            while attempt < DB_ATTEMPTS:
                 try:
                     if args == None:
                         #logger.fdebug("[FETCH] : " + query)
@@ -115,6 +117,9 @@ class DBConnection:
                     logger.error('Fatal error executing query: %s' % e)
                     raise
 
+            if attempt >= DB_ATTEMPTS:
+                # No values: they can hold anything (R37).
+                logger.error('[DB] Gave up after %s attempts, the read returns nothing: %s' % (attempt, query))
             return sqlResult
 
 
@@ -128,7 +133,7 @@ class DBConnection:
             sqlResult = None
             attempt = 0
 
-            while attempt < 5:
+            while attempt < DB_ATTEMPTS:
                 try:
                     if args == None:
                         if executemany is False:
@@ -151,6 +156,9 @@ class DBConnection:
                     else:
                         logger.error('Database error executing %s :: %s' % (query, e))
                         raise
+            if attempt >= DB_ATTEMPTS:
+                # The write is lost; the caller gets None as before. No values: they can hold anything (R37).
+                logger.error('[DB] Gave up after %s attempts, the write was not done: %s' % (attempt, query))
             return sqlResult
 
     def select(self, query, args=None):
@@ -174,18 +182,22 @@ class DBConnection:
     def upsert(self, tableName, valueDict, keyDict):
         thisthread = threading.current_thread().name
 
-        changesBefore = self.connection.total_changes
+        # One hold of db_lock over the UPDATE and the INSERT: two threads upserting the same new
+        # key can no longer both see "no row" and insert it twice (no UNIQUE on issues, annuals,
+        # snatched, nzblog) (R37).
+        with db_lock:
+            changesBefore = self.connection.total_changes
 
-        genParams = lambda myDict: [x + " = ?" for x in list(myDict.keys())]
+            genParams = lambda myDict: [x + " = ?" for x in list(myDict.keys())]
 
-        query = "UPDATE " + tableName + " SET " + ", ".join(genParams(valueDict)) + " WHERE " + " AND ".join(genParams(keyDict))
+            query = "UPDATE " + tableName + " SET " + ", ".join(genParams(valueDict)) + " WHERE " + " AND ".join(genParams(keyDict))
 
-        self.action(query, list(valueDict.values()) + list(keyDict.values()))
-
-        if self.connection.total_changes == changesBefore:
-            query = "INSERT INTO " +tableName +" (" + ", ".join(list(valueDict.keys()) + list(keyDict.keys())) + ")" + \
-                        " VALUES (" + ", ".join(["?"] * len(list(valueDict.keys()) + list(keyDict.keys()))) + ")"
             self.action(query, list(valueDict.values()) + list(keyDict.values()))
+
+            if self.connection.total_changes == changesBefore:
+                query = "INSERT INTO " +tableName +" (" + ", ".join(list(valueDict.keys()) + list(keyDict.keys())) + ")" + \
+                            " VALUES (" + ", ".join(["?"] * len(list(valueDict.keys()) + list(keyDict.keys()))) + ")"
+                self.action(query, list(valueDict.values()) + list(keyDict.values()))
 
 
         #else:
