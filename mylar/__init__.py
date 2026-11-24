@@ -156,6 +156,7 @@ ISSUE_WATCH_LIST = queue.Queue()
 MASS_REFRESH = None
 REFRESH_QUEUE = queue.Queue()
 DDL_QUEUED = []
+DDL_ACTIVE_ID = None  # ddl_info id the DDL downloader is working on (download, unzip, queueing PP); the watchdog leaves it alone
 PP_DDL_IDS = set()  # ddl_info ids waiting in PP_QUEUE
 PP_CURRENT_DDL_IDS = set()  # ddl_info ids currently being post-processed
 PACK_ISSUEIDS_DONT_QUEUE = {}

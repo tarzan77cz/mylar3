@@ -3761,6 +3761,8 @@ def heal_completed_but_snatched():
         ddl_id = row['id']
         if ddl_id in mylar.PP_DDL_IDS or ddl_id in mylar.PP_CURRENT_DDL_IDS:
             continue
+        if ddl_item_worked_on(ddl_id):  # GC-Main unzips after it marks the row Completed (R43)
+            continue
         try:
             updated = datetime.datetime.strptime(row['updated_date'], '%Y-%m-%d %H:%M')
         except (TypeError, ValueError):
@@ -3841,6 +3843,15 @@ def ddl_heal_give_up(row, myDB):
                     ' stay as they are and the file stays in the download folder.' % (row['series'], DDL_MAX_HEAL_PP_ATTEMPTS))
 
 
+def ddl_item_worked_on(ddl_id):
+    """True when the DDL downloader holds this ddl_info id (downloading, unzipping, queueing PP).
+
+    The downloader sets the row's final status itself; the watchdog must not finish it first (R43).
+    """
+    active = getattr(mylar, 'DDL_ACTIVE_ID', None)
+    return active is not None and ddl_id is not None and str(active) == str(ddl_id)
+
+
 def ddl_download_in_progress():
     """True while a DDL download is running.
 
@@ -3913,6 +3924,10 @@ def ddl_watchdog():
             items_fixed = 0  # Track how many items we fixed
             if downloading_items:
                 for downloading_item in downloading_items:
+                    if ddl_item_worked_on(downloading_item['id']):
+                        logger.fdebug('[DDL-WATCHDOG] %s is being worked on by the DDL downloader. Skipping.'
+                                      % downloading_item['id'])
+                        continue
                     try:
                         filename = downloading_item['tmp_filename']
                     except (KeyError, TypeError):
@@ -3943,7 +3958,9 @@ def ddl_watchdog():
                                 
                                 # If file exists and has the expected size (or is close to it), mark as Completed
                                 archive_check = validate_downloaded_archive(filepath, remote_filesize, size_tolerance=1024)
-                                if archive_check['ok']:
+                                # A .pdf/.cb7 of unknown size cannot be told from a cut-off one: leave it
+                                # to the stuck check below, which puts it back in the queue (R43).
+                                if archive_check['ok'] and not archive_check['unverified']:
                                     logger.info('[DDL-WATCHDOG] File %s is already downloaded (size: %s). Marking as Completed.' % (filename, current_size))
 
                                     ctrlval = {'id': downloading_item['id']}
@@ -4512,6 +4529,9 @@ def ddl_downloader(queue):
                          % (item.get('id') if isinstance(item, dict) else 'the queue', traceback.format_exc()))
             _ddl_fail_unexpected_item(item)
             time.sleep(5)
+        finally:
+            # The item is no longer worked on, whatever ended it (R43).
+            mylar.DDL_ACTIVE_ID = None
 
 
 def _ddl_downloader_loop(queue, state):
@@ -4523,6 +4543,7 @@ def _ddl_downloader_loop(queue, state):
 
     while True:
         state['item'] = None
+        mylar.DDL_ACTIVE_ID = None
         loop_count += 1
         current_time = time.time()
         
@@ -4545,6 +4566,9 @@ def _ddl_downloader_loop(queue, state):
                     logger.info('[DDL-DOWNLOADER] Received exit signal, cleaning up workers for shutdown')
                     break
                 state['item'] = item
+                # From here until the next round of this loop (or the error handler in
+                # ddl_downloader) the watchdog keeps its hands off this item (R43).
+                mylar.DDL_ACTIVE_ID = item.get('id')
 
                 logger.info('[DDL-DOWNLOADER] Got item from queue: %s (%s) [ID: %s]' % 
                            (item.get('series', 'Unknown'), item.get('year', 'Unknown'), item.get('id', 'Unknown')))
@@ -6754,9 +6778,10 @@ def validate_downloaded_archive(file_path, expected_size=None, size_tolerance=0)
       ok: True when the file may be marked complete
       short: True when the file looks truncated and should be resumed
       discard: True when the size matches but the archive is unreadable
+      unverified: True when ok rests on nothing (7Z/PDF without a known size)
       reason: short text for logs
     """
-    result = {'ok': False, 'short': False, 'discard': False, 'reason': ''}
+    result = {'ok': False, 'short': False, 'discard': False, 'unverified': False, 'reason': ''}
     if not file_path or not os.path.isfile(file_path):
         result['reason'] = 'file is missing'
         return result
@@ -6833,6 +6858,7 @@ def validate_downloaded_archive(file_path, expected_size=None, size_tolerance=0)
             result['reason'] = 'rar open failed: %s' % e
     elif archive_type in ('7Z', 'PDF'):
         result['ok'] = True
+        result['unverified'] = expected == 0
         result['reason'] = '%s accepted without a deep test' % archive_type
     else:
         result['reason'] = 'unknown archive type'
