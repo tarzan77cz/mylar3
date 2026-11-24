@@ -5100,6 +5100,11 @@ def ddl_cleanup(id):
                      ' clean cache items on every startup. If this was a Retry - ignore this.')
 
 
+# Longest wait of the post-processing queue for one API/DDL post-processing thread (R34).
+# The longest one in the log since 11 Sep 2026 took 32 seconds.
+PP_THREAD_WAIT = 600
+
+
 def postprocess_main(queue):
     while True:
         if mylar.APILOCK is True:
@@ -5139,6 +5144,15 @@ def postprocess_main(queue):
                         item.get('download_info'),
                     )
                     pp = pprocess.post_process()
+                    # API/DDL post-processing runs in its own thread: take the next item only
+                    # when it has ended, or after PP_THREAD_WAIT (the thread is not stopped) (R34).
+                    pp_thread = getattr(pprocess, 'pp_thread', None)
+                    if pp_thread is not None:
+                        pp_thread.join(PP_THREAD_WAIT)
+                        if pp_thread.is_alive():
+                            logger.warn('[POST-PROCESS-QUEUE] Post-processing of %s is still running after %s seconds.'
+                                        ' Going on with the next item; that post-processing keeps running.'
+                                        % (item.get('nzb_name'), PP_THREAD_WAIT))
                     time.sleep(5) #arbitrary sleep to let the process attempt to finish pp'ing
                 except Exception as e:
                     logger.error('[POST-PROCESS-QUEUE] Error running post-process for %s: %s' % (item.get('nzb_name'), e))

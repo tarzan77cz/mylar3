@@ -30,6 +30,9 @@ class Process(object):
         self.apicall = apicall
         self.ddl = ddl
         self.download_info = download_info
+        # The post-processing thread started without join (API/DDL, Manual Run, issueid), so the
+        # post-processing queue can wait for it (R34). Other callers do not read it.
+        self.pp_thread = None
 
     def post_process(self):
         if self.failed == '0':
@@ -43,7 +46,8 @@ class Process(object):
         if self.failed is False:
             PostProcess = mylar.PostProcessor.PostProcessor(self.nzb_name, self.nzb_folder, self.issueid, queue=ppqueue, comicid=self.comicid, apicall=self.apicall, ddl=self.ddl, download_info=self.download_info)
             if any([self.nzb_name == 'Manual Run', self.nzb_name == 'Manual+Run', self.apicall is True, self.issueid is not None]):
-                threading.Thread(target=PostProcess.Process).start()
+                self.pp_thread = threading.Thread(target=PostProcess.Process)
+                self.pp_thread.start()
             else:
                 thread_ = threading.Thread(target=PostProcess.Process, name="Post-Processing")
                 thread_.start()
