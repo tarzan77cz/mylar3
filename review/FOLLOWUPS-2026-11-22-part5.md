@@ -211,8 +211,8 @@ Doplněno 24. 11. 2026 kolem 11:30 SEČ (časy pražské, v závorce UTC).
 - **Merge Comics:** `main` se mezitím posunul o `a7a5966` (jen `docs/open-questions.md`), proto merge commit
   větve `claude/review-2026-11-22-part5` (`877ca22`) do `main`. Testy Comics na `main` po merge: **258 OK**
   (6 skipped).
-- **Push:** neproběhl ani v jednom repu (Mylar `python3-dev` je před `fork/python3-dev`, Comics `main` před
-  `origin/main`).
+- **Push** (24. 11. po nasazení): Mylar `python3-dev` do `fork` (`dad3bce1..9aed33e8`), na `origin` nic. Comics
+  `main` do `origin` (`a7a5966..f1b364d`).
 - **Testy Mylaru na `286e9b9e`:** `tests/` 131 passed, `tests_db/` 204 passed (ve starém i v novém image).
 - **Před restartem:** v 10:49 (9:49 UTC) přidával klient API série (`addComic`, `unqueueIssue`, mass-add jedné série
   po ~20 s). Restart počkal na 3 minuty klidu v logu (bez API, mass-add, PP, fronta DDL prázdná, `DDL_LOCK: False`),
@@ -231,6 +231,8 @@ Doplněno 24. 11. 2026 kolem 11:30 SEČ (časy pražské, v závorce UTC).
 - **Neověřeno v provozu:** od restartu nepřišlo žádné volání API, takže nová odpověď `refreshComic` (HTTP 200,
   `success: true`) a její průchod hunterem se v logu zatím neukázaly; ověřeno jen testy. Timeout ComicVine se
   projeví až při výpadku CV. UI v prohlížeči (Playwright) se nekontrolovalo, šablony se neměnily.
-- Worktree `/data/Tarzan/Cursor/Mylar-review-2026-11-22-part5` a `/data/Tarzan/Cursor/Comics-review-2026-11-22-part5`
-  a větve `claude/review-2026-11-22-part5` zatím zůstávají.
+- **Úklid:** worktree `/data/Tarzan/Cursor/Mylar-review-2026-11-22-part5` a `/data/Tarzan/Cursor/Comics-review-2026-11-22-part5`
+  odstraněné a větve `claude/review-2026-11-22-part5` v obou repech smazané (`git branch -d`, obě mergnuté).
+  Netrackovaný `.scratch/part5/` z Mylar worktree (pyflakes před a po, `try_imports.py`) archivován do
+  `/data/Tarzan/Cursor/_archive/2026-11-24-mylar-review-part5/Mylar-review-2026-11-22-part5/.scratch/`.
 
