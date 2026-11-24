@@ -704,6 +704,39 @@ def count_offerable_rejected_matches(IssueID):
     )
 
 
+# REJECTED_MATCHES lives only in memory (R40): at most this many matches per issue, and a match
+# no search has found for this long is dropped. Issues whose matches are all that old are
+# dropped by a sweep at most once per REJECTED_MATCHES_SWEEP_INTERVAL.
+REJECTED_MATCHES_MAX_PER_ISSUE = 50
+REJECTED_MATCHES_MAX_AGE = 7 * 24 * 3600
+REJECTED_MATCHES_SWEEP_INTERVAL = 3600
+_REJECTED_MATCHES_SWEPT_AT = 0.0
+
+
+def _rejected_match_seen(match):
+    """When a search last stored or updated this match (0 when unknown)."""
+    try:
+        return float(match.get('last_updated') or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _rejected_match_expired(match, now):
+    seen = _rejected_match_seen(match)
+    return seen > 0 and now - seen > REJECTED_MATCHES_MAX_AGE
+
+
+def _sweep_expired_rejected_matches(now):
+    """Drop issues whose rejected matches are all older than REJECTED_MATCHES_MAX_AGE."""
+    global _REJECTED_MATCHES_SWEPT_AT
+    if now - _REJECTED_MATCHES_SWEPT_AT < REJECTED_MATCHES_SWEEP_INTERVAL:
+        return
+    _REJECTED_MATCHES_SWEPT_AT = now
+    for issue_id, matches in list(mylar.REJECTED_MATCHES.items()):
+        if matches and all(_rejected_match_expired(m, now) for m in matches):
+            mylar.REJECTED_MATCHES.pop(issue_id, None)
+
+
 def _add_or_update_rejected_match(IssueID, link, nzbid, match_data, update_only=False):
     """Add new or update existing rejected match. Returns True if added/updated, False otherwise."""
     try:
@@ -723,12 +756,23 @@ def _add_or_update_rejected_match(IssueID, link, nzbid, match_data, update_only=
             return True
         elif not update_only:
             # Add new match
-            match_data['last_updated'] = time.time()
+            now = time.time()
+            match_data['last_updated'] = now
             if 'initial_added' not in match_data:
                 match_data['initial_added'] = True
-            mylar.REJECTED_MATCHES[IssueID].append(match_data)
-            logger.fdebug('[REJECTED-MATCHES] Added new rejected match for IssueID %s: %s' % 
+            # Keep the cache bounded (R40): drop matches not seen for REJECTED_MATCHES_MAX_AGE and,
+            # over REJECTED_MATCHES_MAX_PER_ISSUE, the least recently seen. A new list is assigned
+            # whole; a match being selected is still removed by its link/nzbid as before.
+            kept = [m for m in mylar.REJECTED_MATCHES[IssueID] if not _rejected_match_expired(m, now)]
+            kept.append(match_data)
+            if len(kept) > REJECTED_MATCHES_MAX_PER_ISSUE:
+                oldest = sorted(kept, key=_rejected_match_seen)[:len(kept) - REJECTED_MATCHES_MAX_PER_ISSUE]
+                drop = set(id(m) for m in oldest)
+                kept = [m for m in kept if id(m) not in drop]
+            mylar.REJECTED_MATCHES[IssueID] = kept
+            logger.fdebug('[REJECTED-MATCHES] Added new rejected match for IssueID %s: %s' %
                          (IssueID, match_data.get('title', 'Unknown')))
+            _sweep_expired_rejected_matches(now)
             return True
         
         return False
