@@ -211,4 +211,30 @@ docker cp mylar/webserve.py mylar:/app/mylar/mylar/webserve.py
 
 ## 8. Stav po merge
 
-Doplní se po merge a nasazení.
+Doplněno 24. 11. 2026 kolem 14:15 SEČ (časy pražské, v závorce UTC).
+
+- **Merge:** `python3-dev` posunuta fast-forwardem z `f575beb0` na `2f74230b`, bez merge commitu. Testy na `python3-dev`:
+  `tests/` 131 passed, `tests_db/` 241 passed (image `mylar3:local` `sha256:9210596d…`).
+- **Před restartem:** DDL fronta prázdná (`DDL_LOCK: False`, `Queue size: 0`, `DDL_QUEUED count: 0`), žádné PP ani volání
+  API. Běžela jen fronta hledání z pravidelného „Search for Wanted“ (každých 30 min, další běh ji znovu naplní);
+  restart přerušil hledání Masters of the Universe (2015) #6 (blokovaný pack 113116, `FAILED_DOWNLOAD_CHECKER` ho
+  správně odmítl).
+- **Nasazení:** `docker cp` sedmi modulů podle kap. 7 a **`docker restart mylar`**, start v 14:09:07 (13:09:07 UTC).
+  Kontejner běží dál na image `mylar3:2026-11-22-part2` s kódem přes `docker cp`.
+- **Ověření v kontejneru:** všechny značky z kap. 7, bod 2 sedí (`DDL_ACTIVE_ID` 4 + 1, `PP_THREAD_WAIT` 4, `pp_thread` 3,
+  `match_index` 2, `REJECTED_MATCHES_MAX_PER_ISSUE` 4, `_cover_download_due` 2, `threading.RLock()` 1, `Gave up after` 2).
+  md5 všech 95 souborů `mylar/*.py`, `mylar/downloaders/*.py` a `data/interfaces/default/*.html` v `/app/mylar/` = `HEAD`
+  `2f74230b`.
+- **Log po restartu (do 14:10):** start bez chyby a tracebacku, Search Queuer, Post-Processing Queuer, `[DDL-DOWNLOADER]
+  DDL downloader thread started and running`, `[DDL-WATCHDOG] DDL Watchdog thread started`, `[DDL-STARTUP] No queued
+  items`. Žádné `[DB] Gave up after`.
+- **UI:** stránka série (`comicDetails?ComicID=167814`, The Savage Sword of Conan: Reforged) vrací HTTP 200 s názvem
+  a obálkou, bez chyby v logu. Ověřeno přímým GET z devel-workstation (`curl` na `192.168.113.37:8090`); Playwright na
+  macvlan adresu Mylaru nedosáhne (`ERR_ADDRESS_UNREACHABLE`) a Mylar v NPM nemá proxy host, takže v prohlížeči se
+  stránka nekontrolovala.
+- **Neověřeno v provozu:** watchdog s aktivní položkou, čekání fronty PP, strop `REJECTED_MATCHES` a ERROR po
+  vyčerpání pokusů DB se projeví až při dalším DDL stahování, PP, hledání a zamčené DB; zatím ověřeno jen testy.
+- **Image (R14):** nepřestavován. `mylar3:local` (`sha256:9210596d…`, 24. 11. 11:25) je o tuto část pozadu; před
+  jakýmkoli recreate kontejneru nejdřív rebuild z `python3-dev`.
+- **Push a úklid:** zatím ne. Větev `claude/review-2026-11-22-part6` a worktree
+  `/data/Tarzan/Cursor/Mylar-review-2026-11-22-part6` (s `.scratch/part6/`) zůstávají.
