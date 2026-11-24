@@ -405,11 +405,11 @@ class Api(object):
         return
 
     def _getLogs(self, **kwargs):
-        self.data = mylar.LOG_LIST
+        self.data = mylar.LOGLIST
         return
 
     def _clearLogs(self, **kwargs):
-        mylar.LOG_LIST = []
+        mylar.LOGLIST = []
         self.data = 'Cleared log'
         return
 
@@ -603,7 +603,7 @@ class Api(object):
         if len(already_added) == 1:
             self.data = self._successResponse('[%s] %s has already been queued for refresh in a queue of %s items.' % (already_added[0]['comicid'], already_added[0]['comicname'], mylar.REFRESH_QUEUE.qsize()))
         elif len(already_added) > 1:
-            self.data = self._successResponse('%s items (%s) have already been queued for refresh in a queue of % items.' % (len(already_added), already_added, mylar.REFRESH_QUEUE.qsize()))
+            self.data = self._successResponse('%s items (%s) have already been queued for refresh in a queue of %s items.' % (len(already_added), already_added, mylar.REFRESH_QUEUE.qsize()))
 
         if len(watch) == 1:
             logger.info('[SHIZZLE-WHIZZLE] Now queueing to refresh %s %s' % (chkdb['ComicName'], chkdb['ComicYear']))
@@ -624,7 +624,7 @@ class Api(object):
                 ref_line = 'for %s items (%s)' % (len(watch), watch)
 
             logger.warn('[API-refreshComic] Successfully background submitted refresh %s' % (ref_line))
-            self.data = self._successResponse('Refresh successfully submitted %s.' % (self.id, ref_line))
+            self.data = self._successResponse('Refresh successfully submitted %s.' % (ref_line,))
 
         return
 
@@ -672,7 +672,7 @@ class Api(object):
                 newWrite = {'ComicID': self.id}
                 myDB.upsert("comics", newValue, newWrite)
             except Exception as e:
-                self.data = self._failureResponse('[%s] Unable to update Booktype for ComicID: %s. Error returned: %s' % (self.id, e))
+                self.data = self._failureResponse('[%s] Unable to update Booktype for ComicID: %s. Error returned: %s' % (self.id, self.id, e))
                 return
             else:
                 self.data = self._successResponse('[%s] Updated Booktype to %s.' % (self.id, booktype))
