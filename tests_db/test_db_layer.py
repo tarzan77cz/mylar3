@@ -148,7 +148,65 @@ def test_two_upserts_of_the_same_new_issue_make_one_row(lib, monkeypatch):
     assert rows[0]['Status'] == 'Wanted'  # A inserted, B then updated the same row
 
 
+class PartlyLocked(object):
+    """A real connection on which the statements starting with one of `locked` fail with 'database is locked'."""
+
+    def __init__(self, con, locked):
+        self.con = con
+        self.locked = tuple(locked)
+
+    def execute(self, query, *args):
+        if query.lstrip().upper().startswith(self.locked):
+            raise sqlite3.OperationalError('database is locked')
+        return self.con.execute(query, *args)
+
+    def cursor(self):
+        return self
+
+    def commit(self):
+        self.con.commit()
+
+    @property
+    def total_changes(self):
+        return self.con.total_changes
+
+
+def partly_locked_db(*locked):
+    myDB = db.DBConnection()
+    myDB.connection = PartlyLocked(myDB.connection, locked)
+    return myDB
+
+
+def test_lost_update_of_an_existing_row_does_not_add_a_second_row(lib, logs):
+    lib.execute("INSERT INTO issues (IssueID, Status, ComicID, Issue_Number) VALUES ('I1', 'Wanted', 'C1', '1')")
+    partly_locked_db('UPDATE').upsert('issues', {'Status': 'Downloaded'}, {'IssueID': 'I1'})
+    # the update is lost (logged), but no half row with only IssueID and Status appears
+    assert lib.rows("SELECT IssueID, Status, ComicID FROM issues") == [
+        {'IssueID': 'I1', 'Status': 'Wanted', 'ComicID': 'C1'}]
+    assert any('issues' in line for line in logs['error'].lines)
+    assert all('Downloaded' not in line for line in logs['error'].lines)
+
+
+def test_lost_update_and_unreadable_row_does_not_insert(lib, logs):
+    lib.execute("INSERT INTO issues (IssueID, Status, ComicID) VALUES ('I1', 'Wanted', 'C1')")
+    partly_locked_db('UPDATE', 'SELECT').upsert('issues', {'Status': 'Downloaded'}, {'IssueID': 'I1'})
+    assert lib.rows("SELECT IssueID, Status FROM issues") == [{'IssueID': 'I1', 'Status': 'Wanted'}]
+
+
+def test_lost_update_of_a_unique_row_does_not_raise(lib, logs):
+    lib.execute("INSERT INTO ddl_info (ID, status) VALUES ('D1', 'Downloading')")
+    partly_locked_db('UPDATE').upsert('ddl_info', {'status': 'Completed'}, {'id': 'D1'})
+    assert lib.rows("SELECT ID, status FROM ddl_info") == [{'ID': 'D1', 'status': 'Downloading'}]
+
+
 # --- control (passes before the fix too) ---
+
+def test_control_lost_update_of_a_new_key_still_inserts(lib, logs):
+    partly_locked_db('UPDATE').upsert('nzblog', {'NZBName': 'Batman 005', 'ID': '200'},
+                                      {'IssueID': 'I5', 'Provider': 'DDL(GetComics)'})
+    assert lib.rows("SELECT IssueID, PROVIDER, ID FROM nzblog") == [
+        {'IssueID': 'I5', 'PROVIDER': 'DDL(GetComics)', 'ID': '200'}]
+
 
 def test_control_upsert_inserts_a_new_key_and_updates_an_existing_one(lib):
     myDB = db.DBConnection()

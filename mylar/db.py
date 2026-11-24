@@ -179,6 +179,27 @@ class DBConnection:
         return sqlResults
 
 
+    def _upsert_may_insert(self, tableName, keyDict, genParams):
+        """After upsert's UPDATE was given up: insert only when the key has no row yet.
+
+        An INSERT for an existing key would add a second, half-filled row (no UNIQUE on issues,
+        annuals, nzblog) or raise IntegrityError (ddl_info, comics). When even this read fails, do
+        not insert. No values in the log.
+        """
+        check = self.fetch(
+            "SELECT 1 FROM " + tableName + " WHERE " + " AND ".join(genParams(keyDict)) + " LIMIT 1",
+            list(keyDict.values()),
+        )
+        if check is None:
+            logger.error('[DB] upsert into %s: the UPDATE was not done and the row could not be read. Not inserting.'
+                         % tableName)
+            return False
+        if check.fetchone() is not None:
+            logger.error('[DB] upsert into %s: the UPDATE was not done; the row exists, so no second row is inserted.'
+                         % tableName)
+            return False
+        return True
+
     def upsert(self, tableName, valueDict, keyDict):
         thisthread = threading.current_thread().name
 
@@ -192,9 +213,11 @@ class DBConnection:
 
             query = "UPDATE " + tableName + " SET " + ", ".join(genParams(valueDict)) + " WHERE " + " AND ".join(genParams(keyDict))
 
-            self.action(query, list(valueDict.values()) + list(keyDict.values()))
+            updated = self.action(query, list(valueDict.values()) + list(keyDict.values()))
 
             if self.connection.total_changes == changesBefore:
+                if updated is None and not self._upsert_may_insert(tableName, keyDict, genParams):
+                    return
                 query = "INSERT INTO " +tableName +" (" + ", ".join(list(valueDict.keys()) + list(keyDict.keys())) + ")" + \
                             " VALUES (" + ", ".join(["?"] * len(list(valueDict.keys()) + list(keyDict.keys()))) + ")"
                 self.action(query, list(valueDict.values()) + list(keyDict.values()))
