@@ -244,3 +244,23 @@ Doplněno 24. 11. 2026 kolem 14:15 SEČ (časy pražské, v závorce UTC).
   `claude/review-2026-11-22-part6` smazaná (`git branch -d`, mergnutá). Netrackovaný `.scratch/part6/` (výtahy z logu,
   analytické skripty, pyflakes před a po, `try_imports.py`) archivován do
   `/data/Tarzan/Cursor/_archive/2026-11-24-mylar-review-part6/Mylar-review-2026-11-22-part6/.scratch/`.
+
+## 9. Doplněk: otevřené otázky 7, 8 a 9 vyřešené (24. 11. večer)
+
+Na pokyn uživatele, interaktivně přímo v `python3-dev` (bez worktree), test před opravou. Časy pražské.
+
+| Bod | Stav | Commit | Testy (padalo před opravou) | Poznámka |
+|---|---|---|---|---|
+| 9: `comicDetails` a `sqlite3.Row` | **opraveno** | `c3714d98` | 1 (1) + 4 kontrolní, [test_series_page_corrected_year.py](../tests_db/test_series_page_corrected_year.py) | Reprodukováno: série s `Corrected_SeriesYear` jiným než `ComicYear` → `TypeError: 'sqlite3.Row' object does not support item assignment` ([webserve.py](../mylar/webserve.py), upstream od 2016) → HTTP 500. Oprava: před přiřazením se řádek zkopíruje do `dict`, stránka ukáže opravený rok, DB beze změny. V živé DB má opravený rok 6 sérií, žádný se od `ComicYear` neliší, takže to dnes nikoho nezasáhlo. |
+| 7: `upsert` po ztraceném UPDATE | **opraveno** | `fd60d23e` | 3 (3) + 1 kontrolní, v [test_db_layer.py](../tests_db/test_db_layer.py) | Reprodukováno: po vyčerpaném UPDATE existujícího klíče INSERT založil poloviční druhý řádek (`issues` jen s `IssueID` a `Status`), u `ddl_info` `IntegrityError` mimo `action()`. Oprava (`DBConnection._upsert_may_insert`): po ztraceném UPDATE jeden `SELECT 1` na klíč; INSERT jen když řádek neexistuje, jinak (nebo když nejde přečíst) ERROR bez hodnot a nic se nevkládá. Nový klíč se dál vloží (kontrolní). Běžná cesta beze změny. |
+| 8: duplicity v živé DB | **uklizeno** | – | – | Čtení (`mode=ro`): `issues` 5 IssueID po 2 řádcích, totožných ve všech 21 sloupcích (sousední `rowid`, `DateAdded` 13. 1. a 4. 2. 2026 nebo prázdné, mimo log), `annuals` a `nzblog` 0. `snatched` 215 klíčů je historie `Post-Processed` s `Provider` NULL (klíč s NULL v UPDATE nikdy nenajde řádek, každé PP přidá záznam), to není chyba. Duplicity nafukovaly `Total` (Avengers: Curse of the Man-Thing 1/2, Marvel Zombies: Black, White & Blood 4/6, Kid Venom: Origins 1/2, Aquaman 4/5). V 17:02 záloha `/config/mylar/backup/mylar.db.2026-11-24-before-dedupe` (SQLite backup API, 157 MB, `quick_check` ok), pak v jedné transakci smazána vždy vyšší `rowid` z páru (53096, 53099, 53101, 65384, 76864) po kontrole shody. „Recheck files“ (`forceRescan`) čtyř sérií v 17:19 a 17:32: všechny 1/1 nebo 4/4, duplicit 0. |
+
+- Testy: `tests/` 131, `tests_db/` 250 passed (9 nových).
+- **Nasazení:** `docker cp` `mylar/db.py` a `mylar/webserve.py`, **`docker restart mylar`** se souhlasem uživatele, start
+  v 18:12:14 (17:12:14 UTC). Před restartem nic neběželo (bez DDL, PP, API, refreshe; restart přerušil jen RSS hledání).
+  Značky v kontejneru: `_upsert_may_insert` 2, `comic = dict(comic)` 1; md5 všech 95 souborů = `HEAD`. Start bez chyby,
+  všechny fronty a watchdog běží, stránka série HTTP 200.
+- **Image:** předchozí `mylar3:local` (`sha256:a86ea711…`) otagován jako `mylar3:2026-11-24-part6`, nový `mylar3:local`
+  `sha256:cb7a4bb0…` přestavěn 24. 11. v 18:14 z `python3-dev`; md5 = `HEAD`, testy v něm 131 a 250. Recreate se
+  neprováděl.
+- Pomocné skripty (`db_check.py`, `db_check_detail.py`, `dedupe_check.py`, `dedupe_apply.py`) v `.scratch/part7/` (mimo git).
