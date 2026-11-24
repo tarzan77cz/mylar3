@@ -205,3 +205,32 @@ funguje taky (smaže navíc jen řádky `DDL` téhož ID).
 
 ## 9. Stav po merge
 
+Doplněno 24. 11. 2026 kolem 11:30 SEČ (časy pražské, v závorce UTC).
+
+- **Merge Mylar:** `python3-dev` posunuta fast-forwardem z `888b8a85` na `286e9b9e`, bez merge commitu.
+- **Merge Comics:** `main` se mezitím posunul o `a7a5966` (jen `docs/open-questions.md`), proto merge commit
+  větve `claude/review-2026-11-22-part5` (`877ca22`) do `main`. Testy Comics na `main` po merge: **258 OK**
+  (6 skipped).
+- **Push:** neproběhl ani v jednom repu (Mylar `python3-dev` je před `fork/python3-dev`, Comics `main` před
+  `origin/main`).
+- **Testy Mylaru na `286e9b9e`:** `tests/` 131 passed, `tests_db/` 204 passed (ve starém i v novém image).
+- **Před restartem:** v 10:49 (9:49 UTC) přidával klient API série (`addComic`, `unqueueIssue`, mass-add jedné série
+  po ~20 s). Restart počkal na 3 minuty klidu v logu (bez API, mass-add, PP, fronta DDL prázdná, `DDL_LOCK: False`),
+  klid od 10:50, ověřeno v 10:53.
+- **Nasazení:** `docker cp` osmi modulů podle kap. 8 a **`docker restart mylar`** v 10:54 (9:54 UTC). Kontejner běží
+  dál na image `616267df` (`mylar3:2026-11-22-part2`) s kódem přes `docker cp`.
+- **Ověření v kontejneru:** značky z kap. 8, bod 2: `CV_TIMEOUT` 1, `timeout=mylar.CV_TIMEOUT` v `cv.py` 1, `mb.py` 2,
+  `locg.py` 1, `mylar.LOGLIST` 2, `provider = 'DDL(GetComics)'` 1, `oneinfo['SHIPDATE']` 2. md5 všech 103 souborů
+  `mylar/*.py`, `mylar/downloaders/*.py` a `data/interfaces/default/*.html` v `/app/mylar/` = `HEAD` `286e9b9e`.
+- **Log po restartu (do 11:26):** start bez chyby a tracebacku, schedulery, PP fronta, DDL fronta a `[DDL-WATCHDOG]`
+  běží, `[DDL-STARTUP] No queued items`. `/home` uvnitř kontejneru vrací HTTP 200.
+- **Image (R14):** předchozí `mylar3:local` (`sha256:64223322…`, 23. 11. 0:12) otagován jako `mylar3:2026-11-23`,
+  nový `mylar3:local` `sha256:9210596d…` přestavěn z `python3-dev` 24. 11. v 11:25. md5 všech 103 souborů v něm =
+  `HEAD`, takže recreate už kód nevrátí. Recreate se neprováděl. Rollbacky `mylar3:2026-11-23`,
+  `mylar3:2026-11-22-part2` a `mylar3:2026-09-11` zůstávají.
+- **Neověřeno v provozu:** od restartu nepřišlo žádné volání API, takže nová odpověď `refreshComic` (HTTP 200,
+  `success: true`) a její průchod hunterem se v logu zatím neukázaly; ověřeno jen testy. Timeout ComicVine se
+  projeví až při výpadku CV. UI v prohlížeči (Playwright) se nekontrolovalo, šablony se neměnily.
+- Worktree `/data/Tarzan/Cursor/Mylar-review-2026-11-22-part5` a `/data/Tarzan/Cursor/Comics-review-2026-11-22-part5`
+  a větve `claude/review-2026-11-22-part5` zatím zůstávají.
+
