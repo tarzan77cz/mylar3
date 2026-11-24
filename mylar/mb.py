@@ -80,7 +80,7 @@ def pullsearch(comicapi, comicquery, offset, search_type):
     payload = None
 
     try:
-        r = requests.get(PULLURL, params=payload, verify=mylar.CONFIG.CV_VERIFY, headers=mylar.CV_HEADERS)
+        r = requests.get(PULLURL, params=payload, verify=mylar.CONFIG.CV_VERIFY, headers=mylar.CV_HEADERS, timeout=mylar.CV_TIMEOUT)
     except Exception as e:
         logger.warn('Error fetching data from ComicVine: %s' % e)
         return
@@ -597,7 +597,7 @@ def storyarcinfo(xmlid):
     payload = None
 
     try:
-        r = requests.get(ARCPULL_URL, params=payload, verify=mylar.CONFIG.CV_VERIFY, headers=mylar.CV_HEADERS)
+        r = requests.get(ARCPULL_URL, params=payload, verify=mylar.CONFIG.CV_VERIFY, headers=mylar.CV_HEADERS, timeout=mylar.CV_TIMEOUT)
     except Exception as e:
         logger.warn('While parsing data from ComicVine, got exception: %s' % e)
         return

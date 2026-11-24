@@ -83,7 +83,7 @@ def locg(pulldate=None,weeknumber=None,year=None):
         url = '%s/newcomics.php' % provider_url
 
         try:
-            r = requests.get(url, params=params, verify=True, headers={'User-Agent': mylar.USER_AGENT[:mylar.USER_AGENT.find('/')+7] + mylar.USER_AGENT[mylar.USER_AGENT.find('(')+1]})
+            r = requests.get(url, params=params, verify=True, headers={'User-Agent': mylar.USER_AGENT[:mylar.USER_AGENT.find('/')+7] + mylar.USER_AGENT[mylar.USER_AGENT.find('(')+1]}, timeout=mylar.CV_TIMEOUT)
         except requests.exceptions.RequestException as e:
             logger.warn('[PULL-LIST] Error encountered retrieving pull-list: %s' % (e,))
             _locg_mark_down()

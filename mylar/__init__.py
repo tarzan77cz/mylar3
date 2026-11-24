@@ -116,6 +116,10 @@ CONFIG = None
 CONFIG_FILE = None
 CV_HEADERS = None
 CVURL = None
+# (connect, read) seconds for ComicVine and pull-list requests, so a stalled connection cannot hang
+# the refresh, DB updater, search or pull-list thread forever. The largest CV answers in the log
+# (~270 kB) arrive in about a second, the read timeout counts per socket read.
+CV_TIMEOUT = (15, 90)
 EXPURL = None
 DEMURL = None
 WWTURL = None

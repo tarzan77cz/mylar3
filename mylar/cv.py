@@ -73,7 +73,7 @@ def pulldetails(comicid, rtype, issueid=None, offset=1, arclist=None, comicidlis
         time.sleep(mylar.CONFIG.CVAPI_RATE)
 
     try:
-        r = requests.get(PULLURL, verify=mylar.CONFIG.CV_VERIFY, headers=mylar.CV_HEADERS)
+        r = requests.get(PULLURL, verify=mylar.CONFIG.CV_VERIFY, headers=mylar.CV_HEADERS, timeout=mylar.CV_TIMEOUT)
     except Exception as e:
         logger.warn('Error fetching data from ComicVine: %s' % (e))
         if all(['Expecting value: line 1 column 1' not in str(e), rtype != 'db_updater']):
