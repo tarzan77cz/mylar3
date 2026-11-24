@@ -102,6 +102,22 @@ def new_direct_ddl_id(myDB):
         return 'manual-%s' % n
 
 
+# The series page fetches a missing cover at most once per COVER_RETRY_WAIT seconds per series
+# (memory only). A series refresh still downloads the cover as before (R40).
+COVER_RETRY_WAIT = 24 * 3600
+_COVER_TRIED_AT = {}
+
+
+def _cover_download_due(ComicID):
+    """True (and the try is noted) when the series page may try to fetch the cover of ComicID now."""
+    now = time.time()
+    last = _COVER_TRIED_AT.get(ComicID)
+    if last is not None and now - last < COVER_RETRY_WAIT:
+        return False
+    _COVER_TRIED_AT[ComicID] = now
+    return True
+
+
 def serve_template(templatename, **kwargs):
     interface_dir = os.path.join(str(mylar.PROG_DIR), 'data/interfaces/')
     if any([mylar.CONFIG.INTERFACE == 'default', mylar.CONFIG.INTERFACE is None]):
@@ -628,8 +644,9 @@ class WebInterface(object):
                 elif os.path.exists(os.path.join(mylar.CONFIG.CACHE_DIR, ComicID + '.png')):
                     comicImage = "data:image/webp;base64,%s" % mylar.getimage.load_image(os.path.join(mylar.CONFIG.CACHE_DIR, ComicID + '.png'), 263)
                 
-                # If the cover is still not cached, try to download it
-                if not comicImage:
+                # If the cover is still not cached, try to download it (once a day per series:
+                # the ComicVine call counts against the hourly limit shared with Comics, R40).
+                if not comicImage and _cover_download_due(ComicID):
                     try:
                         # Get the image URL
                         image_url = None
@@ -671,10 +688,10 @@ class WebInterface(object):
                                         comicImage = "data:image/webp;base64,%s" % mylar.getimage.load_image(cache_file, 263)
                     except Exception as e:
                         logger.warn('[comicDetails] Failed to download cover image: %s' % e)
-                    
-                    # If the download failed, show a placeholder
-                    if not comicImage:
-                        comicImage = "data:image/gif;base64,%s" % mylar.getimage.load_image(os.path.join(mylar.PROG_DIR, 'data', 'images', 'blank.gif'),263)
+
+                # If the download failed (or waits for its next try), show a placeholder
+                if not comicImage:
+                    comicImage = "data:image/gif;base64,%s" % mylar.getimage.load_image(os.path.join(mylar.PROG_DIR, 'data', 'images', 'blank.gif'),263)
 
             comicpublisher = helpers.publisherImages(comic['ComicPublisher'])
 
