@@ -234,7 +234,13 @@ Doplněno 24. 11. 2026 kolem 14:15 SEČ (časy pražské, v závorce UTC).
   stránka nekontrolovala.
 - **Neověřeno v provozu:** watchdog s aktivní položkou, čekání fronty PP, strop `REJECTED_MATCHES` a ERROR po
   vyčerpání pokusů DB se projeví až při dalším DDL stahování, PP, hledání a zamčené DB; zatím ověřeno jen testy.
-- **Image (R14):** nepřestavován. `mylar3:local` (`sha256:9210596d…`, 24. 11. 11:25) je o tuto část pozadu; před
-  jakýmkoli recreate kontejneru nejdřív rebuild z `python3-dev`.
-- **Push a úklid:** zatím ne. Větev `claude/review-2026-11-22-part6` a worktree
-  `/data/Tarzan/Cursor/Mylar-review-2026-11-22-part6` (s `.scratch/part6/`) zůstávají.
+- **Push** (24. 11. po nasazení): `python3-dev` do `fork` (`f575beb0..8908d881`), na `origin` nic.
+- **Image (R14):** předchozí `mylar3:local` (`sha256:9210596d…`, 24. 11. 11:25) otagován jako `mylar3:2026-11-24`, nový
+  `mylar3:local` `sha256:a86ea711…` přestavěn z `python3-dev` (`8908d881`) 24. 11. v 16:09. md5 všech 95 souborů v něm
+  = `HEAD`, testy v něm 131 a 241 passed. Recreate se neprováděl, kontejner běží dál na `mylar3:2026-11-22-part2` s kódem
+  přes `docker cp`. Rollbacky `mylar3:2026-11-24`, `mylar3:2026-11-23`, `mylar3:2026-11-22-part2` a `mylar3:2026-09-11`
+  zůstávají.
+- **Úklid:** worktree `/data/Tarzan/Cursor/Mylar-review-2026-11-22-part6` odstraněný a větev
+  `claude/review-2026-11-22-part6` smazaná (`git branch -d`, mergnutá). Netrackovaný `.scratch/part6/` (výtahy z logu,
+  analytické skripty, pyflakes před a po, `try_imports.py`) archivován do
+  `/data/Tarzan/Cursor/_archive/2026-11-24-mylar-review-part6/Mylar-review-2026-11-22-part6/.scratch/`.
