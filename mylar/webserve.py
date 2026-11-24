@@ -631,6 +631,8 @@ class WebInterface(object):
                 allowpacks = "0"
             if all([comic['Corrected_SeriesYear'] is not None, comic['Corrected_SeriesYear'] != '', comic['Corrected_SeriesYear'] != 'None']):
                 if comic['Corrected_SeriesYear'] != comic['ComicYear']:
+                    # sqlite3.Row takes no item assignment: show the corrected year from a copy
+                    comic = dict(comic)
                     comic['ComicYear'] = comic['Corrected_SeriesYear']
 
             comicImage = None
