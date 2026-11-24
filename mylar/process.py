@@ -73,6 +73,10 @@ class Process(object):
                 logger.info('Initiating Failed Download handling for this download.')
                 nzbid = self.download_info['id']
                 provider = self.download_info['provider']
+                if provider == 'DDL':
+                    # same provider name as ddl_info.site, nzblog and the other DDL failed rows,
+                    # so Comics clear_failed finds the row (as in PostProcessor._revert_unmatched_pack_snatches)
+                    provider = 'DDL(GetComics)'
                 FailProcess = mylar.Failed.FailedProcessor(nzb_name=self.nzb_name, nzb_folder=self.nzb_folder, queue=ppqueue, prov=provider, id=nzbid)
                 thread_ = threading.Thread(target=FailProcess.Process, name="FAILED Post-Processing")
                 thread_.start()
