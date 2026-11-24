@@ -2216,15 +2216,15 @@ def duplicate_filecheck(filename, ComicID=None, IssueID=None, StoryArcID=None, r
                 rtnval = {'action':  "dupe_file",
                               'to_dupe': filename}
             elif all([fixed_file, fixed_db_file]):
-                ff_int = int(re.sub('[^0-9]', '', fixed_file).strip())
-                fdf_int = int(re.sub('[^0-9]', '', fixed_db_file).strip())
+                ff_int = int(re.sub('[^0-9]', '', fixed_file[0]).strip())
+                fdf_int = int(re.sub('[^0-9]', '', fixed_db_file[0]).strip())
                 if ff_int > fdf_int:
                     logger.info('[DUPECHECK] %s is a higher "Fixed" version (%s) that should be retained over existing version(%s). Bypassing filesize/filetype check.' % (fixed_file, fixed_db_file, filename))
                     fixed = True
                     rtnval = {'action':  "dupe_src",
                               'to_dupe': os.path.join(series['ComicLocation'], dupchk['Location'])}
                 else:
-                    logger.info('[DUPECHECK] %s is a higher "Fixed" version (%s) that should be retained over existing version(%s). Bypassing filesize/filetype check.' % (fixed_db_file, fixed_file, os.path.join(series['ComicLocation'], dupehk['Location'])))
+                    logger.info('[DUPECHECK] %s is a higher "Fixed" version (%s) that should be retained over existing version(%s). Bypassing filesize/filetype check.' % (fixed_db_file, fixed_file, os.path.join(series['ComicLocation'], dupchk['Location'])))
                     fixed = True
                     rtnval = {'action':  "dupe_file",
                               'to_dupe': filename}
@@ -4602,7 +4602,7 @@ def _ddl_downloader_loop(queue, state):
                     except Exception:
                         try:
                             _size_str = (item.get('size') or '')[:-1].strip()
-                            remote_filesize = helpers.human2bytes(re.sub('/s', '', _size_str))
+                            remote_filesize = human2bytes(re.sub('/s', '', _size_str))
                         except Exception:
                             remote_filesize = 0
 
